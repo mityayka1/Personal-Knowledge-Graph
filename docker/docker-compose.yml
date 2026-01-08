@@ -95,6 +95,27 @@ services:
       retries: 3
       start_period: 30s
 
+  # Bull Board - BullMQ Monitoring
+  bull-board:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bull-board
+    container_name: pkg-bull-board
+    ports:
+      - "3002:3002"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3002
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # n8n Worker
   n8n:
     image: n8nio/n8n:latest
