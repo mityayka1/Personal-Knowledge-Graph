@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: pkg-postgres
+    environment:
+      POSTGRES_USER: pkg
+      POSTGRES_PASSWORD: pkg_password
+      POSTGRES_DB: pkg
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pkg -d pkg"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for BullMQ
+  redis:
+    image: redis:7-alpine
+    container_name: pkg-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PKG Core Service
+  pkg-core:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pkg-core
+    container_name: pkg-core
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      API_PREFIX: /api/v1
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: pkg
+      DB_PASSWORD: pkg_password
+      DB_DATABASE: pkg
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      FILE_STORAGE_PATH: /data/files
+    volumes:
+      - file-storage:/data/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Telegram Adapter
+  telegram-adapter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.telegram-adapter
+    container_name: pkg-telegram-adapter
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      PKG_CORE_URL: http://pkg-core:3000/api/v1
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_SESSION_STRING: ${TELEGRAM_SESSION_STRING:-}
+      SESSION_GAP_THRESHOLD: 4
+    depends_on:
+      pkg-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Bull Board - BullMQ Monitoring
+  bull-board:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bull-board
+    container_name: pkg-bull-board
+    ports:
+      - "3002:3002"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PORT: 3002
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # n8n Worker
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: pkg-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: admin
+      N8N_BASIC_AUTH_PASSWORD: admin
+      PKG_CORE_URL: http://pkg-core:3000/api/v1
+      WEBHOOK_URL: http://n8n:5678
+      GENERIC_TIMEZONE: Europe/Moscow
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - file-storage:/data/files
+    depends_on:
+      pkg-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres-data:
+  redis-data:
+  n8n-data:
+  file-storage:

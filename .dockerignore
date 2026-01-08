@@ -1,0 +1,53 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build outputs
+dist
+**/dist
+.turbo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+apps/**/.env
+!**/.env.example
+
+# Sensitive data
+session_store/
+*.session
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Tests
+coverage
+*.test.ts
+*.spec.ts
+__tests__
+
+# Documentation (not needed in image)
+docs
+*.md
+!README.md
+
+# Development
+.claude
+*.jsonl
