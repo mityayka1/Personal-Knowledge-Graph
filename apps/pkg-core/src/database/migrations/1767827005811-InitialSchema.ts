@@ -11,7 +11,8 @@ export class InitialSchema1767827005811 implements MigrationInterface {
         await queryRunner.query(`CREATE INDEX "IDX_99dcff25ef677ca9a24cb4f640" ON "messages" ("interaction_id") `);
         await queryRunner.query(`CREATE INDEX "IDX_41ffb1bd9c518c832d703156d8" ON "messages" ("sender_entity_id") `);
         await queryRunner.query(`CREATE INDEX "IDX_f2113da562ea5bb1ddff44ff60" ON "messages" ("timestamp") `);
-        await queryRunner.query(`CREATE INDEX "IDX_8dc4220c708f7251b0442be7b3" ON "messages" ("embedding") `);
+        // Note: Vector index should be created manually after data load:
+        // CREATE INDEX ON messages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
         await queryRunner.query(`CREATE TABLE "transcript_segments" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "interaction_id" uuid NOT NULL, "speaker_entity_id" uuid, "speaker_label" character varying(50) NOT NULL, "content" text NOT NULL, "start_time" numeric(10,3) NOT NULL, "end_time" numeric(10,3) NOT NULL, "confidence" numeric(3,2), "embedding" vector(1536), "created_at" TIMESTAMP NOT NULL DEFAULT now(), CONSTRAINT "PK_34cfd4b54a9857af7dfa443f3ed" PRIMARY KEY ("id"))`);
         await queryRunner.query(`CREATE INDEX "IDX_aa4aabb2b3701119287c42bfde" ON "transcript_segments" ("interaction_id") `);
         await queryRunner.query(`CREATE INDEX "IDX_72d41fd5f5f0ef598cb6b2cfc2" ON "transcript_segments" ("speaker_entity_id") `);
@@ -101,7 +102,7 @@ export class InitialSchema1767827005811 implements MigrationInterface {
         await queryRunner.query(`DROP INDEX "public"."IDX_72d41fd5f5f0ef598cb6b2cfc2"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_aa4aabb2b3701119287c42bfde"`);
         await queryRunner.query(`DROP TABLE "transcript_segments"`);
-        await queryRunner.query(`DROP INDEX "public"."IDX_8dc4220c708f7251b0442be7b3"`);
+        // Vector index dropped manually if exists
         await queryRunner.query(`DROP INDEX "public"."IDX_f2113da562ea5bb1ddff44ff60"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_41ffb1bd9c518c832d703156d8"`);
         await queryRunner.query(`DROP INDEX "public"."IDX_99dcff25ef677ca9a24cb4f640"`);

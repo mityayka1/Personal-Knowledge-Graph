@@ -133,7 +133,14 @@ services:
       - n8n-data:/home/node/.n8n
       - file-storage:/data/files
     depends_on:
-      - pkg-core
+      pkg-core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   postgres-data:

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like } from 'typeorm';
+import { Repository } from 'typeorm';
 import { EntityRecord, EntityType } from '@pkg/entities';
 import { CreateEntityDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
@@ -103,7 +103,7 @@ export class EntityService {
 
   async merge(sourceId: string, targetId: string) {
     const source = await this.findOne(sourceId);
-    const target = await this.findOne(targetId);
+    await this.findOne(targetId); // Validate target exists
 
     if (sourceId === targetId) {
       throw new ConflictException('Cannot merge entity with itself');
