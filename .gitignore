@@ -22,6 +22,9 @@ Thumbs.db
 .env.*.local
 .mcp.json
 
+# Telegram session (sensitive!)
+session_store/
+
 # Logs
 logs
 *.log

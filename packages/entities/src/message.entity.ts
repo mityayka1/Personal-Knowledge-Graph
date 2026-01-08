@@ -70,8 +70,8 @@ export class Message {
   mediaUrl: string | null;
 
   // pgvector column - 1536 dimensions for OpenAI text-embedding-3-small
+  // Note: Vector index should be created manually: CREATE INDEX ON messages USING ivfflat (embedding vector_cosine_ops)
   @Column({ type: 'vector', length: 1536, nullable: true })
-  @Index()
   embedding: number[] | null;
 
   @CreateDateColumn({ name: 'created_at' })

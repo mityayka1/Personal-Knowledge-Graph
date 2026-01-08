@@ -41,7 +41,7 @@ export default registerAs('database', (): TypeOrmModuleOptions => ({
   ],
 
   // NEVER synchronize in production!
-  synchronize: false,
+  synchronize: process.env.NODE_ENV === 'development',
 
   // Logging
   logging: process.env.NODE_ENV === 'development',
