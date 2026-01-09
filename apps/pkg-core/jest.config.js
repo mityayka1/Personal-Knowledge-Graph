@@ -9,7 +9,7 @@ module.exports = {
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
   moduleNameMapper: {
-    '^@pkg/entities$': '<rootDir>/../../packages/entities/src',
-    '^@pkg/shared$': '<rootDir>/../../packages/shared/src',
+    '^@pkg/entities$': '<rootDir>/../../../packages/entities/src',
+    '^@pkg/shared$': '<rootDir>/../../../packages/shared/src',
   },
 };
