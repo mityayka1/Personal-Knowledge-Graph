@@ -15,6 +15,7 @@ import {
   PendingEntityResolution,
   PendingFact,
   Job,
+  Setting,
 } from '@pkg/entities';
 
 // Database configuration for TypeORM CLI
@@ -52,6 +53,7 @@ export const dataSourceOptions: DataSourceOptions = {
     PendingEntityResolution,
     PendingFact,
     Job,
+    Setting,
   ],
 
   // Migrations

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2 } from 'lucide-vue-next';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle } from 'lucide-vue-next';
 import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
@@ -13,9 +13,30 @@ const deleteEntity = useDeleteEntity();
 const addFact = useAddFact();
 const removeFact = useRemoveFact();
 
+// Extraction settings
+const extractionSettings = ref<{ autoSaveThreshold: number; minConfidence: number } | null>(null);
+
 // Fact extraction state
 const isExtracting = ref(false);
-const extractionResult = ref<{ facts: Array<{ factType: string; value: string; confidence: number }> } | null>(null);
+interface ExtractedFact {
+  factType: string;
+  value: string;
+  confidence: number;
+  sourceQuote?: string;
+  status?: 'pending' | 'saved' | 'dismissed';
+}
+const extractedFacts = ref<ExtractedFact[]>([]);
+
+// Load extraction settings on mount
+onMounted(async () => {
+  try {
+    extractionSettings.value = await $fetch<{ autoSaveThreshold: number; minConfidence: number }>('/api/settings/extraction/all');
+  } catch (err) {
+    console.error('Failed to load extraction settings:', err);
+    // Default settings
+    extractionSettings.value = { autoSaveThreshold: 0.95, minConfidence: 0.6 };
+  }
+});
 
 // Fact dialog state
 const showFactDialog = ref(false);
@@ -98,13 +119,13 @@ async function handleExtractFacts() {
   if (!entity.value) return;
 
   isExtracting.value = true;
-  extractionResult.value = null;
+  extractedFacts.value = [];
 
   try {
     // For demo, use a sample message - in real app would use actual messages
     const sampleMessage = entity.value.notes || `Информация о ${entity.value.name}`;
 
-    const response = await $fetch<{ entityId: string; facts: Array<{ factType: string; value: string; confidence: number; sourceQuote: string }> }>(
+    const response = await $fetch<{ entityId: string; facts: ExtractedFact[] }>(
       '/api/extraction/facts',
       {
         method: 'POST',
@@ -116,10 +137,21 @@ async function handleExtractFacts() {
       }
     );
 
-    extractionResult.value = response;
+    // Mark facts based on confidence vs threshold
+    const threshold = extractionSettings.value?.autoSaveThreshold ?? 0.95;
+    extractedFacts.value = response.facts.map(fact => ({
+      ...fact,
+      status: fact.confidence >= threshold ? 'saved' : 'pending',
+    }));
+
+    // Auto-save high confidence facts
+    for (const fact of extractedFacts.value) {
+      if (fact.status === 'saved' && entity.value) {
+        await saveExtractedFact(fact);
+      }
+    }
 
     if (response.facts.length > 0) {
-      // Refetch entity to show new pending facts
       await refetch();
     }
   } catch (err) {
@@ -128,6 +160,35 @@ async function handleExtractFacts() {
     isExtracting.value = false;
   }
 }
+
+async function saveExtractedFact(fact: ExtractedFact) {
+  if (!entity.value) return;
+
+  try {
+    await addFact.mutateAsync({
+      entityId: entity.value.id,
+      data: {
+        type: fact.factType,
+        category: getFactCategory(fact.factType),
+        value: fact.value,
+        source: 'extracted',
+      },
+    });
+    fact.status = 'saved';
+    await refetch();
+  } catch (err) {
+    console.error('Failed to save fact:', err);
+  }
+}
+
+function dismissExtractedFact(fact: ExtractedFact) {
+  fact.status = 'dismissed';
+}
+
+// Computed: pending facts that need action
+const pendingExtractedFacts = computed(() =>
+  extractedFacts.value.filter(f => f.status === 'pending')
+);
 </script>
 
 <template>
@@ -263,18 +324,60 @@ async function handleExtractFacts() {
         </CardHeader>
         <CardContent>
           <!-- Extraction result -->
-          <div v-if="extractionResult" class="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800">
-            <div class="flex items-center gap-2 text-green-700 dark:text-green-300 font-medium mb-2">
-              <Sparkles class="h-4 w-4" />
-              Извлечено {{ extractionResult.facts.length }} фактов
+          <div v-if="extractedFacts.length > 0" class="mb-4 p-3 rounded-lg bg-muted/50 border">
+            <div class="flex items-center gap-2 font-medium mb-3">
+              <Sparkles class="h-4 w-4 text-yellow-500" />
+              Извлечено {{ extractedFacts.length }} фактов
+              <span v-if="pendingExtractedFacts.length > 0" class="text-sm text-muted-foreground">
+                ({{ pendingExtractedFacts.length }} ожидают подтверждения)
+              </span>
             </div>
-            <div v-if="extractionResult.facts.length > 0" class="space-y-1 text-sm">
-              <div v-for="(fact, i) in extractionResult.facts" :key="i" class="text-green-600 dark:text-green-400">
-                {{ fact.factType }}: {{ fact.value }} ({{ Math.round(fact.confidence * 100) }}%)
+            <div class="space-y-2">
+              <div
+                v-for="(fact, i) in extractedFacts"
+                :key="i"
+                :class="[
+                  'flex items-center justify-between p-2 rounded-md text-sm',
+                  fact.status === 'saved' ? 'bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300' :
+                  fact.status === 'dismissed' ? 'bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 opacity-50' :
+                  'bg-yellow-50 dark:bg-yellow-950 text-yellow-700 dark:text-yellow-300'
+                ]"
+              >
+                <div class="flex-1">
+                  <span class="font-medium">{{ fact.factType }}:</span>
+                  {{ fact.value }}
+                  <span class="text-xs opacity-70">({{ Math.round(fact.confidence * 100) }}%)</span>
+                </div>
+                <div class="flex items-center gap-1 ml-2">
+                  <!-- Status badge -->
+                  <Badge v-if="fact.status === 'saved'" variant="outline" class="text-green-600 border-green-300">
+                    <Check class="h-3 w-3 mr-1" />
+                    Сохранён
+                  </Badge>
+                  <Badge v-else-if="fact.status === 'dismissed'" variant="outline" class="text-red-600 border-red-300">
+                    Отклонён
+                  </Badge>
+                  <!-- Action buttons for pending facts -->
+                  <template v-else>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-7 px-2 text-green-600 hover:text-green-700 hover:bg-green-100"
+                      @click="saveExtractedFact(fact)"
+                    >
+                      <Check class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-100"
+                      @click="dismissExtractedFact(fact)"
+                    >
+                      <XCircle class="h-4 w-4" />
+                    </Button>
+                  </template>
+                </div>
               </div>
-            </div>
-            <div v-else class="text-sm text-muted-foreground">
-              Факты не найдены в тексте
             </div>
           </div>
 

@@ -8,6 +8,7 @@ import {
   CheckCircle,
   Menu,
   Download,
+  Settings,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -20,6 +21,7 @@ const navigation = [
   { name: 'Связывание', href: '/resolutions', icon: HelpCircle },
   { name: 'Факты на проверку', href: '/facts', icon: CheckCircle },
   { name: 'Импорт Telegram', href: '/import', icon: Download },
+  { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 
 const sidebarOpen = ref(false);
