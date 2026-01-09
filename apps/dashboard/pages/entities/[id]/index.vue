@@ -5,7 +5,6 @@ import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
 const router = useRouter();
-const config = useRuntimeConfig();
 
 const entityId = computed(() => route.params.id as string);
 const { data: entity, isLoading, error, refetch } = useEntity(entityId);
@@ -106,7 +105,7 @@ async function handleExtractFacts() {
     const sampleMessage = entity.value.notes || `Информация о ${entity.value.name}`;
 
     const response = await $fetch<{ entityId: string; facts: Array<{ factType: string; value: string; confidence: number; sourceQuote: string }> }>(
-      `${config.public.apiBase}/extraction/facts`,
+      '/api/extraction/facts',
       {
         method: 'POST',
         body: {
