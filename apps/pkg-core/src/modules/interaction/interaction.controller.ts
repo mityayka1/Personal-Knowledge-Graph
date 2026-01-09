@@ -13,6 +13,15 @@ export class InteractionController {
     return this.interactionService.findAll({ limit, offset });
   }
 
+  @Get('by-identifier')
+  async findByIdentifier(
+    @Query('type') identifierType: string,
+    @Query('value') identifierValue: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.interactionService.findByIdentifier(identifierType, identifierValue, limit);
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.interactionService.findOne(id);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { HelpCircle, Check, X, User, Plus, Search, Link } from 'lucide-vue-next';
-import { formatRelativeTime } from '~/lib/utils';
+import { HelpCircle, Check, X, User, Plus, Search, Link, MessageSquare, ChevronDown, ChevronUp } from 'lucide-vue-next';
+import { formatRelativeTime, formatDateTime } from '~/lib/utils';
 import { useDebounceFn } from '@vueuse/core';
 
 definePageMeta({
@@ -40,6 +40,19 @@ interface Entity {
   id: string;
   type: string;
   name: string;
+}
+
+interface Interaction {
+  id: string;
+  type: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string;
+  messageCount: number;
+  participants: Array<{
+    displayName?: string;
+    identifierValue: string;
+  }>;
 }
 
 function getDisplayInfo(resolution: PendingResolution): string {
@@ -111,6 +124,37 @@ const searchingForResolutionId = ref<string | null>(null);
 const entitySearchQuery = ref('');
 const entitySearchResults = ref<Entity[]>([]);
 const isSearchingEntities = ref(false);
+
+// Interactions view state
+const viewingInteractionsFor = ref<string | null>(null);
+const interactions = ref<Interaction[]>([]);
+const isLoadingInteractions = ref(false);
+
+async function loadInteractions(resolution: PendingResolution) {
+  if (viewingInteractionsFor.value === resolution.id) {
+    viewingInteractionsFor.value = null;
+    return;
+  }
+
+  viewingInteractionsFor.value = resolution.id;
+  isLoadingInteractions.value = true;
+
+  try {
+    const data = await $fetch<Interaction[]>('/api/interactions/by-identifier', {
+      query: {
+        type: resolution.identifierType,
+        value: resolution.identifierValue,
+        limit: 5,
+      },
+    });
+    interactions.value = data;
+  } catch (err) {
+    console.error('Failed to load interactions:', err);
+    interactions.value = [];
+  } finally {
+    isLoadingInteractions.value = false;
+  }
+}
 
 const debouncedEntitySearch = useDebounceFn(async () => {
   if (!entitySearchQuery.value.trim() || entitySearchQuery.value.length < 2) {
@@ -279,6 +323,58 @@ async function ignore(resolutionId: string) {
                       {{ Math.round(suggestion.confidence * 100) }}%
                     </Badge>
                   </Button>
+                </div>
+              </div>
+
+              <!-- View interactions toggle -->
+              <Button
+                variant="ghost"
+                size="sm"
+                class="mb-4"
+                @click="loadInteractions(resolution)"
+              >
+                <MessageSquare class="mr-2 h-4 w-4" />
+                Взаимодействия
+                <ChevronUp v-if="viewingInteractionsFor === resolution.id" class="ml-2 h-4 w-4" />
+                <ChevronDown v-else class="ml-2 h-4 w-4" />
+              </Button>
+
+              <!-- Interactions list -->
+              <div
+                v-if="viewingInteractionsFor === resolution.id"
+                class="mb-4 p-4 rounded-lg border bg-muted/30"
+              >
+                <div v-if="isLoadingInteractions" class="text-sm text-muted-foreground">
+                  Загрузка...
+                </div>
+                <div v-else-if="!interactions.length" class="text-sm text-muted-foreground">
+                  Нет взаимодействий с этим идентификатором
+                </div>
+                <div v-else class="space-y-3">
+                  <NuxtLink
+                    v-for="interaction in interactions"
+                    :key="interaction.id"
+                    :to="`/interactions/${interaction.id}`"
+                    class="block p-3 rounded-lg bg-background hover:bg-accent/50 transition-colors"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="flex items-center gap-2">
+                        <Badge variant="outline" class="text-xs">{{ interaction.type }}</Badge>
+                        <Badge :variant="interaction.status === 'active' ? 'default' : 'secondary'" class="text-xs">
+                          {{ interaction.status }}
+                        </Badge>
+                      </div>
+                      <span class="text-xs text-muted-foreground">
+                        {{ interaction.messageCount }} сообщений
+                      </span>
+                    </div>
+                    <p class="text-sm text-muted-foreground">
+                      {{ formatDateTime(interaction.startedAt) }}
+                    </p>
+                    <div v-if="interaction.participants?.length" class="mt-1 text-xs text-muted-foreground">
+                      Участники: {{ interaction.participants.map(p => p.displayName || p.identifierValue).join(', ') }}
+                    </div>
+                  </NuxtLink>
                 </div>
               </div>
 

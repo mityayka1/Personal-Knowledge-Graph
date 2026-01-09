@@ -141,4 +141,18 @@ export class InteractionService {
       { entityId },
     );
   }
+
+  async findByIdentifier(identifierType: string, identifierValue: string, limit = 10) {
+    const participants = await this.participantRepo.find({
+      where: { identifierType, identifierValue },
+      relations: ['interaction', 'interaction.participants', 'interaction.messages'],
+      order: { interaction: { startedAt: 'DESC' } },
+      take: limit,
+    });
+
+    return participants.map(p => ({
+      ...p.interaction,
+      messageCount: p.interaction.messages?.length || 0,
+    }));
+  }
 }
