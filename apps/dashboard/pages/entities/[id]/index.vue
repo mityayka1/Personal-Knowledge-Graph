@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X } from 'lucide-vue-next';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2 } from 'lucide-vue-next';
 import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
 const router = useRouter();
+const config = useRuntimeConfig();
 
 const entityId = computed(() => route.params.id as string);
-const { data: entity, isLoading, error } = useEntity(entityId);
+const { data: entity, isLoading, error, refetch } = useEntity(entityId);
 
 const deleteEntity = useDeleteEntity();
 const addFact = useAddFact();
 const removeFact = useRemoveFact();
+
+// Fact extraction state
+const isExtracting = ref(false);
+const extractionResult = ref<{ facts: Array<{ factType: string; value: string; confidence: number }> } | null>(null);
 
 // Fact dialog state
 const showFactDialog = ref(false);
@@ -87,6 +92,41 @@ function getIdentifierIcon(type: string) {
       return Phone;
     default:
       return Tag;
+  }
+}
+
+async function handleExtractFacts() {
+  if (!entity.value) return;
+
+  isExtracting.value = true;
+  extractionResult.value = null;
+
+  try {
+    // For demo, use a sample message - in real app would use actual messages
+    const sampleMessage = entity.value.notes || `Информация о ${entity.value.name}`;
+
+    const response = await $fetch<{ entityId: string; facts: Array<{ factType: string; value: string; confidence: number; sourceQuote: string }> }>(
+      `${config.public.apiBase}/extraction/facts`,
+      {
+        method: 'POST',
+        body: {
+          entityId: entity.value.id,
+          entityName: entity.value.name,
+          messageContent: sampleMessage,
+        },
+      }
+    );
+
+    extractionResult.value = response;
+
+    if (response.facts.length > 0) {
+      // Refetch entity to show new pending facts
+      await refetch();
+    }
+  } catch (err) {
+    console.error('Extraction failed:', err);
+  } finally {
+    isExtracting.value = false;
   }
 }
 </script>
@@ -205,16 +245,44 @@ function getIdentifierIcon(type: string) {
       <Card>
         <CardHeader class="flex flex-row items-center justify-between">
           <CardTitle class="text-lg">Факты</CardTitle>
-          <Button size="sm" variant="outline" @click="showFactDialog = true">
-            <Plus class="mr-2 h-4 w-4" />
-            Добавить
-          </Button>
+          <div class="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="isExtracting"
+              @click="handleExtractFacts"
+            >
+              <Loader2 v-if="isExtracting" class="mr-2 h-4 w-4 animate-spin" />
+              <Sparkles v-else class="mr-2 h-4 w-4" />
+              {{ isExtracting ? 'Извлечение...' : 'Извлечь факты' }}
+            </Button>
+            <Button size="sm" variant="outline" @click="showFactDialog = true">
+              <Plus class="mr-2 h-4 w-4" />
+              Добавить
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
+          <!-- Extraction result -->
+          <div v-if="extractionResult" class="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800">
+            <div class="flex items-center gap-2 text-green-700 dark:text-green-300 font-medium mb-2">
+              <Sparkles class="h-4 w-4" />
+              Извлечено {{ extractionResult.facts.length }} фактов
+            </div>
+            <div v-if="extractionResult.facts.length > 0" class="space-y-1 text-sm">
+              <div v-for="(fact, i) in extractionResult.facts" :key="i" class="text-green-600 dark:text-green-400">
+                {{ fact.factType }}: {{ fact.value }} ({{ Math.round(fact.confidence * 100) }}%)
+              </div>
+            </div>
+            <div v-else class="text-sm text-muted-foreground">
+              Факты не найдены в тексте
+            </div>
+          </div>
+
           <div v-if="!entity.facts.length" class="text-muted-foreground">
             Нет фактов
           </div>
-          <div v-else class="space-y-3">
+          <div v-if="entity.facts.length" class="space-y-3">
             <div
               v-for="fact in entity.facts"
               :key="fact.id"
