@@ -253,55 +253,57 @@ function getIdentifierIcon(type: string) {
       </Card>
 
       <!-- Add Fact Dialog -->
-      <Dialog v-model:open="showFactDialog">
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Добавить факт</DialogTitle>
-            <DialogDescription>
-              Добавьте новый факт о сущности
-            </DialogDescription>
-          </DialogHeader>
-          <div class="space-y-4 py-4">
-            <div class="space-y-2">
-              <label class="text-sm font-medium">Тип факта</label>
-              <select
-                v-model="newFact.type"
-                class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      <ClientOnly>
+        <Dialog v-model:open="showFactDialog">
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Добавить факт</DialogTitle>
+              <DialogDescription>
+                Добавьте новый факт о сущности
+              </DialogDescription>
+            </DialogHeader>
+            <div class="space-y-4 py-4">
+              <div class="space-y-2">
+                <label class="text-sm font-medium">Тип факта</label>
+                <select
+                  v-model="newFact.type"
+                  class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <option value="">Выберите тип...</option>
+                  <optgroup label="Личное">
+                    <option v-for="ft in factTypes.filter(t => t.category === 'personal')" :key="ft.value" :value="ft.value">
+                      {{ ft.label }}
+                    </option>
+                  </optgroup>
+                  <optgroup label="Профессиональное">
+                    <option v-for="ft in factTypes.filter(t => t.category === 'professional')" :key="ft.value" :value="ft.value">
+                      {{ ft.label }}
+                    </option>
+                  </optgroup>
+                  <optgroup label="Контактное">
+                    <option v-for="ft in factTypes.filter(t => t.category === 'contact')" :key="ft.value" :value="ft.value">
+                      {{ ft.label }}
+                    </option>
+                  </optgroup>
+                </select>
+              </div>
+              <div class="space-y-2">
+                <label class="text-sm font-medium">Значение</label>
+                <Input v-model="newFact.value" placeholder="Введите значение..." />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" @click="showFactDialog = false">Отмена</Button>
+              <Button
+                :disabled="!newFact.type || !newFact.value || addFact.isPending.value"
+                @click="handleAddFact"
               >
-                <option value="">Выберите тип...</option>
-                <optgroup label="Личное">
-                  <option v-for="ft in factTypes.filter(t => t.category === 'personal')" :key="ft.value" :value="ft.value">
-                    {{ ft.label }}
-                  </option>
-                </optgroup>
-                <optgroup label="Профессиональное">
-                  <option v-for="ft in factTypes.filter(t => t.category === 'professional')" :key="ft.value" :value="ft.value">
-                    {{ ft.label }}
-                  </option>
-                </optgroup>
-                <optgroup label="Контактное">
-                  <option v-for="ft in factTypes.filter(t => t.category === 'contact')" :key="ft.value" :value="ft.value">
-                    {{ ft.label }}
-                  </option>
-                </optgroup>
-              </select>
-            </div>
-            <div class="space-y-2">
-              <label class="text-sm font-medium">Значение</label>
-              <Input v-model="newFact.value" placeholder="Введите значение..." />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" @click="showFactDialog = false">Отмена</Button>
-            <Button
-              :disabled="!newFact.type || !newFact.value || addFact.isPending.value"
-              @click="handleAddFact"
-            >
-              {{ addFact.isPending.value ? 'Сохранение...' : 'Сохранить' }}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                {{ addFact.isPending.value ? 'Сохранение...' : 'Сохранить' }}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </ClientOnly>
 
       <!-- Metadata -->
       <Card>
