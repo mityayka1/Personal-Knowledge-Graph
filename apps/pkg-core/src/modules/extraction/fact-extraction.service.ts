@@ -245,27 +245,30 @@ ${text}`;
 
   /**
    * Parse structured JSON response from Claude CLI
+   * Format: JSON stream with structured_output in last object
    */
   private parseResponse(response: string): ExtractedFact[] {
     try {
+      // Response is a JSON array (stream format)
       const parsed = JSON.parse(response);
 
-      // Handle --output-format json wrapper: {result: string, ...}
-      let data: { facts?: ExtractedFact[] };
-      if (parsed.result && typeof parsed.result === 'string') {
-        // Result contains the structured output as string
-        data = JSON.parse(parsed.result);
-      } else if (parsed.facts) {
-        // Direct structured output
-        data = parsed;
-      } else {
-        // Fallback: try to find JSON array in response
-        const jsonMatch = response.match(/\[[\s\S]*?\]/);
-        if (!jsonMatch) return [];
-        data = { facts: JSON.parse(jsonMatch[0]) };
-      }
+      let facts: ExtractedFact[] = [];
 
-      const facts = data.facts || [];
+      if (Array.isArray(parsed)) {
+        // Find the result object with structured_output
+        const resultObj = parsed.find(
+          (obj) => obj.type === 'result' && obj.structured_output,
+        );
+        if (resultObj?.structured_output?.facts) {
+          facts = resultObj.structured_output.facts;
+        }
+      } else if (parsed.structured_output?.facts) {
+        // Single object with structured_output
+        facts = parsed.structured_output.facts;
+      } else if (parsed.facts) {
+        // Direct facts array
+        facts = parsed.facts;
+      }
 
       return facts
         .filter((f) => f.factType && f.value && typeof f.confidence === 'number')
