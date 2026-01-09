@@ -1,14 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { PendingEntityResolution, ResolutionStatus } from '@pkg/entities';
+import { Repository, DataSource } from 'typeorm';
+import { PendingEntityResolution, ResolutionStatus, Message, IdentifierType, EntityIdentifier } from '@pkg/entities';
 import { AUTO_RESOLVE_CONFIDENCE_THRESHOLD } from '@pkg/shared';
+import { EntityIdentifierService } from '../entity/entity-identifier/entity-identifier.service';
 
 @Injectable()
 export class PendingResolutionService {
+  private readonly logger = new Logger(PendingResolutionService.name);
+
   constructor(
     @InjectRepository(PendingEntityResolution)
     private resolutionRepo: Repository<PendingEntityResolution>,
+    @Inject(forwardRef(() => EntityIdentifierService))
+    private identifierService: EntityIdentifierService,
+    private dataSource: DataSource,
   ) {}
 
   async findAll(status?: ResolutionStatus, limit = 50, offset = 0) {
@@ -41,6 +47,17 @@ export class PendingResolutionService {
     identifierType: string;
     identifierValue: string;
     displayName?: string;
+    messageTimestamp?: Date;
+    metadata?: {
+      username?: string;
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      isBot?: boolean;
+      isVerified?: boolean;
+      isPremium?: boolean;
+      photoBase64?: string;
+    };
   }) {
     let resolution = await this.resolutionRepo.findOne({
       where: {
@@ -49,15 +66,36 @@ export class PendingResolutionService {
       },
     });
 
+    const messageTime = data.messageTimestamp || new Date();
+
     if (!resolution) {
       resolution = this.resolutionRepo.create({
         identifierType: data.identifierType,
         identifierValue: data.identifierValue,
         displayName: data.displayName,
+        metadata: data.metadata || null,
         status: ResolutionStatus.PENDING,
-        firstSeenAt: new Date(),
+        firstSeenAt: messageTime,
       });
       await this.resolutionRepo.save(resolution);
+    } else {
+      let needsSave = false;
+
+      // Update metadata if we now have it but didn't before
+      if (data.metadata && !resolution.metadata) {
+        resolution.metadata = data.metadata;
+        needsSave = true;
+      }
+
+      // Update firstSeenAt if this message is older
+      if (messageTime < resolution.firstSeenAt) {
+        resolution.firstSeenAt = messageTime;
+        needsSave = true;
+      }
+
+      if (needsSave) {
+        await this.resolutionRepo.save(resolution);
+      }
     }
 
     return resolution;
@@ -95,19 +133,57 @@ export class PendingResolutionService {
   async resolve(id: string, entityId: string, autoResolved = false) {
     const resolution = await this.findOne(id);
 
-    resolution.status = ResolutionStatus.RESOLVED;
-    resolution.resolvedEntityId = entityId;
-    resolution.resolvedAt = new Date();
+    // Execute all operations in a transaction for atomicity
+    return this.dataSource.transaction(async (manager) => {
+      let identifierCreated = false;
 
-    await this.resolutionRepo.save(resolution);
+      // 1. Create entity identifier to link the telegram_user_id to the entity
+      const identifierRepo = manager.getRepository(EntityIdentifier);
+      try {
+        const identifier = identifierRepo.create({
+          entityId,
+          identifierType: resolution.identifierType as IdentifierType,
+          identifierValue: resolution.identifierValue,
+          metadata: resolution.metadata ?? null,
+        });
+        await identifierRepo.save(identifier);
+        identifierCreated = true;
+        this.logger.log(`Created identifier ${resolution.identifierType}:${resolution.identifierValue} for entity ${entityId}`);
+      } catch (err) {
+        // Identifier might already exist (unique constraint), log and continue
+        this.logger.warn(`Could not create identifier: ${err instanceof Error ? err.message : err}`);
+      }
 
-    return {
-      id,
-      status: 'resolved',
-      entity_id: entityId,
-      resolved_at: resolution.resolvedAt,
-      auto_resolved: autoResolved,
-    };
+      // 2. Update messages - link all messages from this identifier to the entity
+      const messageRepo = manager.getRepository(Message);
+      const updateResult = await messageRepo
+        .createQueryBuilder()
+        .update(Message)
+        .set({ senderEntityId: entityId })
+        .where('sender_entity_id IS NULL')
+        .andWhere('sender_identifier_type = :type', { type: resolution.identifierType })
+        .andWhere('sender_identifier_value = :value', { value: resolution.identifierValue })
+        .execute();
+
+      this.logger.log(`Updated ${updateResult.affected} messages for entity ${entityId}`);
+
+      // 3. Update resolution status
+      const resolutionRepo = manager.getRepository(PendingEntityResolution);
+      resolution.status = ResolutionStatus.RESOLVED;
+      resolution.resolvedEntityId = entityId;
+      resolution.resolvedAt = new Date();
+      await resolutionRepo.save(resolution);
+
+      return {
+        id,
+        status: 'resolved',
+        entity_id: entityId,
+        resolved_at: resolution.resolvedAt,
+        auto_resolved: autoResolved,
+        messages_linked: updateResult.affected || 0,
+        identifier_created: identifierCreated,
+      };
+    });
   }
 
   async ignore(id: string) {
@@ -122,5 +198,68 @@ export class PendingResolutionService {
       id,
       status: 'ignored',
     };
+  }
+
+  async unresolve(id: string) {
+    const resolution = await this.findOne(id);
+
+    if (resolution.status !== ResolutionStatus.RESOLVED) {
+      return {
+        id,
+        status: resolution.status,
+        message: 'Resolution is not in resolved status',
+      };
+    }
+
+    const entityId = resolution.resolvedEntityId;
+
+    if (!entityId) {
+      return {
+        id,
+        status: resolution.status,
+        message: 'Resolution has no linked entity',
+      };
+    }
+
+    // Execute all operations in a transaction for atomicity
+    return this.dataSource.transaction(async (manager) => {
+      // 1. Delete the entity identifier that was created
+      const identifierRepo = manager.getRepository(EntityIdentifier);
+      const deleteResult = await identifierRepo.delete({
+        entityId,
+        identifierType: resolution.identifierType,
+        identifierValue: resolution.identifierValue,
+      });
+      this.logger.log(`Deleted ${deleteResult.affected} identifier(s) ${resolution.identifierType}:${resolution.identifierValue} from entity ${entityId}`);
+
+      // 2. Clear senderEntityId from messages using sender identifier fields
+      const messageRepo = manager.getRepository(Message);
+      const updateResult = await messageRepo
+        .createQueryBuilder()
+        .update(Message)
+        .set({ senderEntityId: null })
+        .where('sender_entity_id = :entityId', { entityId })
+        .andWhere('sender_identifier_type = :type', { type: resolution.identifierType })
+        .andWhere('sender_identifier_value = :value', { value: resolution.identifierValue })
+        .execute();
+
+      this.logger.log(`Cleared senderEntityId from ${updateResult.affected} messages`);
+
+      // 3. Reset resolution status
+      const resolutionRepo = manager.getRepository(PendingEntityResolution);
+      await resolutionRepo.update(id, {
+        status: ResolutionStatus.PENDING,
+        resolvedEntityId: null,
+        resolvedAt: null,
+      });
+
+      return {
+        id,
+        status: 'pending',
+        previousEntityId: entityId,
+        messages_unlinked: updateResult.affected || 0,
+        message: 'Resolution has been undone',
+      };
+    });
   }
 }

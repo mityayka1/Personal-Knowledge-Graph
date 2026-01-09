@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "factType": {
+            "type": "string",
+            "enum": ["position", "company", "department", "phone", "email", "telegram", "specialization", "birthday", "name"]
+          },
+          "value": { "type": "string" },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sourceQuote": { "type": "string" }
+        },
+        "required": ["factType", "value", "confidence", "sourceQuote"]
+      }
+    }
+  },
+  "required": ["facts"]
+}

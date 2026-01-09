@@ -103,6 +103,7 @@ Telegram сообщения группируются в sessions (Interactions).
 | **n8n-expert** | Workflow automation, Worker | @./.claude/agents/n8n-expert.md |
 | **pgvector-expert** | PostgreSQL, vector search | @./.claude/agents/pgvector-expert.md |
 | **openai-expert** | Embeddings API | @./.claude/agents/openai-expert.md |
+| **claude-cli-expert** | Claude CLI интеграция, structured output | @./.claude/agents/claude-cli-expert.md |
 
 ### Использование агентов
 

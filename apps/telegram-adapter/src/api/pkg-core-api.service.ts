@@ -17,13 +17,14 @@ interface MessagePayload {
   media_url?: string;
 }
 
-interface MessageResponse {
+export interface MessageResponse {
   id: string;
   interaction_id: string;
   entity_id: string | null;
   entity_resolution_status: 'resolved' | 'pending';
   pending_resolution_id: string | null;
   created_at: string;
+  is_update?: boolean;
 }
 
 interface HealthResponse {

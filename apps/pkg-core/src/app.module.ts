@@ -13,8 +13,10 @@ import { SearchModule } from './modules/search/search.module';
 import { ContextModule } from './modules/context/context.module';
 import { JobModule } from './modules/job/job.module';
 import { EmbeddingModule } from './modules/embedding/embedding.module';
+import { ExtractionModule } from './modules/extraction/extraction.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
 import { HealthModule } from './modules/health/health.module';
+import { SettingsModule } from './modules/settings/settings.module';
 
 @Module({
   imports: [
@@ -56,8 +58,10 @@ import { HealthModule } from './modules/health/health.module';
     ContextModule,
     JobModule,
     EmbeddingModule,
+    ExtractionModule,
     WebhookModule,
     HealthModule,
+    SettingsModule,
   ],
 })
 export class AppModule {}

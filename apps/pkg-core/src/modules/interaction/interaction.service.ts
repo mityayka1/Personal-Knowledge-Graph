@@ -13,6 +13,20 @@ export class InteractionService {
     private participantRepo: Repository<InteractionParticipant>,
   ) {}
 
+  async findAll(params: { limit?: number; offset?: number } = {}) {
+    const limit = params.limit || 20;
+    const offset = params.offset || 0;
+
+    const [items, total] = await this.interactionRepo.findAndCount({
+      relations: ['participants'],
+      order: { startedAt: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
+
+    return { items, total, limit, offset };
+  }
+
   async findOne(id: string) {
     const interaction = await this.interactionRepo.findOne({
       where: { id },
@@ -126,5 +140,19 @@ export class InteractionService {
       { interactionId, identifierType, identifierValue },
       { entityId },
     );
+  }
+
+  async findByIdentifier(identifierType: string, identifierValue: string, limit = 10) {
+    const participants = await this.participantRepo.find({
+      where: { identifierType, identifierValue },
+      relations: ['interaction', 'interaction.participants', 'interaction.messages'],
+      order: { interaction: { startedAt: 'DESC' } },
+      take: limit,
+    });
+
+    return participants.map(p => ({
+      ...p.interaction,
+      messageCount: p.interaction.messages?.length || 0,
+    }));
   }
 }

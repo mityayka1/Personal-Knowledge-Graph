@@ -63,11 +63,12 @@
 - Search (Full-text + Vector + Hybrid)
 - API для всех клиентов
 - Генерация embeddings (async queue)
+- **LLM задачи через Claude CLI** (fact extraction, context synthesis)
 
 **НЕ ответственность:**
 - Подключение к внешним источникам (Telegram, etc.)
-- Транскрипция аудио
-- LLM вызовы (делегирует Worker через webhook)
+- Транскрипция аудио (делегирует Worker)
+- Сложные multi-step AI workflows (делегирует Worker/n8n)
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -97,23 +98,25 @@
 
 ---
 
-### 3. Worker Service (n8n + Claude Code CLI)
+### 3. Worker Service (n8n)
 
-**Назначение:** Выполнение асинхронных и LLM-powered задач.
+**Назначение:** Выполнение сложных асинхронных задач, требующих визуальной отладки.
 
 **Ответственность:**
 - Транскрипция аудио (Whisper)
-- LLM задачи через Claude Code CLI:
-  - Context synthesis
-  - Fact extraction
-  - Entity resolution suggestions
-  - Interaction summarization
-  - Speaker mapping для звонков
+- Сложные multi-step AI workflows (когда нужна визуальная отладка в n8n):
+  - Speaker mapping для звонков (требует итеративную отладку)
+  - Сложные entity resolution cases
 - Scheduled jobs (digest, cleanup)
 
 **НЕ ответственность:**
 - Хранение данных (всё через PKG Core API)
 - Бизнес-логика entities/interactions
+- Простые LLM задачи (fact extraction, context synthesis — выполняются в PKG Core)
+
+**Принцип разделения:**
+- **PKG Core** — простые LLM вызовы с предсказуемым результатом (extraction, synthesis)
+- **Worker/n8n** — сложные workflows, требующие визуальной отладки и итераций
 
 ```
 ┌────────────────────────────────────────────────────────────────┐

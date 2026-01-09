@@ -47,4 +47,9 @@ export class PendingResolutionController {
   async ignore(@Param('id', ParseUUIDPipe) id: string) {
     return this.resolutionService.ignore(id);
   }
+
+  @Post(':id/unresolve')
+  async unresolve(@Param('id', ParseUUIDPipe) id: string) {
+    return this.resolutionService.unresolve(id);
+  }
 }

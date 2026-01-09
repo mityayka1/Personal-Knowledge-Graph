@@ -1,9 +1,26 @@
-import { Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { InteractionService } from './interaction.service';
 
 @Controller('interactions')
 export class InteractionController {
   constructor(private interactionService: InteractionService) {}
+
+  @Get()
+  async findAll(
+    @Query('limit') limit?: number,
+    @Query('offset') offset?: number,
+  ) {
+    return this.interactionService.findAll({ limit, offset });
+  }
+
+  @Get('by-identifier')
+  async findByIdentifier(
+    @Query('type') identifierType: string,
+    @Query('value') identifierValue: string,
+    @Query('limit') limit?: number,
+  ) {
+    return this.interactionService.findByIdentifier(identifierType, identifierValue, limit);
+  }
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {

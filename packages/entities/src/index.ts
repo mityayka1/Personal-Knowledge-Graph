@@ -9,3 +9,4 @@ export * from './interaction-summary.entity';
 export * from './pending-entity-resolution.entity';
 export * from './pending-fact.entity';
 export * from './job.entity';
+export * from './setting.entity';

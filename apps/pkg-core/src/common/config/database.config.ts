@@ -12,6 +12,7 @@ import {
   PendingEntityResolution,
   PendingFact,
   Job,
+  Setting,
 } from '@pkg/entities';
 
 export default registerAs('database', (): TypeOrmModuleOptions => ({
@@ -38,6 +39,7 @@ export default registerAs('database', (): TypeOrmModuleOptions => ({
     PendingEntityResolution,
     PendingFact,
     Job,
+    Setting,
   ],
 
   // NEVER synchronize in production!

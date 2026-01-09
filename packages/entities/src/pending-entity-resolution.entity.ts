@@ -33,6 +33,19 @@ export class PendingEntityResolution {
   @Column({ name: 'display_name', type: 'varchar', length: 255, nullable: true })
   displayName: string | null;
 
+  @Column({ type: 'jsonb', nullable: true })
+  metadata: {
+    username?: string;
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+    about?: string;
+    isBot?: boolean;
+    isVerified?: boolean;
+    isPremium?: boolean;
+    photoBase64?: string;
+  } | null;
+
   @Column({ length: 20, default: ResolutionStatus.PENDING })
   @Index()
   status: ResolutionStatus;
