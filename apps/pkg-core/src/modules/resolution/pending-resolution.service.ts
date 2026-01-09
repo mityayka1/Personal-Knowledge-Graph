@@ -1,14 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { PendingEntityResolution, ResolutionStatus } from '@pkg/entities';
+import { Repository, DataSource } from 'typeorm';
+import { PendingEntityResolution, ResolutionStatus, Message, IdentifierType } from '@pkg/entities';
 import { AUTO_RESOLVE_CONFIDENCE_THRESHOLD } from '@pkg/shared';
+import { EntityIdentifierService } from '../entity/entity-identifier/entity-identifier.service';
 
 @Injectable()
 export class PendingResolutionService {
+  private readonly logger = new Logger(PendingResolutionService.name);
+
   constructor(
     @InjectRepository(PendingEntityResolution)
     private resolutionRepo: Repository<PendingEntityResolution>,
+    @Inject(forwardRef(() => EntityIdentifierService))
+    private identifierService: EntityIdentifierService,
+    private dataSource: DataSource,
   ) {}
 
   async findAll(status?: ResolutionStatus, limit = 50, offset = 0) {
@@ -127,6 +133,44 @@ export class PendingResolutionService {
   async resolve(id: string, entityId: string, autoResolved = false) {
     const resolution = await this.findOne(id);
 
+    // 1. Create entity identifier to link the telegram_user_id to the entity
+    try {
+      await this.identifierService.create(entityId, {
+        type: resolution.identifierType as IdentifierType,
+        value: resolution.identifierValue,
+        metadata: resolution.metadata ?? undefined,
+      });
+      this.logger.log(`Created identifier ${resolution.identifierType}:${resolution.identifierValue} for entity ${entityId}`);
+    } catch (err) {
+      // Identifier might already exist, log and continue
+      this.logger.warn(`Could not create identifier: ${err instanceof Error ? err.message : err}`);
+    }
+
+    // 2. Update messages - link all messages from this identifier to the entity
+    // Now we can directly find messages by sender_identifier_type and sender_identifier_value
+    try {
+      const messageRepo = this.dataSource.getRepository(Message);
+
+      // Direct update using sender identifier fields
+      const updateResult = await messageRepo
+        .createQueryBuilder()
+        .update(Message)
+        .set({ senderEntityId: entityId })
+        .where('sender_entity_id IS NULL')
+        .andWhere('sender_identifier_type = :type')
+        .andWhere('sender_identifier_value = :value')
+        .setParameters({
+          type: resolution.identifierType,
+          value: resolution.identifierValue,
+        })
+        .execute();
+
+      this.logger.log(`Updated ${updateResult.affected} messages for entity ${entityId}`);
+    } catch (err) {
+      this.logger.error(`Failed to update messages: ${err instanceof Error ? err.message : err}`);
+    }
+
+    // 3. Update resolution status
     resolution.status = ResolutionStatus.RESOLVED;
     resolution.resolvedEntityId = entityId;
     resolution.resolvedAt = new Date();
@@ -153,6 +197,75 @@ export class PendingResolutionService {
     return {
       id,
       status: 'ignored',
+    };
+  }
+
+  async unresolve(id: string) {
+    const resolution = await this.findOne(id);
+
+    if (resolution.status !== ResolutionStatus.RESOLVED) {
+      return {
+        id,
+        status: resolution.status,
+        message: 'Resolution is not in resolved status',
+      };
+    }
+
+    const entityId = resolution.resolvedEntityId;
+
+    // 1. Delete the entity identifier that was created
+    if (entityId) {
+      try {
+        const identifierRepo = this.dataSource.getRepository('EntityIdentifier');
+        await identifierRepo.delete({
+          entityId,
+          identifierType: resolution.identifierType,
+          identifierValue: resolution.identifierValue,
+        });
+        this.logger.log(`Deleted identifier ${resolution.identifierType}:${resolution.identifierValue} from entity ${entityId}`);
+      } catch (err) {
+        this.logger.warn(`Could not delete identifier: ${err instanceof Error ? err.message : err}`);
+      }
+
+      // 2. Clear senderEntityId from messages using sender identifier fields
+      try {
+        const messageRepo = this.dataSource.getRepository(Message);
+        const updateResult = await messageRepo
+          .createQueryBuilder()
+          .update(Message)
+          .set({ senderEntityId: null as unknown as string })
+          .where('sender_entity_id = :entityId', { entityId })
+          .andWhere('sender_identifier_type = :type')
+          .andWhere('sender_identifier_value = :value')
+          .setParameters({
+            type: resolution.identifierType,
+            value: resolution.identifierValue,
+          })
+          .execute();
+
+        this.logger.log(`Cleared senderEntityId from ${updateResult.affected} messages`);
+      } catch (err) {
+        this.logger.error(`Failed to clear messages: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // 3. Reset resolution status using raw update to properly set null values
+    await this.resolutionRepo
+      .createQueryBuilder()
+      .update()
+      .set({
+        status: ResolutionStatus.PENDING,
+        resolvedEntityId: () => 'NULL',
+        resolvedAt: () => 'NULL',
+      })
+      .where('id = :id', { id })
+      .execute();
+
+    return {
+      id,
+      status: 'pending',
+      previousEntityId: entityId,
+      message: 'Resolution has been undone',
     };
   }
 }

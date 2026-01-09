@@ -43,6 +43,14 @@ export class Message {
   @JoinColumn({ name: 'sender_entity_id' })
   senderEntity: EntityRecord | null;
 
+  // Identifier of the sender (e.g., telegram_user_id) - for proper message attribution
+  @Column({ name: 'sender_identifier_type', type: 'varchar', length: 50, nullable: true })
+  senderIdentifierType: string | null;
+
+  @Column({ name: 'sender_identifier_value', type: 'varchar', length: 255, nullable: true })
+  @Index()
+  senderIdentifierValue: string | null;
+
   @Column({ type: 'text', nullable: true })
   content: string | null;
 

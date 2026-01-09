@@ -6,6 +6,11 @@ interface StartImportDto {
   limitPerDialog?: number;
 }
 
+interface ReimportChatDto {
+  chatId: string; // e.g., "channel_1555389091", "chat_123", "user_456"
+  limit?: number;
+}
+
 @Controller('import')
 export class HistoryImportController {
   constructor(
@@ -47,6 +52,38 @@ export class HistoryImportController {
     return {
       message: 'Import started',
       progress: this.historyImportService.getProgress(),
+    };
+  }
+
+  @Post('reimport-chat')
+  async reimportChat(@Body() dto: ReimportChatDto): Promise<{
+    message: string;
+    imported: number;
+    updated: number;
+    errors: string[];
+  }> {
+    if (!dto.chatId) {
+      throw new HttpException('chatId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    const client = this.telegramService.getClient();
+
+    if (!client || !this.telegramService.isClientConnected()) {
+      throw new HttpException(
+        'Telegram client is not connected',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    const result = await this.historyImportService.reimportChat(
+      client,
+      dto.chatId,
+      dto.limit || 1000,
+    );
+
+    return {
+      message: `Re-import completed for chat ${dto.chatId}`,
+      ...result,
     };
   }
 }

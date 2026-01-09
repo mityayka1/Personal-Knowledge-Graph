@@ -104,7 +104,8 @@ async function handleDelete() {
   }
 }
 
-function getIdentifierIcon(type: string) {
+function getIdentifierIcon(type: string | undefined) {
+  if (!type) return Tag;
   switch (type.toLowerCase()) {
     case 'email':
       return Mail;
@@ -122,20 +123,21 @@ async function handleExtractFacts() {
   extractedFacts.value = [];
 
   try {
-    // For demo, use a sample message - in real app would use actual messages
-    const sampleMessage = entity.value.notes || `Информация о ${entity.value.name}`;
-
-    const response = await $fetch<{ entityId: string; facts: ExtractedFact[] }>(
-      '/api/extraction/facts',
-      {
-        method: 'POST',
-        body: {
-          entityId: entity.value.id,
-          entityName: entity.value.name,
-          messageContent: sampleMessage,
-        },
-      }
+    // Extract facts from entity's message history
+    const response = await $fetch<{
+      entityId: string;
+      entityName: string;
+      facts: ExtractedFact[];
+      messageCount: number;
+      message?: string;
+    }>(
+      `/api/extraction/entity/${entity.value.id}/facts`
     );
+
+    if (response.message && response.facts.length === 0) {
+      // No messages or extractable content
+      console.log('Extraction info:', response.message);
+    }
 
     // Mark facts based on confidence vs threshold
     const threshold = extractionSettings.value?.autoSaveThreshold ?? 0.95;
@@ -238,7 +240,7 @@ const pendingExtractedFacts = computed(() =>
           <div>
             <h1 class="text-3xl font-bold tracking-tight">{{ entity.name }}</h1>
             <div class="flex items-center gap-2 mt-1">
-              <Badge variant="secondary">{{ entity.type.toLowerCase() }}</Badge>
+              <Badge variant="secondary">{{ entity.type?.toLowerCase() || 'entity' }}</Badge>
               <span v-if="entity.organization" class="text-muted-foreground">
                 @ {{ entity.organization.name }}
               </span>
@@ -290,11 +292,11 @@ const pendingExtractedFacts = computed(() =>
               class="flex items-center gap-3"
             >
               <div class="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-                <component :is="getIdentifierIcon(identifier.type)" class="h-4 w-4 text-muted-foreground" />
+                <component :is="getIdentifierIcon(identifier.identifierType)" class="h-4 w-4 text-muted-foreground" />
               </div>
               <div>
-                <div class="font-medium">{{ identifier.value }}</div>
-                <div class="text-xs text-muted-foreground">{{ identifier.type }}</div>
+                <div class="font-medium">{{ identifier.identifierValue }}</div>
+                <div class="text-xs text-muted-foreground">{{ identifier.identifierType }}</div>
               </div>
             </div>
           </div>
@@ -406,7 +408,7 @@ const pendingExtractedFacts = computed(() =>
                   <span v-else-if="fact.valueDate">{{ formatDate(fact.valueDate) }}</span>
                 </div>
                 <div class="text-xs text-muted-foreground mt-1">
-                  Источник: {{ fact.source.toLowerCase() }}
+                  Источник: {{ fact.source?.toLowerCase() || 'unknown' }}
                 </div>
               </div>
               <Button

@@ -62,19 +62,42 @@ export class MessageService {
       displayName: dto.telegram_display_name,
     });
 
-    // 4. Create message
-    const message = this.messageRepo.create({
-      interactionId: interaction.id,
-      senderEntityId: entityId,
-      content: dto.text,
-      isOutgoing: dto.is_outgoing,
-      timestamp: new Date(dto.timestamp),
-      sourceMessageId: dto.message_id,
-      mediaType: dto.media_type,
-      mediaUrl: dto.media_url,
-    });
+    // 4. Create or update message with sender identifier for proper attribution
+    // Check if message already exists (by sourceMessageId in this interaction)
+    let existingMessage = dto.message_id
+      ? await this.messageRepo.findOne({
+          where: {
+            interactionId: interaction.id,
+            sourceMessageId: dto.message_id,
+          },
+        })
+      : null;
 
-    const saved = await this.messageRepo.save(message);
+    let saved: Message;
+
+    if (existingMessage) {
+      // Update existing message with sender identifier
+      existingMessage.senderEntityId = entityId;
+      existingMessage.senderIdentifierType = 'telegram_user_id';
+      existingMessage.senderIdentifierValue = dto.telegram_user_id;
+      saved = await this.messageRepo.save(existingMessage);
+    } else {
+      // Create new message
+      const message = this.messageRepo.create({
+        interactionId: interaction.id,
+        senderEntityId: entityId,
+        senderIdentifierType: 'telegram_user_id',
+        senderIdentifierValue: dto.telegram_user_id,
+        content: dto.text,
+        isOutgoing: dto.is_outgoing,
+        timestamp: new Date(dto.timestamp),
+        sourceMessageId: dto.message_id,
+        mediaType: dto.media_type,
+        mediaUrl: dto.media_url,
+      });
+
+      saved = await this.messageRepo.save(message);
+    }
 
     // 5. Queue embedding job
     if (dto.text) {
@@ -100,6 +123,39 @@ export class MessageService {
       order: { timestamp: 'ASC' },
       take: limit,
       skip: offset,
+    });
+  }
+
+  /**
+   * Get messages sent by a specific entity
+   * Used for fact extraction from message history
+   */
+  async findByEntity(entityId: string, limit = 50) {
+    return this.messageRepo.find({
+      where: { senderEntityId: entityId },
+      order: { timestamp: 'DESC' },
+      take: limit,
+      select: ['id', 'content', 'timestamp', 'interactionId'],
+    });
+  }
+
+  /**
+   * Get messages by sender identifier (telegram_user_id, phone, etc.)
+   * Used for finding messages from unresolved identifiers
+   */
+  async findBySenderIdentifier(
+    identifierType: string,
+    identifierValue: string,
+    limit = 50,
+  ) {
+    return this.messageRepo.find({
+      where: {
+        senderIdentifierType: identifierType,
+        senderIdentifierValue: identifierValue,
+      },
+      order: { timestamp: 'DESC' },
+      take: limit,
+      select: ['id', 'content', 'timestamp', 'interactionId'],
     });
   }
 

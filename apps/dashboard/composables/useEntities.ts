@@ -3,8 +3,8 @@ import type { Ref } from 'vue';
 
 export interface EntityIdentifier {
   id: string;
-  type: string;
-  value: string;
+  identifierType: string;
+  identifierValue: string;
   metadata?: Record<string, unknown>;
 }
 

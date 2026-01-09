@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, MessageSquare, User } from 'lucide-vue-next';
+import { ArrowLeft, MessageSquare, User, ExternalLink } from 'lucide-vue-next';
 import { formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -11,6 +11,17 @@ interface Message {
   timestamp: string;
   isOutgoing: boolean;
   senderEntityId?: string;
+  senderIdentifierType?: string;
+  senderIdentifierValue?: string;
+}
+
+interface Participant {
+  id: string;
+  role: string;
+  entityId?: string;
+  displayName?: string;
+  identifierType?: string;
+  identifierValue?: string;
 }
 
 interface Interaction {
@@ -20,16 +31,71 @@ interface Interaction {
   status: string;
   startedAt: string;
   endedAt?: string;
-  participants: Array<{
-    id: string;
-    role: string;
-    entityId?: string;
-    displayName?: string;
-  }>;
+  sourceMetadata?: {
+    telegram_chat_id?: string;
+  };
+  participants: Participant[];
   messages: Message[];
 }
 
 const { data: interaction, pending, error } = useFetch<Interaction>(`/api/interactions/${interactionId.value}`);
+
+// Create a map of identifier -> participant for quick lookup
+const participantMap = computed(() => {
+  const map = new Map<string, Participant>();
+  interaction.value?.participants?.forEach(p => {
+    if (p.identifierValue) {
+      map.set(p.identifierValue, p);
+    }
+  });
+  return map;
+});
+
+// Get sender display name for a message
+function getSenderName(message: Message): string {
+  if (message.isOutgoing) return 'Вы';
+  if (message.senderIdentifierValue) {
+    const participant = participantMap.value.get(message.senderIdentifierValue);
+    if (participant?.displayName) return participant.displayName;
+    return `ID: ${message.senderIdentifierValue}`;
+  }
+  return 'Неизвестный';
+}
+
+// Get chat display name and link
+const chatInfo = computed(() => {
+  const chatId = interaction.value?.sourceMetadata?.telegram_chat_id;
+  if (!chatId) return null;
+
+  // Parse chat_id format: user_XXX, chat_XXX, channel_XXX
+  const parts = chatId.split('_');
+  const type = parts[0];
+  const id = parts.slice(1).join('_');
+
+  let displayName = chatId;
+  let link: string | null = null;
+
+  if (type === 'user') {
+    displayName = `Личный чат (${id})`;
+    // Find participant to get display name
+    const participant = interaction.value?.participants?.find(p =>
+      p.identifierValue === id && p.role !== 'self'
+    );
+    if (participant?.displayName) {
+      displayName = `Личный чат с ${participant.displayName}`;
+    }
+  } else if (type === 'chat') {
+    displayName = `Группа (${id})`;
+    // Telegram private group/channel links need message ID at the end
+    link = `https://t.me/c/${id}/1`;
+  } else if (type === 'channel') {
+    displayName = `Канал/Группа (${id})`;
+    // Telegram private group/channel links need message ID at the end
+    link = `https://t.me/c/${id}/1`;
+  }
+
+  return { displayName, link, rawId: chatId };
+});
 </script>
 
 <template>
@@ -83,10 +149,6 @@ const { data: interaction, pending, error } = useFetch<Interaction>(`/api/intera
               <span class="text-muted-foreground">Начало:</span>
               <span class="ml-2">{{ formatDateTime(interaction.startedAt) }}</span>
             </div>
-            <div v-if="interaction.endedAt">
-              <span class="text-muted-foreground">Завершение:</span>
-              <span class="ml-2">{{ formatDateTime(interaction.endedAt) }}</span>
-            </div>
             <div>
               <span class="text-muted-foreground">Сообщений:</span>
               <span class="ml-2">{{ interaction.messages?.length || 0 }}</span>
@@ -94,6 +156,35 @@ const { data: interaction, pending, error } = useFetch<Interaction>(`/api/intera
             <div>
               <span class="text-muted-foreground">Участников:</span>
               <span class="ml-2">{{ interaction.participants?.length || 0 }}</span>
+            </div>
+            <div v-if="chatInfo">
+              <span class="text-muted-foreground">Чат:</span>
+              <a
+                v-if="chatInfo.link"
+                :href="chatInfo.link"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="ml-2 inline-flex items-center gap-1 text-primary hover:underline"
+              >
+                {{ chatInfo.displayName }}
+                <ExternalLink class="h-3 w-3" />
+              </a>
+              <span v-else class="ml-2">{{ chatInfo.displayName }}</span>
+            </div>
+          </div>
+
+          <!-- Participants list -->
+          <div v-if="interaction.participants?.length" class="mt-4 pt-4 border-t">
+            <div class="text-sm text-muted-foreground mb-2">Участники:</div>
+            <div class="flex flex-wrap gap-2">
+              <Badge
+                v-for="participant in interaction.participants"
+                :key="participant.id"
+                variant="secondary"
+                class="text-xs"
+              >
+                {{ participant.displayName || participant.identifierValue || 'Неизвестный' }}
+              </Badge>
             </div>
           </div>
         </CardContent>
@@ -128,6 +219,15 @@ const { data: interaction, pending, error } = useFetch<Interaction>(`/api/intera
                     : 'bg-muted',
                 ]"
               >
+                <!-- Sender name -->
+                <p
+                  :class="[
+                    'text-xs font-medium mb-1',
+                    message.isOutgoing ? 'text-primary-foreground/80' : 'text-foreground/80',
+                  ]"
+                >
+                  {{ getSenderName(message) }}
+                </p>
                 <p class="text-sm whitespace-pre-wrap">{{ message.content }}</p>
                 <p
                   :class="[
