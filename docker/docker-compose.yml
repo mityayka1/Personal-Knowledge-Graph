@@ -35,7 +35,7 @@ services:
       DB_PORT: 5432
       DB_USERNAME: ccmcp
       DB_PASSWORD: ${DB_PASSWORD:-new_ccmcpPasswordFormcp}
-      DB_DATABASE: mp_data
+      DB_DATABASE: pkg
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379

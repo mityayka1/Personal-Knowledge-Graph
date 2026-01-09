@@ -230,7 +230,7 @@ Client              PKG Core          Worker              PostgreSQL
 ```
 Host: service.googlesheets.ru
 Port: 5432
-Database: mp_data
+Database: pkg
 ```
 
 **Преимущества:**
@@ -242,14 +242,14 @@ Database: mp_data
 **Подключение:**
 ```bash
 # Connection string
-DATABASE_URL=postgresql://ccmcp:***@service.googlesheets.ru:5432/mp_data
+DATABASE_URL=postgresql://ccmcp:***@service.googlesheets.ru:5432/pkg
 
 # Или отдельные переменные
 DB_HOST=service.googlesheets.ru
 DB_PORT=5432
 DB_USERNAME=ccmcp
 DB_PASSWORD=***
-DB_DATABASE=mp_data
+DB_DATABASE=pkg
 ```
 
 **Миграции:**
