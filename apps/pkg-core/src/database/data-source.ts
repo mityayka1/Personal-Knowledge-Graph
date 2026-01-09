@@ -2,6 +2,14 @@ import 'reflect-metadata';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import * as path from 'path';
 
+// Load .env file for CLI commands
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  require('dotenv').config();
+} catch {
+  // dotenv not available, use environment variables directly
+}
+
 // Import entities from shared package
 import {
   EntityRecord,

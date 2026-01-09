@@ -221,6 +221,43 @@ Client              PKG Core          Worker              PostgreSQL
 
 ---
 
+## База данных
+
+### Централизованная PostgreSQL
+
+Проект использует **единую удалённую базу данных** для всех окружений (development, staging, production).
+
+**Преимущества:**
+- Единая точка истины для данных
+- Нет необходимости синхронизировать данные между окружениями
+- Упрощённый деплой — не нужен локальный PostgreSQL
+- pgvector установлен и настроен
+
+**Подключение:**
+```bash
+# Получите credentials у администратора
+# Скопируйте .env.example в .env и заполните значения
+
+# Переменные окружения
+DB_HOST=your-db-host
+DB_PORT=5432
+DB_USERNAME=your-username
+DB_PASSWORD=your-password
+DB_DATABASE=pkg
+DB_SSL=true  # Рекомендуется для remote connections
+```
+
+**Миграции:**
+```bash
+cd apps/pkg-core
+npm run migration:run    # Применить миграции
+npm run migration:revert # Откатить последнюю
+```
+
+> ⚠️ **ВАЖНО:** `synchronize: false` всегда! Используем только миграции.
+
+---
+
 ## Deployment
 
 ### Option A: Single Server (Dev / Small Scale)
