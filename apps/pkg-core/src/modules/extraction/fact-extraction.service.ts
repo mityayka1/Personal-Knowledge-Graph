@@ -21,14 +21,15 @@ const FACT_TYPES = ['position', 'company', 'department', 'phone', 'email', 'tele
 @Injectable()
 export class FactExtractionService {
   private readonly logger = new Logger(FactExtractionService.name);
-  private readonly projectRoot: string;
+  private readonly workspacePath: string;
   private readonly timeoutMs = 30000; // 30 seconds timeout
 
   constructor(private pendingFactService: PendingFactService) {
-    // PKG project root where CLAUDE.md and .claude/agents are located
-    // From dist/modules/extraction/ -> dist/modules/ -> dist/ -> pkg-core/ -> apps/ -> PKG/
-    this.projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(__dirname, '../../../../../../');
-    this.logger.log(`Using project root: ${this.projectRoot}`);
+    // Claude workspace directory with CLAUDE.md and agents
+    // From dist/modules/extraction/ -> dist/ -> pkg-core/ -> apps/ -> PKG/ -> claude-workspace/
+    const projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(__dirname, '../../../../../../');
+    this.workspacePath = path.join(projectRoot, 'claude-workspace');
+    this.logger.log(`Using Claude workspace: ${this.workspacePath}`);
   }
 
   /**
@@ -127,30 +128,45 @@ export class FactExtractionService {
   }
 
   /**
-   * Compact prompt - references fact-extractor agent instructions
+   * Compact prompt with inline instructions for --print mode
    */
   private buildCompactPrompt(name: string, text: string): string {
-    // Reference the agent for context, but keep prompt minimal
-    return `@.claude/agents/fact-extractor.md
+    return `Extract facts about "${name}" from the text below.
 
-Extract facts about "${name}":
+Fact types: position, company, department, phone, email, telegram, specialization, birthday, name
 
+Rules:
+- Only extract explicitly stated facts
+- confidence: 0.9+ for explicit, 0.6-0.8 for indirect
+- sourceQuote: exact quote (max 100 chars)
+- Return empty array [] if no facts found
+
+Text:
 ${text}
 
-JSON only:`;
+Return ONLY a JSON array:
+[{"factType":"type","value":"val","confidence":0.9,"sourceQuote":"quote"}]`;
   }
 
   /**
    * Batch prompt for multiple messages
    */
   private buildBatchPrompt(name: string, text: string): string {
-    return `@.claude/agents/fact-extractor.md
+    return `Extract facts about "${name}" from the messages below. Deduplicate similar facts.
 
-Extract facts about "${name}" from messages. Deduplicate.
+Fact types: position, company, department, phone, email, telegram, specialization, birthday, name
 
+Rules:
+- Only extract explicitly stated facts
+- confidence: 0.9+ for explicit, 0.6-0.8 for indirect
+- sourceQuote: exact quote (max 100 chars)
+- Return empty array [] if no facts found
+
+Messages:
 ${text}
 
-JSON only:`;
+Return ONLY a JSON array:
+[{"factType":"type","value":"val","confidence":0.9,"sourceQuote":"quote"}]`;
   }
 
   /**
@@ -162,7 +178,7 @@ JSON only:`;
       const args = ['--print', '--model', 'haiku', '-p', prompt];
 
       const proc = spawn('claude', args, {
-        cwd: this.projectRoot,
+        cwd: this.workspacePath,
         env: { ...process.env },
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: this.timeoutMs,
