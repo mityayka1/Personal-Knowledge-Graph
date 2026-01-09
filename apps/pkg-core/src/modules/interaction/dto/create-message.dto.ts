@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum, IsObject, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { MediaType } from '@pkg/entities';
 

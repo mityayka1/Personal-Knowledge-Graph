@@ -172,6 +172,7 @@ describe('EntityService', () => {
       const result = await service.update('test-uuid-1', { name: 'Updated Name' });
 
       expect(entityRepo.save).toHaveBeenCalled();
+      expect(result.name).toBe('Updated Name');
     });
 
     it('should throw NotFoundException if entity not found', async () => {

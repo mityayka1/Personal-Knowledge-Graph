@@ -108,8 +108,12 @@ export class MessageHandlerService {
         isBig: false, // Use small thumbnail for efficiency
       });
 
-      if (buffer && buffer.length > 0) {
+      // Limit photo size to 100KB to prevent memory issues
+      const MAX_PHOTO_SIZE = 100 * 1024;
+      if (buffer && buffer.length > 0 && buffer.length <= MAX_PHOTO_SIZE) {
         return `data:image/jpeg;base64,${buffer.toString('base64')}`;
+      } else if (buffer && buffer.length > MAX_PHOTO_SIZE) {
+        this.logger.debug(`Profile photo for user ${user.id} exceeds size limit (${buffer.length} bytes)`);
       }
     } catch (error) {
       this.logger.warn(`Failed to download profile photo for user ${user.id}`, error);

@@ -16,8 +16,6 @@ export interface ExtractionResult {
   tokensUsed?: number;
 }
 
-const FACT_TYPES = ['position', 'company', 'department', 'phone', 'email', 'telegram', 'specialization', 'birthday', 'name'];
-
 // JSON Schema for structured output (simplified, without enum for stability)
 const FACTS_SCHEMA = JSON.stringify({
   type: 'object',
@@ -52,8 +50,8 @@ export class FactExtractionService {
     const projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(process.cwd(), '../..');
     this.workspacePath = path.join(projectRoot, 'claude-workspace');
 
-    // Claude CLI path - try to resolve from environment or use default
-    this.claudePath = process.env.CLAUDE_CLI_PATH || '/Users/mityayka/.nvm/versions/node/v24.8.0/bin/claude';
+    // Claude CLI path - must be set via environment variable or be available in PATH
+    this.claudePath = process.env.CLAUDE_CLI_PATH || 'claude';
     this.logger.log(`Using Claude workspace: ${this.workspacePath}`);
     this.logger.log(`Using Claude CLI: ${this.claudePath}`);
   }

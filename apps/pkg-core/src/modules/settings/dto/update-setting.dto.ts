@@ -1,8 +1,8 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, IsDefined } from 'class-validator';
 
 export class UpdateSettingDto {
-  @IsOptional()
-  value?: unknown;
+  @IsDefined({ message: 'value is required' })
+  value: string | number | boolean | object;
 
   @IsOptional()
   @IsString()
