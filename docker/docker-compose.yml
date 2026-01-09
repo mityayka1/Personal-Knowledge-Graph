@@ -1,7 +1,8 @@
 version: '3.8'
 
-# PKG uses centralized remote PostgreSQL database at service.googlesheets.ru:5432
-# No local postgres container needed
+# PKG uses centralized remote PostgreSQL database
+# Credentials MUST be provided via .env file - never commit real credentials!
+# Copy docker/.env.example to docker/.env and fill in values
 
 services:
   # Redis for BullMQ
@@ -30,12 +31,13 @@ services:
       NODE_ENV: production
       PORT: 3000
       API_PREFIX: /api/v1
-      # Remote centralized database
-      DB_HOST: service.googlesheets.ru
-      DB_PORT: 5432
-      DB_USERNAME: ccmcp
-      DB_PASSWORD: ${DB_PASSWORD:-new_ccmcpPasswordFormcp}
-      DB_DATABASE: pkg
+      # Remote centralized database - credentials from .env
+      DB_HOST: ${DB_HOST:?DB_HOST is required}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_DATABASE: ${DB_DATABASE:-pkg}
+      DB_SSL: ${DB_SSL:-true}
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -50,8 +52,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
 
   # Telegram Adapter
   telegram-adapter:
@@ -129,8 +131,8 @@ services:
       - "5678:5678"
     environment:
       N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: admin
-      N8N_BASIC_AUTH_PASSWORD: admin
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?N8N_PASSWORD is required}
       PKG_CORE_URL: http://pkg-core:3000/api/v1
       WEBHOOK_URL: http://n8n:5678
       GENERIC_TIMEZONE: Europe/Moscow

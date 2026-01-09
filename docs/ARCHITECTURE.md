@@ -225,13 +225,7 @@ Client              PKG Core          Worker              PostgreSQL
 
 ### Централизованная PostgreSQL
 
-Проект использует **единую удалённую базу данных** для всех окружений (development, staging, production):
-
-```
-Host: service.googlesheets.ru
-Port: 5432
-Database: pkg
-```
+Проект использует **единую удалённую базу данных** для всех окружений (development, staging, production).
 
 **Преимущества:**
 - Единая точка истины для данных
@@ -241,15 +235,16 @@ Database: pkg
 
 **Подключение:**
 ```bash
-# Connection string
-DATABASE_URL=postgresql://ccmcp:***@service.googlesheets.ru:5432/pkg
+# Получите credentials у администратора
+# Скопируйте .env.example в .env и заполните значения
 
-# Или отдельные переменные
-DB_HOST=service.googlesheets.ru
+# Переменные окружения
+DB_HOST=your-db-host
 DB_PORT=5432
-DB_USERNAME=ccmcp
-DB_PASSWORD=***
+DB_USERNAME=your-username
+DB_PASSWORD=your-password
 DB_DATABASE=pkg
+DB_SSL=true  # Рекомендуется для remote connections
 ```
 
 **Миграции:**
