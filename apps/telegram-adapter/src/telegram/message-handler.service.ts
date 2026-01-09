@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Api } from 'telegram';
 import { TelegramClient } from 'telegram';
-import { PkgCoreApiService } from '../api/pkg-core-api.service';
+import { PkgCoreApiService, MessageResponse } from '../api/pkg-core-api.service';
 import { SessionService } from './session.service';
 
 interface TelegramUserInfo {
@@ -40,33 +40,30 @@ export class MessageHandlerService {
     private sessionService: SessionService,
   ) {}
 
-  async processMessage(message: Api.Message, client?: TelegramClient): Promise<void> {
-    try {
-      const chatId = this.getChatId(message);
-      const senderId = this.getSenderId(message);
+  async processMessage(message: Api.Message, client?: TelegramClient): Promise<MessageResponse> {
+    const chatId = this.getChatId(message);
+    const senderId = this.getSenderId(message);
 
-      if (!chatId || !senderId) {
-        this.logger.warn('Could not extract chat or sender ID from message');
-        return;
-      }
-
-      // Check if this is a new session
-      const isNewSession = await this.sessionService.checkAndUpdateSession(chatId);
-
-      if (isNewSession) {
-        this.logger.log(`New session started for chat ${chatId}`);
-      }
-
-      const processedMessage = await this.extractMessageData(message, chatId, senderId, client);
-
-      // Send to PKG Core
-      const response = await this.pkgCoreApi.sendMessage(processedMessage);
-
-      this.logger.log(`Message ${message.id} processed, interaction: ${response.interaction_id}`);
-    } catch (error) {
-      this.logger.error(`Error processing message ${message.id}`, error);
-      throw error;
+    if (!chatId || !senderId) {
+      this.logger.warn('Could not extract chat or sender ID from message');
+      throw new Error('Could not extract chat or sender ID from message');
     }
+
+    // Check if this is a new session
+    const isNewSession = await this.sessionService.checkAndUpdateSession(chatId);
+
+    if (isNewSession) {
+      this.logger.log(`New session started for chat ${chatId}`);
+    }
+
+    const processedMessage = await this.extractMessageData(message, chatId, senderId, client);
+
+    // Send to PKG Core
+    const response = await this.pkgCoreApi.sendMessage(processedMessage);
+
+    this.logger.log(`Message ${message.id} processed, interaction: ${response.interaction_id}, is_update: ${response.is_update || false}`);
+
+    return response;
   }
 
   private getChatId(message: Api.Message): string | null {

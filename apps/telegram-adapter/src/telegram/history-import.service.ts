@@ -241,8 +241,12 @@ export class HistoryImportService {
         for (const message of messages) {
           if (message instanceof Api.Message) {
             try {
-              await this.messageHandler.processMessage(message, client);
-              imported++;
+              const result = await this.messageHandler.processMessage(message, client);
+              if (result.is_update) {
+                updated++;
+              } else {
+                imported++;
+              }
             } catch (error) {
               const errMsg = `Message ${message.id}: ${error instanceof Error ? error.message : String(error)}`;
               errors.push(errMsg);
@@ -256,7 +260,7 @@ export class HistoryImportService {
         await this.delay(100);
       }
 
-      this.logger.log(`Re-import completed: ${imported} messages processed`);
+      this.logger.log(`Re-import completed: ${imported} new, ${updated} updated`);
     } catch (error) {
       const errMsg = `Fatal error: ${error instanceof Error ? error.message : String(error)}`;
       errors.push(errMsg);
