@@ -41,6 +41,17 @@ export class PendingResolutionService {
     identifierType: string;
     identifierValue: string;
     displayName?: string;
+    messageTimestamp?: Date;
+    metadata?: {
+      username?: string;
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      isBot?: boolean;
+      isVerified?: boolean;
+      isPremium?: boolean;
+      photoBase64?: string;
+    };
   }) {
     let resolution = await this.resolutionRepo.findOne({
       where: {
@@ -49,15 +60,36 @@ export class PendingResolutionService {
       },
     });
 
+    const messageTime = data.messageTimestamp || new Date();
+
     if (!resolution) {
       resolution = this.resolutionRepo.create({
         identifierType: data.identifierType,
         identifierValue: data.identifierValue,
         displayName: data.displayName,
+        metadata: data.metadata || null,
         status: ResolutionStatus.PENDING,
-        firstSeenAt: new Date(),
+        firstSeenAt: messageTime,
       });
       await this.resolutionRepo.save(resolution);
+    } else {
+      let needsSave = false;
+
+      // Update metadata if we now have it but didn't before
+      if (data.metadata && !resolution.metadata) {
+        resolution.metadata = data.metadata;
+        needsSave = true;
+      }
+
+      // Update firstSeenAt if this message is older
+      if (messageTime < resolution.firstSeenAt) {
+        resolution.firstSeenAt = messageTime;
+        needsSave = true;
+      }
+
+      if (needsSave) {
+        await this.resolutionRepo.save(resolution);
+      }
     }
 
     return resolution;

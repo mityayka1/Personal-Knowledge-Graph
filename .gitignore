@@ -45,3 +45,4 @@ docker-compose.override.yml
 tmp
 temp
 *.tmp
+apps/dashboard/.nuxt/

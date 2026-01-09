@@ -1,5 +1,40 @@
-import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum, IsObject, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { MediaType } from '@pkg/entities';
+
+export class TelegramUserInfoDto {
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  lastName?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isBot?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isVerified?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isPremium?: boolean;
+
+  @IsOptional()
+  @IsString()
+  photoBase64?: string;
+}
 
 export class CreateMessageDto {
   @IsString()
@@ -18,6 +53,11 @@ export class CreateMessageDto {
   @IsOptional()
   @IsString()
   telegram_display_name?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TelegramUserInfoDto)
+  telegram_user_info?: TelegramUserInfoDto;
 
   @IsString()
   message_id: string;

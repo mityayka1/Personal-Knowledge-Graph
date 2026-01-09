@@ -1,0 +1,40 @@
+# Build stage
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install pnpm (pinned version for reproducibility)
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+# Copy workspace files
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
+COPY apps/dashboard/package.json ./apps/dashboard/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY apps/dashboard ./apps/dashboard
+
+# Build
+RUN pnpm --filter @pkg/dashboard build
+
+# Production stage
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nuxt
+
+ENV NODE_ENV=production
+
+# Copy built output
+COPY --from=builder --chown=nuxt:nodejs /app/apps/dashboard/.output ./
+
+USER nuxt
+
+EXPOSE 3003
+
+CMD ["node", "server/index.mjs"]

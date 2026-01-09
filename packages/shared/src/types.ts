@@ -54,6 +54,15 @@ export interface SearchResult {
     name: string;
   };
   interactionId: string;
+  interaction?: {
+    type: string;
+    participants: Array<{
+      displayName?: string;
+      identifierValue?: string;
+      entityId?: string;
+      entityName?: string;
+    }>;
+  };
   score: number;
   highlight?: string;
 }

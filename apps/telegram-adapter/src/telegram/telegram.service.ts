@@ -88,7 +88,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      await this.messageHandler.processMessage(message);
+      await this.messageHandler.processMessage(message, this.client || undefined);
     } catch (error) {
       this.logger.error('Error handling message', error);
     }

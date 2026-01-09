@@ -41,12 +41,14 @@ export class MessageService {
     if (identifier) {
       entityId = identifier.entityId;
     } else {
-      // Create pending resolution
+      // Create pending resolution with Telegram metadata
       resolutionStatus = 'pending';
       const pending = await this.pendingResolutionService.findOrCreate({
         identifierType: 'telegram_user_id',
         identifierValue: dto.telegram_user_id,
         displayName: dto.telegram_display_name || dto.telegram_username,
+        messageTimestamp: new Date(dto.timestamp),
+        metadata: dto.telegram_user_info,
       });
       pendingResolutionId = pending.id;
     }
