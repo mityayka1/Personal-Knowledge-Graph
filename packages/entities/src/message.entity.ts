@@ -20,6 +20,14 @@ export enum MediaType {
   ANIMATION = 'animation',
 }
 
+export enum ChatType {
+  PRIVATE = 'private',
+  GROUP = 'group',
+  SUPERGROUP = 'supergroup',
+  CHANNEL = 'channel',
+  FORUM = 'forum',
+}
+
 @Entity('messages')
 export class Message {
   @PrimaryGeneratedColumn('uuid')
@@ -76,6 +84,18 @@ export class Message {
 
   @Column({ name: 'media_url', type: 'varchar', length: 500, nullable: true })
   mediaUrl: string | null;
+
+  // Chat type for import logic (private chats get auto-entity creation)
+  @Column({ name: 'chat_type', type: 'varchar', length: 20, nullable: true })
+  chatType: ChatType | null;
+
+  // Forum topic support
+  @Column({ name: 'topic_id', type: 'integer', nullable: true })
+  @Index()
+  topicId: number | null;
+
+  @Column({ name: 'topic_name', type: 'varchar', length: 255, nullable: true })
+  topicName: string | null;
 
   // pgvector column - 1536 dimensions for OpenAI text-embedding-3-small
   // Note: Vector index should be created manually: CREATE INDEX ON messages USING ivfflat (embedding vector_cosine_ops)

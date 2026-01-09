@@ -1,6 +1,14 @@
-import { IsString, IsOptional, IsBoolean, IsDateString, IsEnum, ValidateNested } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsBoolean,
+  IsDateString,
+  IsEnum,
+  ValidateNested,
+  IsNumber,
+} from 'class-validator';
 import { Type } from 'class-transformer';
-import { MediaType } from '@pkg/entities';
+import { MediaType, ChatType } from '@pkg/entities';
 
 export class TelegramUserInfoDto {
   @IsOptional()
@@ -83,4 +91,27 @@ export class CreateMessageDto {
   @IsOptional()
   @IsString()
   media_url?: string;
+
+  /**
+   * Type of chat: private, group, supergroup, channel, forum.
+   * Private chats trigger automatic Entity creation for the contact.
+   */
+  @IsOptional()
+  @IsEnum(ChatType)
+  chat_type?: ChatType;
+
+  /**
+   * Forum topic ID. Each topic in a forum is treated as a separate thread.
+   * Limit during import is applied per topic.
+   */
+  @IsOptional()
+  @IsNumber()
+  topic_id?: number;
+
+  /**
+   * Forum topic name for display (e.g., "General", "Support").
+   */
+  @IsOptional()
+  @IsString()
+  topic_name?: string;
 }

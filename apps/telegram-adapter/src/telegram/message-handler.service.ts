@@ -15,6 +15,12 @@ interface TelegramUserInfo {
   photoBase64?: string;
 }
 
+/**
+ * Chat type for import logic and entity resolution.
+ * Private chats trigger automatic Entity creation.
+ */
+export type ChatType = 'private' | 'group' | 'supergroup' | 'channel' | 'forum';
+
 interface ProcessedMessage {
   source: string;
   telegram_chat_id: string;
@@ -29,6 +35,12 @@ interface ProcessedMessage {
   reply_to_message_id?: string;
   media_type?: string;
   media_url?: string;
+  /** Type of chat: private, group, supergroup, channel, forum */
+  chat_type?: ChatType;
+  /** Forum topic ID (for forums with topics) */
+  topic_id?: number;
+  /** Forum topic name (for display) */
+  topic_name?: string;
 }
 
 @Injectable()
@@ -123,6 +135,11 @@ export class MessageHandlerService {
     chatId: string,
     senderId: string,
     client?: TelegramClient,
+    options?: {
+      chatType?: ChatType;
+      topicId?: number;
+      topicName?: string;
+    },
   ): Promise<ProcessedMessage> {
     const sender = message.sender;
     let username: string | undefined;
@@ -172,6 +189,9 @@ export class MessageHandlerService {
       displayName = `${firstName} ${lastName}`.trim() || undefined;
     }
 
+    // Determine chat type from chatId prefix if not provided
+    const chatType = options?.chatType || this.inferChatType(chatId);
+
     const processed: ProcessedMessage = {
       source: 'telegram',
       telegram_chat_id: chatId,
@@ -183,6 +203,9 @@ export class MessageHandlerService {
       text: message.message || undefined,
       timestamp: new Date(message.date * 1000).toISOString(),
       is_outgoing: message.out || false,
+      chat_type: chatType,
+      topic_id: options?.topicId,
+      topic_name: options?.topicName,
     };
 
     // Handle reply
@@ -237,5 +260,70 @@ export class MessageHandlerService {
     }
 
     return null;
+  }
+
+  /**
+   * Infer chat type from chatId prefix.
+   * Note: This is a simple inference based on chatId format.
+   * For accurate type detection (especially forum vs supergroup),
+   * use determineChatType() with the actual entity.
+   */
+  private inferChatType(chatId: string): ChatType {
+    if (chatId.startsWith('user_')) {
+      return 'private';
+    } else if (chatId.startsWith('chat_')) {
+      return 'group';
+    } else if (chatId.startsWith('channel_')) {
+      // Could be channel or supergroup - default to supergroup
+      // Accurate detection requires entity inspection
+      return 'supergroup';
+    }
+    return 'group'; // fallback
+  }
+
+  /**
+   * Process a message with explicit chat type and topic info.
+   * Used by history import for more accurate type handling.
+   */
+  async processMessageWithContext(
+    message: Api.Message,
+    client: TelegramClient,
+    context: {
+      chatType: ChatType;
+      topicId?: number;
+      topicName?: string;
+    },
+  ): Promise<MessageResponse> {
+    const chatId = this.getChatId(message);
+    const senderId = this.getSenderId(message);
+
+    if (!chatId || !senderId) {
+      this.logger.warn('Could not extract chat or sender ID from message');
+      throw new Error('Could not extract chat or sender ID from message');
+    }
+
+    // Check if this is a new session
+    const isNewSession = await this.sessionService.checkAndUpdateSession(chatId);
+
+    if (isNewSession) {
+      this.logger.log(`New session started for chat ${chatId}`);
+    }
+
+    const processedMessage = await this.extractMessageData(
+      message,
+      chatId,
+      senderId,
+      client,
+      context,
+    );
+
+    // Send to PKG Core
+    const response = await this.pkgCoreApi.sendMessage(processedMessage);
+
+    this.logger.debug(
+      `Message ${message.id} processed with context, interaction: ${response.interaction_id}`,
+    );
+
+    return response;
   }
 }
