@@ -18,8 +18,8 @@ export interface ExtractionResult {
 
 const FACT_TYPES = ['position', 'company', 'department', 'phone', 'email', 'telegram', 'specialization', 'birthday', 'name'];
 
-// JSON Schema for structured output validation
-const FACTS_JSON_SCHEMA = {
+// JSON Schema for structured output (simplified, without enum for stability)
+const FACTS_SCHEMA = JSON.stringify({
   type: 'object',
   properties: {
     facts: {
@@ -27,16 +27,9 @@ const FACTS_JSON_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          factType: {
-            type: 'string',
-            enum: FACT_TYPES,
-          },
+          factType: { type: 'string' },
           value: { type: 'string' },
-          confidence: {
-            type: 'number',
-            minimum: 0,
-            maximum: 1,
-          },
+          confidence: { type: 'number' },
           sourceQuote: { type: 'string' },
         },
         required: ['factType', 'value', 'confidence', 'sourceQuote'],
@@ -44,21 +37,25 @@ const FACTS_JSON_SCHEMA = {
     },
   },
   required: ['facts'],
-};
+});
 
 @Injectable()
 export class FactExtractionService {
   private readonly logger = new Logger(FactExtractionService.name);
   private readonly workspacePath: string;
-  private readonly timeoutMs = 30000; // 30 seconds timeout
-  private readonly jsonSchema: string;
+  private readonly claudePath: string;
+  private readonly timeoutMs = 60000; // 60 seconds timeout
 
   constructor(private pendingFactService: PendingFactService) {
     // Claude workspace directory with CLAUDE.md and agents
-    const projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(__dirname, '../../../../../../');
+    // Use process.cwd() which is apps/pkg-core, go up to PKG root
+    const projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(process.cwd(), '../..');
     this.workspacePath = path.join(projectRoot, 'claude-workspace');
-    this.jsonSchema = JSON.stringify(FACTS_JSON_SCHEMA);
+
+    // Claude CLI path - try to resolve from environment or use default
+    this.claudePath = process.env.CLAUDE_CLI_PATH || '/Users/mityayka/.nvm/versions/node/v24.8.0/bin/claude';
     this.logger.log(`Using Claude workspace: ${this.workspacePath}`);
+    this.logger.log(`Using Claude CLI: ${this.claudePath}`);
   }
 
   /**
@@ -92,17 +89,22 @@ export class FactExtractionService {
       // Filter out low confidence facts
       const validFacts = facts.filter(f => f.confidence >= 0.6);
 
-      // Save extracted facts as pending
+      // Try to save extracted facts as pending (don't fail if save fails)
       for (const fact of validFacts) {
-        await this.pendingFactService.create({
-          entityId,
-          factType: fact.factType,
-          value: fact.value,
-          confidence: fact.confidence,
-          sourceQuote: fact.sourceQuote,
-          sourceMessageId: messageId,
-          sourceInteractionId: interactionId,
-        });
+        try {
+          await this.pendingFactService.create({
+            entityId,
+            factType: fact.factType,
+            value: fact.value,
+            confidence: fact.confidence,
+            sourceQuote: fact.sourceQuote,
+            sourceMessageId: messageId,
+            sourceInteractionId: interactionId,
+          });
+        } catch (saveError) {
+          const msg = saveError instanceof Error ? saveError.message : String(saveError);
+          this.logger.warn(`Failed to save pending fact: ${msg}`);
+        }
       }
 
       this.logger.log(`Extracted ${validFacts.length} facts for ${entityName}`);
@@ -157,58 +159,42 @@ export class FactExtractionService {
   }
 
   /**
-   * Compact prompt - JSON schema handles output format
+   * Compact prompt - single line for shell safety
    */
   private buildCompactPrompt(name: string, text: string): string {
-    return `Extract facts about "${name}" from the text.
-
-Rules:
-- Only extract explicitly stated facts
-- confidence: 0.9+ for explicit statements, 0.6-0.8 for indirect
-- sourceQuote: exact quote from text (max 100 chars)
-- Return empty facts array if no facts found
-
-Text:
-${text}`;
+    // Remove newlines from text for shell safety
+    const cleanText = text.replace(/\n/g, ' ').substring(0, 500);
+    return `Extract facts about ${name}. Fact types: position,company,department,phone,email,telegram. Text: ${cleanText}`;
   }
 
   /**
    * Batch prompt for multiple messages
    */
   private buildBatchPrompt(name: string, text: string): string {
-    return `Extract facts about "${name}" from the messages. Deduplicate similar facts.
-
-Rules:
-- Only extract explicitly stated facts
-- confidence: 0.9+ for explicit statements, 0.6-0.8 for indirect
-- sourceQuote: exact quote from text (max 100 chars)
-- Return empty facts array if no facts found
-
-Messages:
-${text}`;
+    const cleanText = text.replace(/\n/g, ' ').substring(0, 1000);
+    return `Extract facts about ${name}. Deduplicate. Fact types: position,company,department,phone,email,telegram. Messages: ${cleanText}`;
   }
 
   /**
    * Call Claude CLI with timeout, haiku model, and structured output
+   * Uses spawn with stdin='ignore' to prevent hanging
    */
   private callClaudeCli(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      // Use haiku for speed and cost efficiency
-      // --json-schema ensures valid JSON output matching our schema
-      // --output-format json returns structured response
       const args = [
         '--print',
         '--model', 'haiku',
         '--output-format', 'json',
-        '--json-schema', this.jsonSchema,
+        '--json-schema', FACTS_SCHEMA,
         '-p', prompt,
       ];
 
-      const proc = spawn('claude', args, {
+      this.logger.debug(`Executing claude with ${args.length} args: ${this.claudePath}`);
+
+      const proc = spawn(this.claudePath, args, {
         cwd: this.workspacePath,
-        env: { ...process.env },
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: this.timeoutMs,
+        stdio: ['ignore', 'pipe', 'pipe'], // Key: ignore stdin to prevent hanging
+        env: process.env,
       });
 
       let stdout = '';
@@ -219,15 +205,15 @@ ${text}`;
         reject(new Error('Claude CLI timeout'));
       }, this.timeoutMs);
 
-      proc.stdout.on('data', (data) => {
+      proc.stdout.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      proc.stderr.on('data', (data) => {
+      proc.stderr.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code: number | null) => {
         clearTimeout(timeout);
         if (code !== 0) {
           reject(new Error(`Claude CLI failed (${code}): ${stderr}`));
@@ -236,7 +222,7 @@ ${text}`;
         resolve(stdout.trim());
       });
 
-      proc.on('error', (err) => {
+      proc.on('error', (err: Error) => {
         clearTimeout(timeout);
         reject(err);
       });
@@ -244,41 +230,54 @@ ${text}`;
   }
 
   /**
-   * Parse structured JSON response from Claude CLI
-   * Format: JSON stream with structured_output in last object
+   * Parse response from Claude CLI with structured output
+   * See: https://code.claude.com/docs/en/headless#get-structured-output
+   *
+   * With --output-format json --json-schema, response contains structured_output field
    */
   private parseResponse(response: string): ExtractedFact[] {
+    this.logger.debug(`Parsing response (${response.length} chars)`);
+
     try {
-      // Response is a JSON array (stream format)
-      const parsed = JSON.parse(response);
-
       let facts: ExtractedFact[] = [];
+      const data = JSON.parse(response);
 
-      if (Array.isArray(parsed)) {
-        // Find the result object with structured_output
-        const resultObj = parsed.find(
-          (obj) => obj.type === 'result' && obj.structured_output,
-        );
-        if (resultObj?.structured_output?.facts) {
-          facts = resultObj.structured_output.facts;
+      // Option 1: Response is object with structured_output (headless without --print)
+      if (data.structured_output?.facts) {
+        this.logger.debug(`Found structured_output in root with ${data.structured_output.facts.length} facts`);
+        facts = data.structured_output.facts;
+      }
+      // Option 2: Response is array of messages (with --print flag)
+      else if (Array.isArray(data)) {
+        const resultMsg = data.find((m: { type: string }) => m.type === 'result');
+
+        // 2a: structured_output in result object
+        if (resultMsg?.structured_output?.facts) {
+          this.logger.debug(`Found structured_output in result with ${resultMsg.structured_output.facts.length} facts`);
+          facts = resultMsg.structured_output.facts;
         }
-      } else if (parsed.structured_output?.facts) {
-        // Single object with structured_output
-        facts = parsed.structured_output.facts;
-      } else if (parsed.facts) {
-        // Direct facts array
-        facts = parsed.facts;
+        // 2b: Fallback - JSON in text result (markdown code block)
+        else if (resultMsg?.result) {
+          this.logger.debug(`Fallback: parsing result text: ${resultMsg.result.substring(0, 200)}...`);
+          const jsonMatch = resultMsg.result.match(/```json\s*([\s\S]*?)```/);
+          if (jsonMatch?.[1]) {
+            facts = JSON.parse(jsonMatch[1].trim());
+          }
+        }
       }
 
-      return facts
+      // Filter and normalize facts
+      const validFacts = facts
         .filter((f) => f.factType && f.value && typeof f.confidence === 'number')
-        .filter((f) => FACT_TYPES.includes(f.factType.toLowerCase()))
         .map((f) => ({
           factType: f.factType.toLowerCase(),
           value: String(f.value).trim(),
           confidence: Math.min(1, Math.max(0, f.confidence)),
           sourceQuote: String(f.sourceQuote || '').substring(0, 200),
         }));
+
+      this.logger.debug(`Parsed ${validFacts.length} valid facts from ${facts.length} total`);
+      return validFacts;
     } catch (e) {
       this.logger.warn(`Failed to parse extraction response: ${e}`);
       return [];
