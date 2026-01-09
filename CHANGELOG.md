@@ -48,7 +48,7 @@
 
 | Hash | Description |
 |------|-------------|
-| `b6c9951` | feat: Add fact extraction service with Claude CLI integration |
+| `6f17a90` | feat: Add fact extraction service with Claude CLI integration |
 | `3969d88` | feat: Add interactions view to resolution page |
 | `32e928a` | feat: Add fact management to entity detail page |
 | `fdd7ee0` | test: Add unit tests for Entity, Search, and Resolution modules |
