@@ -1,25 +1,9 @@
 version: '3.8'
 
-services:
-  # PostgreSQL with pgvector
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: pkg-postgres
-    environment:
-      POSTGRES_USER: pkg
-      POSTGRES_PASSWORD: pkg_password
-      POSTGRES_DB: pkg
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pkg -d pkg"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+# PKG uses centralized remote PostgreSQL database at service.googlesheets.ru:5432
+# No local postgres container needed
 
+services:
   # Redis for BullMQ
   redis:
     image: redis:7-alpine
@@ -43,14 +27,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
       API_PREFIX: /api/v1
-      DB_HOST: postgres
+      # Remote centralized database
+      DB_HOST: service.googlesheets.ru
       DB_PORT: 5432
-      DB_USERNAME: pkg
-      DB_PASSWORD: pkg_password
-      DB_DATABASE: pkg
+      DB_USERNAME: ccmcp
+      DB_PASSWORD: ${DB_PASSWORD:-new_ccmcpPasswordFormcp}
+      DB_DATABASE: mp_data
+      # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -58,8 +44,6 @@ services:
     volumes:
       - file-storage:/data/files
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -78,7 +62,7 @@ services:
     ports:
       - "3001:3001"
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3001
       PKG_CORE_URL: http://pkg-core:3000/api/v1
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
@@ -164,7 +148,6 @@ services:
       start_period: 60s
 
 volumes:
-  postgres-data:
   redis-data:
   n8n-data:
   file-storage:

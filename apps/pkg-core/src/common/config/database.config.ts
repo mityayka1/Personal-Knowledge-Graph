@@ -42,8 +42,9 @@ export default registerAs('database', (): TypeOrmModuleOptions => ({
     Setting,
   ],
 
-  // NEVER synchronize in production!
-  synchronize: process.env.NODE_ENV === 'development',
+  // NEVER synchronize - always use migrations!
+  // Remote centralized database is shared across all environments
+  synchronize: false,
 
   // Logging
   logging: process.env.NODE_ENV === 'development',

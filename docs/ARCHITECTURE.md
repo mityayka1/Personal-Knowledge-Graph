@@ -221,6 +221,48 @@ Client              PKG Core          Worker              PostgreSQL
 
 ---
 
+## База данных
+
+### Централизованная PostgreSQL
+
+Проект использует **единую удалённую базу данных** для всех окружений (development, staging, production):
+
+```
+Host: service.googlesheets.ru
+Port: 5432
+Database: mp_data
+```
+
+**Преимущества:**
+- Единая точка истины для данных
+- Нет необходимости синхронизировать данные между окружениями
+- Упрощённый деплой — не нужен локальный PostgreSQL
+- pgvector установлен и настроен
+
+**Подключение:**
+```bash
+# Connection string
+DATABASE_URL=postgresql://ccmcp:***@service.googlesheets.ru:5432/mp_data
+
+# Или отдельные переменные
+DB_HOST=service.googlesheets.ru
+DB_PORT=5432
+DB_USERNAME=ccmcp
+DB_PASSWORD=***
+DB_DATABASE=mp_data
+```
+
+**Миграции:**
+```bash
+cd apps/pkg-core
+npm run migration:run    # Применить миграции
+npm run migration:revert # Откатить последнюю
+```
+
+> ⚠️ **ВАЖНО:** `synchronize: false` всегда! Используем только миграции.
+
+---
+
 ## Deployment
 
 ### Option A: Single Server (Dev / Small Scale)
