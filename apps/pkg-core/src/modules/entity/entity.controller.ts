@@ -10,13 +10,17 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { EntityService } from './entity.service';
-import { CreateEntityDto } from './dto/create-entity.dto';
+import { EntityFactService } from './entity-fact/entity-fact.service';
+import { CreateEntityDto, CreateFactDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
 import { EntityType } from '@pkg/entities';
 
 @Controller('entities')
 export class EntityController {
-  constructor(private entityService: EntityService) {}
+  constructor(
+    private entityService: EntityService,
+    private factService: EntityFactService,
+  ) {}
 
   @Get()
   async findAll(
@@ -57,5 +61,26 @@ export class EntityController {
     @Param('targetId', ParseUUIDPipe) targetId: string,
   ) {
     return this.entityService.merge(id, targetId);
+  }
+
+  // Facts management
+  @Post(':id/facts')
+  async addFact(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateFactDto,
+  ) {
+    // Verify entity exists
+    await this.entityService.findOne(id);
+    return this.factService.create(id, dto);
+  }
+
+  @Delete(':id/facts/:factId')
+  async removeFact(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('factId', ParseUUIDPipe) factId: string,
+  ) {
+    await this.entityService.findOne(id);
+    const invalidated = await this.factService.invalidate(factId);
+    return { invalidated, factId };
   }
 }

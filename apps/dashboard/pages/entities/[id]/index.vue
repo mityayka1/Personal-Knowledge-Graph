@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag } from 'lucide-vue-next';
-import { useEntity, useDeleteEntity } from '~/composables/useEntities';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X } from 'lucide-vue-next';
+import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -10,6 +10,65 @@ const entityId = computed(() => route.params.id as string);
 const { data: entity, isLoading, error } = useEntity(entityId);
 
 const deleteEntity = useDeleteEntity();
+const addFact = useAddFact();
+const removeFact = useRemoveFact();
+
+// Fact dialog state
+const showFactDialog = ref(false);
+const newFact = reactive<CreateFactDto>({
+  type: '',
+  category: 'personal',
+  value: '',
+});
+
+const factTypes = [
+  { value: 'birthday', label: 'День рождения', category: 'personal' },
+  { value: 'position', label: 'Должность', category: 'professional' },
+  { value: 'company', label: 'Компания', category: 'professional' },
+  { value: 'department', label: 'Отдел', category: 'professional' },
+  { value: 'phone_work', label: 'Рабочий телефон', category: 'contact' },
+  { value: 'phone_personal', label: 'Личный телефон', category: 'contact' },
+  { value: 'email_work', label: 'Рабочий email', category: 'contact' },
+  { value: 'email_personal', label: 'Личный email', category: 'contact' },
+  { value: 'telegram', label: 'Telegram', category: 'contact' },
+  { value: 'address', label: 'Адрес', category: 'contact' },
+  { value: 'nickname', label: 'Прозвище', category: 'personal' },
+  { value: 'specialization', label: 'Специализация', category: 'professional' },
+];
+
+function getFactCategory(type: string): string {
+  const factType = factTypes.find(ft => ft.value === type);
+  return factType?.category || 'personal';
+}
+
+async function handleAddFact() {
+  if (!entity.value || !newFact.type || !newFact.value) return;
+
+  await addFact.mutateAsync({
+    entityId: entity.value.id,
+    data: {
+      type: newFact.type,
+      category: getFactCategory(newFact.type),
+      value: newFact.value,
+      source: 'manual',
+    },
+  });
+
+  showFactDialog.value = false;
+  newFact.type = '';
+  newFact.value = '';
+}
+
+async function handleRemoveFact(factId: string) {
+  if (!entity.value) return;
+
+  if (confirm('Удалить этот факт?')) {
+    await removeFact.mutateAsync({
+      entityId: entity.value.id,
+      factId,
+    });
+  }
+}
 
 async function handleDelete() {
   if (!entity.value) return;
@@ -144,8 +203,12 @@ function getIdentifierIcon(type: string) {
 
       <!-- Facts -->
       <Card>
-        <CardHeader>
+        <CardHeader class="flex flex-row items-center justify-between">
           <CardTitle class="text-lg">Факты</CardTitle>
+          <Button size="sm" variant="outline" @click="showFactDialog = true">
+            <Plus class="mr-2 h-4 w-4" />
+            Добавить
+          </Button>
         </CardHeader>
         <CardContent>
           <div v-if="!entity.facts.length" class="text-muted-foreground">
@@ -155,7 +218,7 @@ function getIdentifierIcon(type: string) {
             <div
               v-for="fact in entity.facts"
               :key="fact.id"
-              class="flex items-start gap-3 p-3 rounded-lg bg-muted/50"
+              class="flex items-start gap-3 p-3 rounded-lg bg-muted/50 group"
             >
               <div class="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0">
                 <Calendar v-if="fact.valueDate" class="h-4 w-4 text-muted-foreground" />
@@ -176,10 +239,69 @@ function getIdentifierIcon(type: string) {
                   Источник: {{ fact.source.toLowerCase() }}
                 </div>
               </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                @click="handleRemoveFact(fact.id)"
+              >
+                <X class="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </CardContent>
       </Card>
+
+      <!-- Add Fact Dialog -->
+      <Dialog v-model:open="showFactDialog">
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Добавить факт</DialogTitle>
+            <DialogDescription>
+              Добавьте новый факт о сущности
+            </DialogDescription>
+          </DialogHeader>
+          <div class="space-y-4 py-4">
+            <div class="space-y-2">
+              <label class="text-sm font-medium">Тип факта</label>
+              <select
+                v-model="newFact.type"
+                class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value="">Выберите тип...</option>
+                <optgroup label="Личное">
+                  <option v-for="ft in factTypes.filter(t => t.category === 'personal')" :key="ft.value" :value="ft.value">
+                    {{ ft.label }}
+                  </option>
+                </optgroup>
+                <optgroup label="Профессиональное">
+                  <option v-for="ft in factTypes.filter(t => t.category === 'professional')" :key="ft.value" :value="ft.value">
+                    {{ ft.label }}
+                  </option>
+                </optgroup>
+                <optgroup label="Контактное">
+                  <option v-for="ft in factTypes.filter(t => t.category === 'contact')" :key="ft.value" :value="ft.value">
+                    {{ ft.label }}
+                  </option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-medium">Значение</label>
+              <Input v-model="newFact.value" placeholder="Введите значение..." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" @click="showFactDialog = false">Отмена</Button>
+            <Button
+              :disabled="!newFact.type || !newFact.value || addFact.isPending.value"
+              @click="handleAddFact"
+            >
+              {{ addFact.isPending.value ? 'Сохранение...' : 'Сохранить' }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <!-- Metadata -->
       <Card>

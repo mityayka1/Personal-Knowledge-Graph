@@ -167,3 +167,44 @@ export function useMergeEntities() {
     },
   });
 }
+
+// Add fact to entity
+export interface CreateFactDto {
+  type: string;
+  category?: string;
+  value?: string;
+  valueDate?: string;
+  source?: 'manual' | 'extracted' | 'imported';
+}
+
+export function useAddFact() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ entityId, data }: { entityId: string; data: CreateFactDto }) => {
+      return await $fetch<EntityFact>(`/api/entities/${entityId}/facts`, {
+        method: 'POST',
+        body: data,
+      });
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['entities', variables.entityId] });
+    },
+  });
+}
+
+// Remove fact from entity
+export function useRemoveFact() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ entityId, factId }: { entityId: string; factId: string }) => {
+      return await $fetch<{ invalidated: boolean; factId: string }>(`/api/entities/${entityId}/facts/${factId}`, {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['entities', variables.entityId] });
+    },
+  });
+}
