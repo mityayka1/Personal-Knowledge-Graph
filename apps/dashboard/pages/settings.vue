@@ -15,7 +15,7 @@ const error = ref<string | null>(null);
 const successMessage = ref<string | null>(null);
 
 // Local state for editing
-const editedSettings = ref<Record<string, unknown>>({});
+const editedSettings = ref<Record<string, string | number>>({});
 
 async function loadSettings() {
   isLoading.value = true;
@@ -26,7 +26,7 @@ async function loadSettings() {
     // Initialize edited values
     editedSettings.value = {};
     for (const setting of settings.value) {
-      editedSettings.value[setting.key] = setting.value;
+      editedSettings.value[setting.key] = setting.value as string | number;
     }
   } catch (err) {
     error.value = 'Не удалось загрузить настройки';
