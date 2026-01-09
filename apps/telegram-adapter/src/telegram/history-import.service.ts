@@ -127,24 +127,45 @@ export class HistoryImportService {
       // Phase 1: Private chats (ALL history, auto-create Entity)
       this.progress.phase = 'private';
       for (const dialog of privateChats) {
-        await this.importPrivateChat(client, dialog);
-        this.progress.processedDialogs++;
+        try {
+          await this.importPrivateChat(client, dialog);
+          this.progress.processedDialogs++;
+        } catch (error) {
+          const dialogId = dialog.id?.toString() ?? 'unknown';
+          const errMsg = `[private] Dialog ${dialogId}: ${error instanceof Error ? error.message : String(error)}`;
+          this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
+          this.progress.errors.push(errMsg);
+        }
         await this.delay(this.config.chatDelayMs);
       }
 
       // Phase 2: Group chats (with limit)
       this.progress.phase = 'groups';
       for (const dialog of groupChats) {
-        await this.importGroupChat(client, dialog);
-        this.progress.processedDialogs++;
+        try {
+          await this.importGroupChat(client, dialog);
+          this.progress.processedDialogs++;
+        } catch (error) {
+          const dialogId = dialog.id?.toString() ?? 'unknown';
+          const errMsg = `[groups] Dialog ${dialogId}: ${error instanceof Error ? error.message : String(error)}`;
+          this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
+          this.progress.errors.push(errMsg);
+        }
         await this.delay(this.config.chatDelayMs);
       }
 
       // Phase 3: Forums (limit per topic)
       this.progress.phase = 'forums';
       for (const { dialog, channel } of forumChats) {
-        await this.importForum(client, dialog, channel);
-        this.progress.processedDialogs++;
+        try {
+          await this.importForum(client, dialog, channel);
+          this.progress.processedDialogs++;
+        } catch (error) {
+          const forumName = channel.title ?? dialog.id?.toString() ?? 'unknown';
+          const errMsg = `[forums] Forum ${forumName}: ${error instanceof Error ? error.message : String(error)}`;
+          this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
+          this.progress.errors.push(errMsg);
+        }
         await this.delay(this.config.chatDelayMs);
       }
 
@@ -380,53 +401,59 @@ export class HistoryImportService {
     this.logger.log(`Found ${topics.length} topics in forum: ${forumName}`);
 
     for (const topic of topics) {
-      this.progress.currentTopic = topic.title;
-      this.logger.debug(`Importing topic: ${topic.title} (limit: ${this.config.forumTopicLimit})`);
+      try {
+        this.progress.currentTopic = topic.title;
+        this.logger.debug(`Importing topic: ${topic.title} (limit: ${this.config.forumTopicLimit})`);
 
-      let offsetId = 0;
-      let messagesImported = 0;
+        let offsetId = 0;
+        let messagesImported = 0;
 
-      while (messagesImported < this.config.forumTopicLimit) {
-        const batchSize = Math.min(100, this.config.forumTopicLimit - messagesImported);
+        while (messagesImported < this.config.forumTopicLimit) {
+          const batchSize = Math.min(100, this.config.forumTopicLimit - messagesImported);
 
-        try {
-          const messages = await this.getTopicMessages(client, channel, topic.id, {
-            limit: batchSize,
-            offsetId,
-          });
+          try {
+            const messages = await this.getTopicMessages(client, channel, topic.id, {
+              limit: batchSize,
+              offsetId,
+            });
 
-          if (!messages.length) {
+            if (!messages.length) {
+              break;
+            }
+
+            for (const message of messages) {
+              try {
+                await this.messageHandler.processMessageWithContext(message, client, {
+                  chatType: 'forum',
+                  topicId: topic.id,
+                  topicName: topic.title,
+                });
+                this.progress.totalMessages++;
+                this.progress.processedMessages++;
+              } catch (error) {
+                this.handleMessageError(message.id, error);
+              }
+            }
+
+            messagesImported += messages.length;
+            offsetId = messages[messages.length - 1].id;
+
+            await this.delay(this.config.batchDelayMs);
+          } catch (error) {
+            if (await this.handleFloodWait(error)) {
+              continue;
+            }
+            this.logger.error(`Error fetching messages from topic ${topic.title}: ${error}`);
             break;
           }
-
-          for (const message of messages) {
-            try {
-              await this.messageHandler.processMessageWithContext(message, client, {
-                chatType: 'forum',
-                topicId: topic.id,
-                topicName: topic.title,
-              });
-              this.progress.totalMessages++;
-              this.progress.processedMessages++;
-            } catch (error) {
-              this.handleMessageError(message.id, error);
-            }
-          }
-
-          messagesImported += messages.length;
-          offsetId = messages[messages.length - 1].id;
-
-          await this.delay(this.config.batchDelayMs);
-        } catch (error) {
-          if (await this.handleFloodWait(error)) {
-            continue;
-          }
-          this.logger.error(`Error fetching messages from topic ${topic.title}: ${error}`);
-          break;
         }
-      }
 
-      this.logger.debug(`Imported ${messagesImported} messages from topic: ${topic.title}`);
+        this.logger.debug(`Imported ${messagesImported} messages from topic: ${topic.title}`);
+      } catch (error) {
+        const errMsg = `Topic "${topic.title}" (id=${topic.id}): ${error instanceof Error ? error.message : String(error)}`;
+        this.logger.error(`[forums] ${errMsg}`, error instanceof Error ? error.stack : undefined);
+        this.progress.errors.push(`[forums] ${forumName}/${errMsg}`);
+      }
       await this.delay(this.config.topicDelayMs);
     }
 
@@ -549,7 +576,17 @@ export class HistoryImportService {
       error instanceof Api.RpcError &&
       error.errorMessage.startsWith('FLOOD_WAIT_')
     ) {
-      const waitSeconds = parseInt(error.errorMessage.split('_')[2], 10);
+      const parts = error.errorMessage.split('_');
+      const waitSeconds = parseInt(parts[2] ?? '', 10);
+
+      // Validate parsed value
+      if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
+        this.logger.warn(
+          `FloodWait: could not parse wait time from "${error.errorMessage}", skipping retry`,
+        );
+        return false;
+      }
+
       this.logger.warn(`FloodWait: waiting ${waitSeconds}s`);
       await this.delay((waitSeconds + 1) * 1000);
       return true;

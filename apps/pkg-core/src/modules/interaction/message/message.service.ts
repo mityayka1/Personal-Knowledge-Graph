@@ -57,6 +57,11 @@ export class MessageService {
     } else if (dto.chat_type === ChatType.PRIVATE && !dto.is_outgoing) {
       // Private chat with unknown contact - auto-create Entity
       // Skip if it's our own outgoing message
+      //
+      // NOTE: This logic assumes messages are processed sequentially.
+      // If parallel processing is introduced, race conditions could cause
+      // duplicate entities for the same telegram_user_id. In that case,
+      // add retry logic with ConflictException handling.
       const entityName = this.buildEntityName(dto);
       const entity = await this.entityService.create({
         type: EntityType.PERSON,
