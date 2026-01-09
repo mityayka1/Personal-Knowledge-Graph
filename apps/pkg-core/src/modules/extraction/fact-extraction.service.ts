@@ -18,17 +18,46 @@ export interface ExtractionResult {
 
 const FACT_TYPES = ['position', 'company', 'department', 'phone', 'email', 'telegram', 'specialization', 'birthday', 'name'];
 
+// JSON Schema for structured output validation
+const FACTS_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    facts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          factType: {
+            type: 'string',
+            enum: FACT_TYPES,
+          },
+          value: { type: 'string' },
+          confidence: {
+            type: 'number',
+            minimum: 0,
+            maximum: 1,
+          },
+          sourceQuote: { type: 'string' },
+        },
+        required: ['factType', 'value', 'confidence', 'sourceQuote'],
+      },
+    },
+  },
+  required: ['facts'],
+};
+
 @Injectable()
 export class FactExtractionService {
   private readonly logger = new Logger(FactExtractionService.name);
   private readonly workspacePath: string;
   private readonly timeoutMs = 30000; // 30 seconds timeout
+  private readonly jsonSchema: string;
 
   constructor(private pendingFactService: PendingFactService) {
     // Claude workspace directory with CLAUDE.md and agents
-    // From dist/modules/extraction/ -> dist/ -> pkg-core/ -> apps/ -> PKG/ -> claude-workspace/
     const projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(__dirname, '../../../../../../');
     this.workspacePath = path.join(projectRoot, 'claude-workspace');
+    this.jsonSchema = JSON.stringify(FACTS_JSON_SCHEMA);
     this.logger.log(`Using Claude workspace: ${this.workspacePath}`);
   }
 
@@ -128,54 +157,52 @@ export class FactExtractionService {
   }
 
   /**
-   * Compact prompt with inline instructions for --print mode
+   * Compact prompt - JSON schema handles output format
    */
   private buildCompactPrompt(name: string, text: string): string {
-    return `Extract facts about "${name}" from the text below.
-
-Fact types: position, company, department, phone, email, telegram, specialization, birthday, name
+    return `Extract facts about "${name}" from the text.
 
 Rules:
 - Only extract explicitly stated facts
-- confidence: 0.9+ for explicit, 0.6-0.8 for indirect
-- sourceQuote: exact quote (max 100 chars)
-- Return empty array [] if no facts found
+- confidence: 0.9+ for explicit statements, 0.6-0.8 for indirect
+- sourceQuote: exact quote from text (max 100 chars)
+- Return empty facts array if no facts found
 
 Text:
-${text}
-
-Return ONLY a JSON array:
-[{"factType":"type","value":"val","confidence":0.9,"sourceQuote":"quote"}]`;
+${text}`;
   }
 
   /**
    * Batch prompt for multiple messages
    */
   private buildBatchPrompt(name: string, text: string): string {
-    return `Extract facts about "${name}" from the messages below. Deduplicate similar facts.
-
-Fact types: position, company, department, phone, email, telegram, specialization, birthday, name
+    return `Extract facts about "${name}" from the messages. Deduplicate similar facts.
 
 Rules:
 - Only extract explicitly stated facts
-- confidence: 0.9+ for explicit, 0.6-0.8 for indirect
-- sourceQuote: exact quote (max 100 chars)
-- Return empty array [] if no facts found
+- confidence: 0.9+ for explicit statements, 0.6-0.8 for indirect
+- sourceQuote: exact quote from text (max 100 chars)
+- Return empty facts array if no facts found
 
 Messages:
-${text}
-
-Return ONLY a JSON array:
-[{"factType":"type","value":"val","confidence":0.9,"sourceQuote":"quote"}]`;
+${text}`;
   }
 
   /**
-   * Call Claude CLI with timeout and haiku model
+   * Call Claude CLI with timeout, haiku model, and structured output
    */
   private callClaudeCli(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
       // Use haiku for speed and cost efficiency
-      const args = ['--print', '--model', 'haiku', '-p', prompt];
+      // --json-schema ensures valid JSON output matching our schema
+      // --output-format json returns structured response
+      const args = [
+        '--print',
+        '--model', 'haiku',
+        '--output-format', 'json',
+        '--json-schema', this.jsonSchema,
+        '-p', prompt,
+      ];
 
       const proc = spawn('claude', args, {
         cwd: this.workspacePath,
@@ -217,17 +244,28 @@ Return ONLY a JSON array:
   }
 
   /**
-   * Parse response with fallback
+   * Parse structured JSON response from Claude CLI
    */
   private parseResponse(response: string): ExtractedFact[] {
     try {
-      // Try to find JSON array
-      const jsonMatch = response.match(/\[[\s\S]*?\]/);
-      if (!jsonMatch) {
-        return [];
+      const parsed = JSON.parse(response);
+
+      // Handle --output-format json wrapper: {result: string, ...}
+      let data: { facts?: ExtractedFact[] };
+      if (parsed.result && typeof parsed.result === 'string') {
+        // Result contains the structured output as string
+        data = JSON.parse(parsed.result);
+      } else if (parsed.facts) {
+        // Direct structured output
+        data = parsed;
+      } else {
+        // Fallback: try to find JSON array in response
+        const jsonMatch = response.match(/\[[\s\S]*?\]/);
+        if (!jsonMatch) return [];
+        data = { facts: JSON.parse(jsonMatch[0]) };
       }
 
-      const facts = JSON.parse(jsonMatch[0]) as ExtractedFact[];
+      const facts = data.facts || [];
 
       return facts
         .filter((f) => f.factType && f.value && typeof f.confidence === 'number')
@@ -238,8 +276,8 @@ Return ONLY a JSON array:
           confidence: Math.min(1, Math.max(0, f.confidence)),
           sourceQuote: String(f.sourceQuote || '').substring(0, 200),
         }));
-    } catch {
-      this.logger.warn('Failed to parse extraction response');
+    } catch (e) {
+      this.logger.warn(`Failed to parse extraction response: ${e}`);
       return [];
     }
   }
