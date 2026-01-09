@@ -78,7 +78,8 @@ export class FactExtractionService {
       this.logger.log(`Extracted ${validFacts.length} facts for ${entityName}`);
       return { entityId, facts: validFacts };
     } catch (error) {
-      this.logger.error(`Extraction failed: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Extraction failed: ${message}`);
       return { entityId, facts: [] };
     }
   }
@@ -119,7 +120,8 @@ export class FactExtractionService {
 
       return { entityId, facts: validFacts };
     } catch (error) {
-      this.logger.error(`Batch extraction failed: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Batch extraction failed: ${message}`);
       return { entityId, facts: [] };
     }
   }
