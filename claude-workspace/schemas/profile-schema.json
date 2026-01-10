@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "relationshipType": {
+      "type": "string",
+      "enum": ["client", "partner", "colleague", "friend", "acquaintance", "vendor", "other"],
+      "description": "Тип отношений"
+    },
+    "communicationFrequency": {
+      "type": "string",
+      "enum": ["daily", "weekly", "monthly", "quarterly", "rare"],
+      "description": "Частота общения"
+    },
+    "relationshipSummary": {
+      "type": "string",
+      "minLength": 10,
+      "description": "1-2 предложения о характере отношений"
+    },
+    "relationshipTimeline": {
+      "type": ["string", "null"],
+      "description": "Хронология ключевых моментов"
+    },
+    "milestones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Дата события"
+          },
+          "title": {
+            "type": "string",
+            "description": "Краткое название события"
+          },
+          "description": {
+            "type": "string",
+            "description": "Описание события"
+          }
+        },
+        "required": ["date", "title", "description"]
+      },
+      "description": "Ключевые события (только HIGH importance)"
+    },
+    "keyDecisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Дата решения"
+          },
+          "description": {
+            "type": "string",
+            "description": "Описание решения"
+          },
+          "quote": {
+            "type": ["string", "null"],
+            "description": "Цитата если есть"
+          }
+        },
+        "required": ["date", "description"]
+      },
+      "description": "Важные решения из всей истории (только HIGH importance)"
+    },
+    "openActionItems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Описание задачи"
+          },
+          "owner": {
+            "type": "string",
+            "enum": ["self", "them", "both"],
+            "description": "Ответственный"
+          }
+        },
+        "required": ["description", "owner"]
+      },
+      "description": "Незакрытые задачи из всех summaries"
+    }
+  },
+  "required": [
+    "relationshipType",
+    "communicationFrequency",
+    "relationshipSummary",
+    "milestones",
+    "keyDecisions",
+    "openActionItems"
+  ]
+}
