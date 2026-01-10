@@ -20,6 +20,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { ChatCategoryModule } from './modules/chat-category/chat-category.module';
 import { GroupMembershipModule } from './modules/group-membership/group-membership.module';
 import { EntityEventModule } from './modules/entity-event/entity-event.module';
+import { ClaudeCliModule } from './modules/claude-cli/claude-cli.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { EntityEventModule } from './modules/entity-event/entity-event.module';
     ChatCategoryModule,
     GroupMembershipModule,
     EntityEventModule,
+    ClaudeCliModule,
   ],
 })
 export class AppModule {}
