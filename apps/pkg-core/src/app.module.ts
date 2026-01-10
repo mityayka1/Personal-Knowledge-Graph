@@ -17,6 +17,8 @@ import { ExtractionModule } from './modules/extraction/extraction.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
 import { HealthModule } from './modules/health/health.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { ChatCategoryModule } from './modules/chat-category/chat-category.module';
+import { GroupMembershipModule } from './modules/group-membership/group-membership.module';
 
 @Module({
   imports: [
@@ -62,6 +64,8 @@ import { SettingsModule } from './modules/settings/settings.module';
     WebhookModule,
     HealthModule,
     SettingsModule,
+    ChatCategoryModule,
+    GroupMembershipModule,
   ],
 })
 export class AppModule {}

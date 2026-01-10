@@ -28,6 +28,22 @@ export enum ChatType {
   FORUM = 'forum',
 }
 
+export enum ExtractionStatus {
+  UNPROCESSED = 'unprocessed',
+  PENDING = 'pending',
+  PROCESSING = 'processing',
+  PROCESSED = 'processed',
+  ERROR = 'error',
+}
+
+export interface ExtractionMetadata {
+  relevanceScore?: number;
+  extractedAt?: string;
+  factsFound?: number;
+  eventsFound?: number;
+  errorMessage?: string;
+}
+
 @Entity('messages')
 export class Message {
   @PrimaryGeneratedColumn('uuid')
@@ -79,6 +95,10 @@ export class Message {
   @JoinColumn({ name: 'reply_to_message_id' })
   replyToMessage: Message | null;
 
+  // Source message ID for reply chain (from Telegram/external source)
+  @Column({ name: 'reply_to_source_message_id', type: 'varchar', length: 100, nullable: true })
+  replyToSourceMessageId: string | null;
+
   @Column({ name: 'media_type', type: 'varchar', length: 50, nullable: true })
   mediaType: MediaType | null;
 
@@ -101,6 +121,15 @@ export class Message {
   // Note: Vector index should be created manually: CREATE INDEX ON messages USING ivfflat (embedding vector_cosine_ops)
   @Column({ type: 'vector', length: 1536, nullable: true })
   embedding: number[] | null;
+
+  // Extraction status for fact extraction pipeline
+  @Column({ name: 'extraction_status', type: 'varchar', length: 20, default: ExtractionStatus.UNPROCESSED })
+  @Index()
+  extractionStatus: ExtractionStatus;
+
+  // Extraction metadata (JSONB)
+  @Column({ name: 'extraction_metadata', type: 'jsonb', nullable: true })
+  extractionMetadata: ExtractionMetadata | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

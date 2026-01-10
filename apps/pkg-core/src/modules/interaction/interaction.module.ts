@@ -17,6 +17,8 @@ import { InteractionSummaryService } from './interaction-summary/interaction-sum
 import { EntityModule } from '../entity/entity.module';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { JobModule } from '../job/job.module';
+import { ChatCategoryModule } from '../chat-category/chat-category.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { JobModule } from '../job/job.module';
     forwardRef(() => EntityModule),
     forwardRef(() => ResolutionModule),
     forwardRef(() => JobModule),
+    forwardRef(() => ChatCategoryModule),
+    SettingsModule,
   ],
   controllers: [InteractionController, MessageController, TranscriptSegmentController],
   providers: [

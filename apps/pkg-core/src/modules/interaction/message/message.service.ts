@@ -7,12 +7,16 @@ import {
   ParticipantRole,
   ChatType,
   EntityType,
+  CreationSource,
+  ChatCategory,
 } from '@pkg/entities';
 import { InteractionService } from '../interaction.service';
 import { EntityIdentifierService } from '../../entity/entity-identifier/entity-identifier.service';
 import { EntityService } from '../../entity/entity.service';
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { JobService } from '../../job/job.service';
+import { ChatCategoryService } from '../../chat-category/chat-category.service';
+import { SettingsService } from '../../settings/settings.service';
 import { CreateMessageDto } from '../dto/create-message.dto';
 
 @Injectable()
@@ -31,16 +35,26 @@ export class MessageService {
     private pendingResolutionService: PendingResolutionService,
     @Inject(forwardRef(() => JobService))
     private jobService: JobService,
+    @Inject(forwardRef(() => ChatCategoryService))
+    private chatCategoryService: ChatCategoryService,
+    private settingsService: SettingsService,
   ) {}
 
   async create(dto: CreateMessageDto) {
-    // 1. Find or create interaction (session)
+    // 1. Categorize chat
+    const chatCategory = await this.chatCategoryService.categorize({
+      telegramChatId: dto.telegram_chat_id,
+      chatType: dto.chat_type || 'group',
+      participantsCount: dto.participants_count,
+    });
+
+    // 2. Find or create interaction (session)
     const interaction = await this.interactionService.findOrCreateSession(
       dto.telegram_chat_id,
       new Date(dto.timestamp),
     );
 
-    // 2. Resolve entity
+    // 3. Resolve entity based on category
     let entityId: string | null = null;
     let resolutionStatus = 'resolved';
     let pendingResolutionId: string | null = null;
@@ -54,19 +68,14 @@ export class MessageService {
     if (identifier) {
       // Known contact - use existing entity
       entityId = identifier.entityId;
-    } else if (dto.chat_type === ChatType.PRIVATE && !dto.is_outgoing) {
+    } else if (chatCategory.category === ChatCategory.PERSONAL && !dto.is_outgoing) {
       // Private chat with unknown contact - auto-create Entity
-      // Skip if it's our own outgoing message
-      //
-      // NOTE: This logic assumes messages are processed sequentially.
-      // If parallel processing is introduced, race conditions could cause
-      // duplicate entities for the same telegram_user_id. In that case,
-      // add retry logic with ConflictException handling.
       const entityName = this.buildEntityName(dto);
       const entity = await this.entityService.create({
         type: EntityType.PERSON,
         name: entityName,
         notes: 'Auto-created from Telegram private chat',
+        creationSource: CreationSource.PRIVATE_CHAT,
         identifiers: [
           {
             type: IdentifierType.TELEGRAM_USER_ID,
@@ -80,8 +89,29 @@ export class MessageService {
       this.logger.log(
         `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id}`,
       );
-    } else {
-      // Group/forum/channel chat with unknown contact - create pending resolution
+    } else if (chatCategory.category === ChatCategory.WORKING && !dto.is_outgoing) {
+      // Working group (<=20 people) - auto-create Entity for all participants
+      const entityName = this.buildEntityName(dto);
+      const entity = await this.entityService.create({
+        type: EntityType.PERSON,
+        name: entityName,
+        notes: 'Auto-created from working group',
+        creationSource: CreationSource.WORKING_GROUP,
+        identifiers: [
+          {
+            type: IdentifierType.TELEGRAM_USER_ID,
+            value: dto.telegram_user_id,
+            metadata: dto.telegram_user_info as Record<string, unknown>,
+          },
+        ],
+      });
+      entityId = entity.id;
+      autoCreatedEntity = true;
+      this.logger.log(
+        `Auto-created Entity "${entityName}" for working group participant ${dto.telegram_user_id}`,
+      );
+    } else if (!dto.is_outgoing) {
+      // Mass group or channel - create pending resolution
       resolutionStatus = 'pending';
       const pending = await this.pendingResolutionService.findOrCreate({
         identifierType: IdentifierType.TELEGRAM_USER_ID,
@@ -145,6 +175,7 @@ export class MessageService {
           isOutgoing: dto.is_outgoing,
           timestamp: new Date(dto.timestamp),
           sourceMessageId: dto.message_id,
+          replyToSourceMessageId: dto.reply_to_message_id, // FIX: Save reply_to for context
           mediaType: dto.media_type,
           mediaUrl: dto.media_url,
           // New fields for import logic and forum support
@@ -168,6 +199,35 @@ export class MessageService {
       });
     }
 
+    // 6. Schedule fact extraction if auto-extraction enabled for this category
+    // IMPORTANT: Called AFTER transaction commit to ensure message is visible
+    const minMessageLength = await this.settingsService.getValue<number>(
+      'extraction.minMessageLength',
+    ) ?? 20;
+
+    if (
+      chatCategory.autoExtractionEnabled &&
+      entityId &&
+      dto.text &&
+      dto.text.length > minMessageLength &&
+      !result.isUpdate
+    ) {
+      try {
+        await this.jobService.scheduleExtraction({
+          interactionId: interaction.id,
+          entityId,
+          messageId: result.saved.id,
+          messageContent: dto.text,
+        });
+      } catch (error) {
+        // Don't fail message creation if extraction scheduling fails
+        // Facts will be extracted later via historical processing
+        this.logger.error(
+          `Failed to schedule extraction for message ${result.saved.id}: ${error}`,
+        );
+      }
+    }
+
     return {
       id: result.saved.id,
       interaction_id: interaction.id,
@@ -177,6 +237,7 @@ export class MessageService {
       auto_created_entity: autoCreatedEntity,
       created_at: result.saved.createdAt,
       is_update: result.isUpdate,
+      chat_category: chatCategory.category,
     };
   }
 

@@ -24,6 +24,9 @@ import {
   PendingFact,
   Job,
   Setting,
+  ChatCategoryRecord,
+  GroupMembership,
+  EntityEvent,
 } from '@pkg/entities';
 
 // Database configuration for TypeORM CLI
@@ -62,6 +65,9 @@ export const dataSourceOptions: DataSourceOptions = {
     PendingFact,
     Job,
     Setting,
+    ChatCategoryRecord,
+    GroupMembership,
+    EntityEvent,
   ],
 
   // Migrations

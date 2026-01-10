@@ -18,6 +18,12 @@ export enum EntityType {
   ORGANIZATION = 'organization',
 }
 
+export enum CreationSource {
+  MANUAL = 'manual',
+  PRIVATE_CHAT = 'private_chat',
+  WORKING_GROUP = 'working_group',
+}
+
 @Entity('entities')
 export class EntityRecord {
   @PrimaryGeneratedColumn('uuid')
@@ -46,6 +52,9 @@ export class EntityRecord {
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  @Column({ name: 'creation_source', type: 'varchar', length: 20, default: CreationSource.MANUAL })
+  creationSource: CreationSource;
 
   @OneToMany(() => EntityIdentifier, (identifier) => identifier.entity)
   identifiers: EntityIdentifier[];

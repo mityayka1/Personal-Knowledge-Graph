@@ -15,6 +15,19 @@ interface MessagePayload {
   reply_to_message_id?: string;
   media_type?: string;
   media_url?: string;
+  chat_type?: string;
+  topic_id?: number;
+  topic_name?: string;
+  /** Number of participants for categorization */
+  participants_count?: number;
+}
+
+export interface MembershipChangePayload {
+  telegram_chat_id: string;
+  telegram_user_id: string;
+  display_name?: string;
+  action: 'joined' | 'left';
+  timestamp: string;
 }
 
 export interface MessageResponse {
@@ -71,6 +84,15 @@ export class PkgCoreApiService {
   async checkHealth(): Promise<HealthResponse> {
     const response = await this.client.get<HealthResponse>('/health');
     return response.data;
+  }
+
+  /**
+   * Report membership change (join/leave) to PKG Core
+   */
+  async reportMembershipChange(payload: MembershipChangePayload): Promise<void> {
+    return this.withRetry(async () => {
+      await this.client.post('/group-memberships/change', payload);
+    });
   }
 
   private async withRetry<T>(operation: () => Promise<T>): Promise<T> {

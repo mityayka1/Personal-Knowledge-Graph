@@ -114,4 +114,12 @@ export class CreateMessageDto {
   @IsOptional()
   @IsString()
   topic_name?: string;
+
+  /**
+   * Number of participants in the chat.
+   * Used for categorization (working group <= 20, mass group > 20).
+   */
+  @IsOptional()
+  @IsNumber()
+  participants_count?: number;
 }

@@ -13,6 +13,9 @@ import {
   PendingFact,
   Job,
   Setting,
+  ChatCategoryRecord,
+  GroupMembership,
+  EntityEvent,
 } from '@pkg/entities';
 
 export default registerAs('database', (): TypeOrmModuleOptions => {
@@ -53,6 +56,9 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       PendingFact,
       Job,
       Setting,
+      ChatCategoryRecord,
+      GroupMembership,
+      EntityEvent,
     ],
 
     // NEVER synchronize - always use migrations!
