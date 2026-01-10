@@ -19,6 +19,7 @@ import { HealthModule } from './modules/health/health.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { ChatCategoryModule } from './modules/chat-category/chat-category.module';
 import { GroupMembershipModule } from './modules/group-membership/group-membership.module';
+import { EntityEventModule } from './modules/entity-event/entity-event.module';
 
 @Module({
   imports: [
@@ -66,6 +67,7 @@ import { GroupMembershipModule } from './modules/group-membership/group-membersh
     SettingsModule,
     ChatCategoryModule,
     GroupMembershipModule,
+    EntityEventModule,
   ],
 })
 export class AppModule {}
