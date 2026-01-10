@@ -23,6 +23,8 @@ export interface MessageResponse {
   entity_id: string | null;
   entity_resolution_status: 'resolved' | 'pending';
   pending_resolution_id: string | null;
+  /** True if a new Entity was automatically created for this contact (private chats only) */
+  auto_created_entity?: boolean;
   created_at: string;
   is_update?: boolean;
 }

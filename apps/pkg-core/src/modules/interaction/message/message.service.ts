@@ -1,9 +1,16 @@
 import { Injectable, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { Message, IdentifierType, ParticipantRole } from '@pkg/entities';
+import {
+  Message,
+  IdentifierType,
+  ParticipantRole,
+  ChatType,
+  EntityType,
+} from '@pkg/entities';
 import { InteractionService } from '../interaction.service';
 import { EntityIdentifierService } from '../../entity/entity-identifier/entity-identifier.service';
+import { EntityService } from '../../entity/entity.service';
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { JobService } from '../../job/job.service';
 import { CreateMessageDto } from '../dto/create-message.dto';
@@ -18,6 +25,8 @@ export class MessageService {
     private dataSource: DataSource,
     private interactionService: InteractionService,
     private identifierService: EntityIdentifierService,
+    @Inject(forwardRef(() => EntityService))
+    private entityService: EntityService,
     @Inject(forwardRef(() => PendingResolutionService))
     private pendingResolutionService: PendingResolutionService,
     @Inject(forwardRef(() => JobService))
@@ -35,6 +44,7 @@ export class MessageService {
     let entityId: string | null = null;
     let resolutionStatus = 'resolved';
     let pendingResolutionId: string | null = null;
+    let autoCreatedEntity = false;
 
     const identifier = await this.identifierService.findByIdentifier(
       IdentifierType.TELEGRAM_USER_ID,
@@ -42,9 +52,36 @@ export class MessageService {
     );
 
     if (identifier) {
+      // Known contact - use existing entity
       entityId = identifier.entityId;
+    } else if (dto.chat_type === ChatType.PRIVATE && !dto.is_outgoing) {
+      // Private chat with unknown contact - auto-create Entity
+      // Skip if it's our own outgoing message
+      //
+      // NOTE: This logic assumes messages are processed sequentially.
+      // If parallel processing is introduced, race conditions could cause
+      // duplicate entities for the same telegram_user_id. In that case,
+      // add retry logic with ConflictException handling.
+      const entityName = this.buildEntityName(dto);
+      const entity = await this.entityService.create({
+        type: EntityType.PERSON,
+        name: entityName,
+        notes: 'Auto-created from Telegram private chat',
+        identifiers: [
+          {
+            type: IdentifierType.TELEGRAM_USER_ID,
+            value: dto.telegram_user_id,
+            metadata: dto.telegram_user_info as Record<string, unknown>,
+          },
+        ],
+      });
+      entityId = entity.id;
+      autoCreatedEntity = true;
+      this.logger.log(
+        `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id}`,
+      );
     } else {
-      // Create pending resolution with Telegram metadata
+      // Group/forum/channel chat with unknown contact - create pending resolution
       resolutionStatus = 'pending';
       const pending = await this.pendingResolutionService.findOrCreate({
         identifierType: IdentifierType.TELEGRAM_USER_ID,
@@ -110,6 +147,10 @@ export class MessageService {
           sourceMessageId: dto.message_id,
           mediaType: dto.media_type,
           mediaUrl: dto.media_url,
+          // New fields for import logic and forum support
+          chatType: dto.chat_type,
+          topicId: dto.topic_id,
+          topicName: dto.topic_name,
         });
 
         saved = await messageRepo.save(message);
@@ -133,9 +174,36 @@ export class MessageService {
       entity_id: entityId,
       entity_resolution_status: resolutionStatus,
       pending_resolution_id: pendingResolutionId,
+      auto_created_entity: autoCreatedEntity,
       created_at: result.saved.createdAt,
       is_update: result.isUpdate,
     };
+  }
+
+  /**
+   * Build entity name from Telegram user info.
+   * Priority: firstName + lastName > username > displayName > telegram_user_id
+   */
+  private buildEntityName(dto: CreateMessageDto): string {
+    const userInfo = dto.telegram_user_info;
+
+    // Try firstName + lastName
+    if (userInfo?.firstName || userInfo?.lastName) {
+      return [userInfo.firstName, userInfo.lastName].filter(Boolean).join(' ');
+    }
+
+    // Try username
+    if (dto.telegram_username) {
+      return dto.telegram_username;
+    }
+
+    // Try display name
+    if (dto.telegram_display_name) {
+      return dto.telegram_display_name;
+    }
+
+    // Fallback to telegram_user_id
+    return `Telegram ${dto.telegram_user_id}`;
   }
 
   async findByInteraction(interactionId: string, limit = 100, offset = 0) {

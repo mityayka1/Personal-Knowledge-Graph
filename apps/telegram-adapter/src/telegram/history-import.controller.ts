@@ -43,8 +43,11 @@ export class HistoryImportController {
     }
 
     // Start import in background (don't await)
+    // Limits are configured via environment variables:
+    // IMPORT_GROUP_LIMIT (default: 1000) - messages per group chat
+    // IMPORT_TOPIC_LIMIT (default: 1000) - messages per forum topic
     this.historyImportService
-      .startImport(client, dto.limitPerDialog || 1000)
+      .startImport(client)
       .catch((error) => {
         console.error('Import error:', error);
       });

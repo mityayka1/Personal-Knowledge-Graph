@@ -27,7 +27,7 @@ import { JobModule } from '../job/job.module';
       TranscriptSegment,
       InteractionSummary,
     ]),
-    EntityModule,
+    forwardRef(() => EntityModule),
     forwardRef(() => ResolutionModule),
     forwardRef(() => JobModule),
   ],
