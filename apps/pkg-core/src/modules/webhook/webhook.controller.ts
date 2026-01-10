@@ -5,6 +5,10 @@ import { InteractionSummaryService } from '../interaction/interaction-summary/in
 export class WebhookController {
   constructor(private summaryService: InteractionSummaryService) {}
 
+  /**
+   * Save summary from n8n Worker
+   * Uses legacy format for backwards compatibility with existing workflows
+   */
   @Post('interactions/:id/summary')
   async saveSummary(
     @Param('id', ParseUUIDPipe) id: string,
@@ -16,7 +20,7 @@ export class WebhookController {
       facts_extracted?: Array<{ type: string; value: string; confidence: number }>;
     },
   ) {
-    const summary = await this.summaryService.create(id, {
+    const summary = await this.summaryService.createLegacy(id, {
       summaryText: body.summary_text,
       keyPoints: body.key_points,
       decisions: body.decisions,

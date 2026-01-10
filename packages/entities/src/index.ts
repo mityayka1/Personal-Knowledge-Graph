@@ -13,3 +13,5 @@ export * from './setting.entity';
 export * from './chat-category.entity';
 export * from './group-membership.entity';
 export * from './entity-event.entity';
+export * from './entity-relationship-profile.entity';
+export * from './claude-cli-run.entity';

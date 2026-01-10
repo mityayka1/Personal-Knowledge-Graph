@@ -131,6 +131,20 @@ export class Message {
   @Column({ name: 'extraction_metadata', type: 'jsonb', nullable: true })
   extractionMetadata: ExtractionMetadata | null;
 
+  // Message importance scoring for summarization
+  @Column({ name: 'importance_score', type: 'decimal', precision: 3, scale: 2, nullable: true })
+  importanceScore: number | null;
+
+  @Column({ name: 'importance_reason', type: 'varchar', length: 50, nullable: true })
+  importanceReason: 'has_date' | 'has_amount' | 'has_agreement' | 'has_deadline' | 'long_message' | null;
+
+  // Archive status for tiered data management
+  @Column({ name: 'is_archived', type: 'boolean', default: false })
+  isArchived: boolean;
+
+  @Column({ name: 'archived_at', type: 'timestamp with time zone', nullable: true })
+  archivedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }
