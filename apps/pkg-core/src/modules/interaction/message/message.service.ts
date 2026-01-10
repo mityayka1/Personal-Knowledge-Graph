@@ -191,7 +191,32 @@ export class MessageService {
       return { saved, isUpdate };
     });
 
-    // 5. Queue embedding job (only for new messages with text, or if text was updated)
+    // 5. Resolve reply_to reference if present
+    // This must happen AFTER transaction commit so the referenced message is visible
+    if (dto.reply_to_message_id && !result.isUpdate) {
+      try {
+        const replyToMessage = await this.messageRepo.findOne({
+          where: {
+            interactionId: interaction.id,
+            sourceMessageId: dto.reply_to_message_id,
+          },
+          select: ['id'],
+        });
+        if (replyToMessage) {
+          await this.messageRepo.update(result.saved.id, {
+            replyToMessageId: replyToMessage.id,
+          });
+          this.logger.debug(
+            `Resolved reply_to: ${dto.reply_to_message_id} -> ${replyToMessage.id}`,
+          );
+        }
+      } catch (error) {
+        // Non-critical: reply chain is nice-to-have, don't fail message creation
+        this.logger.warn(`Failed to resolve reply_to for ${dto.reply_to_message_id}: ${error}`);
+      }
+    }
+
+    // 6. Queue embedding job (only for new messages with text, or if text was updated)
     if (dto.text && !result.isUpdate) {
       await this.jobService.createEmbeddingJob({
         messageId: result.saved.id,
@@ -199,7 +224,7 @@ export class MessageService {
       });
     }
 
-    // 6. Schedule fact extraction if auto-extraction enabled for this category
+    // 7. Schedule fact extraction if auto-extraction enabled for this category
     // IMPORTANT: Called AFTER transaction commit to ensure message is visible
     const minMessageLength = await this.settingsService.getValue<number>(
       'extraction.minMessageLength',

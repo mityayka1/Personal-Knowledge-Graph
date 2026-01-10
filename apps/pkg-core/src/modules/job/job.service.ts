@@ -78,7 +78,8 @@ export class JobService {
     messageContent: string;
   }): Promise<void> {
     const { interactionId, entityId, messageId, messageContent } = params;
-    const jobId = `extraction:${interactionId}`;
+    // BullMQ doesn't allow colons in custom job IDs, use underscore instead
+    const jobId = `extraction_${interactionId}`;
 
     const delayMs = await this.settingsService.getValue<number>(
       'extraction.extractDelayTime',
@@ -109,7 +110,7 @@ export class JobService {
       // Job exists but not in delayed state (active, waiting, completed, failed)
       // DON'T remove manually — BullMQ will clean up via queue settings
       // Create NEW job with timestamp suffix for uniqueness
-      const uniqueJobId = `extraction:${interactionId}:${Date.now()}`;
+      const uniqueJobId = `extraction_${interactionId}_${Date.now()}`;
       await this.extractionQueue.add('extract', {
         interactionId,
         entityId,
