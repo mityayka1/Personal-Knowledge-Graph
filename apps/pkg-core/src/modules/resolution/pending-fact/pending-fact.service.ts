@@ -47,6 +47,30 @@ export class PendingFactService {
     sourceInteractionId?: string;
     sourceMessageId?: string;
   }) {
+    // Check for duplicate: same entity, type, and normalized value
+    const normalizedValue = data.value?.toLowerCase().trim();
+
+    if (normalizedValue) {
+      const existing = await this.pendingFactRepo
+        .createQueryBuilder('pf')
+        .where('pf.entity_id = :entityId', { entityId: data.entityId })
+        .andWhere('pf.fact_type = :factType', { factType: data.factType })
+        .andWhere('LOWER(TRIM(pf.value)) = :value', { value: normalizedValue })
+        .andWhere('pf.status = :status', { status: PendingFactStatus.PENDING })
+        .getOne();
+
+      if (existing) {
+        // Update confidence if new one is higher
+        if (data.confidence > existing.confidence) {
+          existing.confidence = data.confidence;
+          existing.sourceQuote = data.sourceQuote || existing.sourceQuote;
+          return this.pendingFactRepo.save(existing);
+        }
+        // Return existing without creating duplicate
+        return existing;
+      }
+    }
+
     const pendingFact = this.pendingFactRepo.create({
       ...data,
       status: PendingFactStatus.PENDING,

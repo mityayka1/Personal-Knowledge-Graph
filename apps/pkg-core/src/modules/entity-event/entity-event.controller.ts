@@ -61,18 +61,18 @@ export class EntityEventController {
 
   @Get('upcoming')
   async getUpcoming(
-    @Query('entity_id') entityId: string,
-    @Query('days') days?: string,
+    @Query('entity_id') entityId?: string,
+    @Query('limit') limit?: string,
   ) {
-    if (!entityId) {
-      throw new NotFoundException('entity_id is required');
-    }
-    return this.eventService.getUpcoming(entityId, days ? parseInt(days, 10) : 7);
+    return this.eventService.getUpcoming(entityId, limit ? parseInt(limit, 10) : 10);
   }
 
   @Get('overdue')
-  async getOverdue(@Query('entity_id') entityId?: string) {
-    return this.eventService.getOverdue(entityId);
+  async getOverdue(
+    @Query('entity_id') entityId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.eventService.getOverdue(entityId, limit ? parseInt(limit, 10) : 10);
   }
 
   @Get()

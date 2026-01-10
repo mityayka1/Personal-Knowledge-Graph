@@ -48,6 +48,7 @@ import { EntityEventModule } from './modules/entity-event/entity-event.module';
             host: 'localhost',
             port: 6379,
           },
+          prefix: redisConfig?.prefix || 'bull',
           defaultJobOptions: redisConfig?.defaultJobOptions || {},
         };
       },

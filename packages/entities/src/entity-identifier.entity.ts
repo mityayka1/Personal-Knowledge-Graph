@@ -12,6 +12,7 @@ import { EntityRecord } from './entity.entity';
 
 export enum IdentifierType {
   TELEGRAM_USER_ID = 'telegram_user_id',
+  TELEGRAM_USERNAME = 'telegram_username',
   PHONE = 'phone',
   EMAIL = 'email',
   WHATSAPP = 'whatsapp',

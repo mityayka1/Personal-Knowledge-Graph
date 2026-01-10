@@ -107,9 +107,28 @@ export class JobService {
         return;
       }
 
-      // Job exists but not in delayed state (active, waiting, completed, failed)
-      // DON'T remove manually — BullMQ will clean up via queue settings
-      // Create NEW job with timestamp suffix for uniqueness
+      // Job exists but not in delayed state
+      if (state === 'completed' || state === 'failed') {
+        // Completed/failed jobs can be safely removed and replaced
+        await existingJob.remove();
+        await this.extractionQueue.add('extract', {
+          interactionId,
+          entityId,
+          messageIds: [messageId],
+          messages: [{
+            id: messageId,
+            content: messageContent,
+            timestamp: new Date().toISOString(),
+          }],
+        } as ExtractionJobData, {
+          jobId,
+          delay: delayMs,
+        });
+        this.logger.debug(`Replaced ${state} job ${jobId} with new extraction job`);
+        return;
+      }
+
+      // Job is active or waiting — don't interrupt, create separate job
       const uniqueJobId = `extraction_${interactionId}_${Date.now()}`;
       await this.extractionQueue.add('extract', {
         interactionId,

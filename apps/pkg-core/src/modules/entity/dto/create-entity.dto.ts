@@ -52,6 +52,10 @@ export class CreateEntityDto {
   notes?: string;
 
   @IsOptional()
+  @IsString()
+  profilePhoto?: string;
+
+  @IsOptional()
   @IsEnum(CreationSource)
   creationSource?: CreationSource;
 

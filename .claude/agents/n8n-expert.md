@@ -1,3 +1,7 @@
+---
+name: n8n-expert
+---
+
 # n8n Expert
 
 ## Role

@@ -114,40 +114,36 @@ export class EntityEventService {
   }
 
   /**
-   * Get upcoming events for an entity
+   * Get upcoming events (optionally for specific entity)
    */
-  async getUpcoming(entityId: string, days: number = 7): Promise<EntityEvent[]> {
-    const fromDate = new Date();
-    const toDate = new Date();
-    toDate.setDate(toDate.getDate() + days);
+  async getUpcoming(entityId?: string, limit: number = 10): Promise<EntityEvent[]> {
+    const now = new Date();
 
-    return this.eventRepo.find({
-      where: [
-        {
-          entityId,
-          status: EventStatus.SCHEDULED,
-          eventDate: MoreThanOrEqual(fromDate),
-        },
-        {
-          relatedEntityId: entityId,
-          status: EventStatus.SCHEDULED,
-          eventDate: MoreThanOrEqual(fromDate),
-        },
-      ],
-      relations: ['entity', 'relatedEntity'],
-      order: { eventDate: 'ASC' },
-      take: 20,
-    });
+    const query = this.eventRepo.createQueryBuilder('ee')
+      .leftJoinAndSelect('ee.entity', 'entity')
+      .leftJoinAndSelect('ee.relatedEntity', 'relatedEntity')
+      .where('ee.status = :status', { status: EventStatus.SCHEDULED })
+      .andWhere('ee.eventDate >= :now', { now });
+
+    if (entityId) {
+      query.andWhere('(ee.entityId = :entityId OR ee.relatedEntityId = :entityId)', { entityId });
+    }
+
+    return query
+      .orderBy('ee.eventDate', 'ASC')
+      .take(limit)
+      .getMany();
   }
 
   /**
    * Get overdue events (past scheduled events)
    */
-  async getOverdue(entityId?: string): Promise<EntityEvent[]> {
+  async getOverdue(entityId?: string, limit: number = 10): Promise<EntityEvent[]> {
     const now = new Date();
 
     const query = this.eventRepo.createQueryBuilder('ee')
       .leftJoinAndSelect('ee.entity', 'entity')
+      .leftJoinAndSelect('ee.relatedEntity', 'relatedEntity')
       .where('ee.status = :status', { status: EventStatus.SCHEDULED })
       .andWhere('ee.eventDate < :now', { now });
 
@@ -157,7 +153,7 @@ export class EntityEventService {
 
     return query
       .orderBy('ee.eventDate', 'DESC')
-      .take(50)
+      .take(limit)
       .getMany();
   }
 
@@ -204,6 +200,8 @@ export class EntityEventService {
    * Get event statistics
    */
   async getStats(entityId?: string) {
+    const now = new Date();
+
     const query = this.eventRepo.createQueryBuilder('ee')
       .select('ee.status', 'status')
       .addSelect('ee.eventType', 'eventType')
@@ -230,6 +228,25 @@ export class EntityEventService {
       byType[s.eventType] = (byType[s.eventType] ?? 0) + count;
     }
 
+    // Count upcoming and overdue separately
+    const upcomingQuery = this.eventRepo.createQueryBuilder('ee')
+      .where('ee.status = :status', { status: EventStatus.SCHEDULED })
+      .andWhere('ee.eventDate >= :now', { now });
+
+    const overdueQuery = this.eventRepo.createQueryBuilder('ee')
+      .where('ee.status = :status', { status: EventStatus.SCHEDULED })
+      .andWhere('ee.eventDate < :now', { now });
+
+    if (entityId) {
+      upcomingQuery.andWhere('(ee.entityId = :entityId OR ee.relatedEntityId = :entityId)', { entityId });
+      overdueQuery.andWhere('(ee.entityId = :entityId OR ee.relatedEntityId = :entityId)', { entityId });
+    }
+
+    const [upcoming, overdue] = await Promise.all([
+      upcomingQuery.getCount(),
+      overdueQuery.getCount(),
+    ]);
+
     return {
       total,
       byStatus,
@@ -237,6 +254,8 @@ export class EntityEventService {
       scheduled: byStatus[EventStatus.SCHEDULED] ?? 0,
       completed: byStatus[EventStatus.COMPLETED] ?? 0,
       cancelled: byStatus[EventStatus.CANCELLED] ?? 0,
+      upcoming,
+      overdue,
     };
   }
 }

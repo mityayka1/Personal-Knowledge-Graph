@@ -61,9 +61,9 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       EntityEvent,
     ],
 
-    // NEVER synchronize - always use migrations!
-    // Remote centralized database is shared across all environments
-    synchronize: false,
+    // Synchronize only for tests (creates tables automatically)
+    // NEVER use synchronize in production!
+    synchronize: process.env.NODE_ENV === 'test',
 
     // Connection retry for remote database
     retryAttempts: isRemoteDb ? 10 : 3,

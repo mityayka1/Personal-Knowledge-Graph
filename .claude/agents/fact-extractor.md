@@ -1,3 +1,7 @@
+---
+name: fact-extractor
+---
+
 # Fact Extractor Agent
 
 ## Role

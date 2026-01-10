@@ -1,3 +1,7 @@
+---
+name: pgvector-expert
+---
+
 # pgvector Expert
 
 ## Role

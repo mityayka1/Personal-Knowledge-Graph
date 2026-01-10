@@ -1,3 +1,7 @@
+---
+name: openai-expert
+---
+
 # OpenAI Expert
 
 ## Role

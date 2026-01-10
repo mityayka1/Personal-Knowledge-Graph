@@ -1,3 +1,7 @@
+---
+name: product-owner
+---
+
 # Product Owner
 
 ## Role

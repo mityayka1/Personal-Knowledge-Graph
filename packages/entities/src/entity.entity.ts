@@ -53,6 +53,9 @@ export class EntityRecord {
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 
+  @Column({ name: 'profile_photo', type: 'text', nullable: true })
+  profilePhoto: string | null;
+
   @Column({ name: 'creation_source', type: 'varchar', length: 20, default: CreationSource.MANUAL })
   creationSource: CreationSource;
 

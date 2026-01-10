@@ -1,3 +1,7 @@
+---
+name: claude-cli-expert
+---
+
 # Claude CLI Expert
 
 ## Role

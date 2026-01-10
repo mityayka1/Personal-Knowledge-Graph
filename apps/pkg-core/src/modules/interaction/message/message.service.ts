@@ -69,46 +69,38 @@ export class MessageService {
       // Known contact - use existing entity
       entityId = identifier.entityId;
     } else if (chatCategory.category === ChatCategory.PERSONAL && !dto.is_outgoing) {
-      // Private chat with unknown contact - auto-create Entity
+      // Private chat with unknown contact - auto-create Entity with all available data
       const entityName = this.buildEntityName(dto);
+      const identifiers = this.buildIdentifiers(dto);
       const entity = await this.entityService.create({
         type: EntityType.PERSON,
         name: entityName,
         notes: 'Auto-created from Telegram private chat',
+        profilePhoto: dto.telegram_user_info?.photoBase64,
         creationSource: CreationSource.PRIVATE_CHAT,
-        identifiers: [
-          {
-            type: IdentifierType.TELEGRAM_USER_ID,
-            value: dto.telegram_user_id,
-            metadata: dto.telegram_user_info as Record<string, unknown>,
-          },
-        ],
+        identifiers,
       });
       entityId = entity.id;
       autoCreatedEntity = true;
       this.logger.log(
-        `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id}`,
+        `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id} with ${identifiers.length} identifiers`,
       );
     } else if (chatCategory.category === ChatCategory.WORKING && !dto.is_outgoing) {
-      // Working group (<=20 people) - auto-create Entity for all participants
+      // Working group (<=20 people) - auto-create Entity with all available data
       const entityName = this.buildEntityName(dto);
+      const identifiers = this.buildIdentifiers(dto);
       const entity = await this.entityService.create({
         type: EntityType.PERSON,
         name: entityName,
         notes: 'Auto-created from working group',
+        profilePhoto: dto.telegram_user_info?.photoBase64,
         creationSource: CreationSource.WORKING_GROUP,
-        identifiers: [
-          {
-            type: IdentifierType.TELEGRAM_USER_ID,
-            value: dto.telegram_user_id,
-            metadata: dto.telegram_user_info as Record<string, unknown>,
-          },
-        ],
+        identifiers,
       });
       entityId = entity.id;
       autoCreatedEntity = true;
       this.logger.log(
-        `Auto-created Entity "${entityName}" for working group participant ${dto.telegram_user_id}`,
+        `Auto-created Entity "${entityName}" for working group participant ${dto.telegram_user_id} with ${identifiers.length} identifiers`,
       );
     } else if (!dto.is_outgoing) {
       // Mass group or channel - create pending resolution
@@ -290,6 +282,49 @@ export class MessageService {
 
     // Fallback to telegram_user_id
     return `Telegram ${dto.telegram_user_id}`;
+  }
+
+  /**
+   * Build all available identifiers from Telegram user info.
+   * Creates: telegram_user_id (always), telegram_username (if present), phone (if present)
+   */
+  private buildIdentifiers(dto: CreateMessageDto): Array<{
+    type: IdentifierType;
+    value: string;
+    metadata?: Record<string, unknown>;
+  }> {
+    const identifiers: Array<{
+      type: IdentifierType;
+      value: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
+
+    // 1. Always add telegram_user_id
+    identifiers.push({
+      type: IdentifierType.TELEGRAM_USER_ID,
+      value: dto.telegram_user_id,
+      metadata: dto.telegram_user_info as Record<string, unknown>,
+    });
+
+    // 2. Add telegram_username if present
+    const username = dto.telegram_username || dto.telegram_user_info?.username;
+    if (username) {
+      identifiers.push({
+        type: IdentifierType.TELEGRAM_USERNAME,
+        value: username.replace(/^@/, ''), // Remove @ prefix if present
+      });
+    }
+
+    // 3. Add phone if present in user info
+    const phone = dto.telegram_user_info?.phone;
+    if (phone) {
+      identifiers.push({
+        type: IdentifierType.PHONE,
+        value: phone,
+      });
+    }
+
+    return identifiers;
   }
 
   async findByInteraction(interactionId: string, limit = 100, offset = 0) {
