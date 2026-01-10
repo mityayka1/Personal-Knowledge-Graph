@@ -17,6 +17,9 @@ import { ExtractionModule } from './modules/extraction/extraction.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
 import { HealthModule } from './modules/health/health.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { ChatCategoryModule } from './modules/chat-category/chat-category.module';
+import { GroupMembershipModule } from './modules/group-membership/group-membership.module';
+import { EntityEventModule } from './modules/entity-event/entity-event.module';
 
 @Module({
   imports: [
@@ -45,6 +48,7 @@ import { SettingsModule } from './modules/settings/settings.module';
             host: 'localhost',
             port: 6379,
           },
+          prefix: redisConfig?.prefix || 'bull',
           defaultJobOptions: redisConfig?.defaultJobOptions || {},
         };
       },
@@ -62,6 +66,9 @@ import { SettingsModule } from './modules/settings/settings.module';
     WebhookModule,
     HealthModule,
     SettingsModule,
+    ChatCategoryModule,
+    GroupMembershipModule,
+    EntityEventModule,
   ],
 })
 export class AppModule {}

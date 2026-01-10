@@ -477,6 +477,16 @@ const pendingExtractedFacts = computed(() =>
         </Dialog>
       </ClientOnly>
 
+      <!-- Events -->
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-lg">События</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EntityEvents :entity-id="entity.id" />
+        </CardContent>
+      </Card>
+
       <!-- Metadata -->
       <Card>
         <CardHeader>

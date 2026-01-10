@@ -62,6 +62,8 @@ export class EntityService {
       name: dto.name,
       organizationId: dto.organizationId,
       notes: dto.notes,
+      profilePhoto: dto.profilePhoto,
+      creationSource: dto.creationSource,
     });
 
     const saved = await this.entityRepo.save(entity);

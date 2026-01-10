@@ -7,6 +7,7 @@ export default registerAs('redis', (): BullRootModuleOptions => ({
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     password: process.env.REDIS_PASSWORD || undefined,
   },
+  prefix: process.env.REDIS_PREFIX || 'bull',
   defaultJobOptions: {
     removeOnComplete: 1000,
     removeOnFail: 5000,

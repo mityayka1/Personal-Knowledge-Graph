@@ -6,7 +6,7 @@ const { Queue } = require('bullmq');
 
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-const PORT = parseInt(process.env.PORT || '3002', 10);
+const PORT = parseInt(process.env.PORT || '3005', 10);
 
 // Connect to Redis
 const redisConnection = {
@@ -16,6 +16,7 @@ const redisConnection = {
 
 // Create queues to monitor
 const embeddingQueue = new Queue('embedding', { connection: redisConnection });
+const factExtractionQueue = new Queue('fact-extraction', { connection: redisConnection });
 
 // Setup Bull Board
 const serverAdapter = new ExpressAdapter();
@@ -24,6 +25,7 @@ serverAdapter.setBasePath('/');
 createBullBoard({
   queues: [
     new BullMQAdapter(embeddingQueue),
+    new BullMQAdapter(factExtractionQueue),
   ],
   serverAdapter,
 });

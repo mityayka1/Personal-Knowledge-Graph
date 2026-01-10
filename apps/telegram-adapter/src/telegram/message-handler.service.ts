@@ -41,11 +41,21 @@ interface ProcessedMessage {
   topic_id?: number;
   /** Forum topic name (for display) */
   topic_name?: string;
+  /** Number of participants in the chat (for categorization) */
+  participants_count?: number;
+}
+
+interface CachedChatInfo {
+  participantsCount: number | null;
+  cachedAt: number;
 }
 
 @Injectable()
 export class MessageHandlerService {
   private readonly logger = new Logger(MessageHandlerService.name);
+  /** Cache for participants count with TTL (1 hour) */
+  private readonly chatInfoCache = new Map<string, CachedChatInfo>();
+  private readonly CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
   constructor(
     private pkgCoreApi: PkgCoreApiService,
@@ -139,6 +149,7 @@ export class MessageHandlerService {
       chatType?: ChatType;
       topicId?: number;
       topicName?: string;
+      participantsCount?: number;
     },
   ): Promise<ProcessedMessage> {
     const sender = message.sender;
@@ -192,6 +203,12 @@ export class MessageHandlerService {
     // Determine chat type from chatId prefix if not provided
     const chatType = options?.chatType || this.inferChatType(chatId);
 
+    // Get participants count (from options or fetch with caching)
+    let participantsCount = options?.participantsCount;
+    if (participantsCount === undefined && client) {
+      participantsCount = (await this.getParticipantsCount(chatId, client)) ?? undefined;
+    }
+
     const processed: ProcessedMessage = {
       source: 'telegram',
       telegram_chat_id: chatId,
@@ -206,6 +223,7 @@ export class MessageHandlerService {
       chat_type: chatType,
       topic_id: options?.topicId,
       topic_name: options?.topicName,
+      participants_count: participantsCount,
     };
 
     // Handle reply
@@ -263,6 +281,95 @@ export class MessageHandlerService {
   }
 
   /**
+   * Get participants count for a chat with caching.
+   * Uses TTL cache to avoid hitting Telegram rate limits.
+   */
+  async getParticipantsCount(
+    chatId: string,
+    client?: TelegramClient,
+  ): Promise<number | null> {
+    // Check cache first
+    const cached = this.chatInfoCache.get(chatId);
+    if (cached && Date.now() - cached.cachedAt < this.CACHE_TTL_MS) {
+      return cached.participantsCount;
+    }
+
+    // Can't fetch without client
+    if (!client) {
+      return null;
+    }
+
+    // Private chats always have 2 participants (user + self)
+    if (chatId.startsWith('user_')) {
+      this.chatInfoCache.set(chatId, {
+        participantsCount: 2,
+        cachedAt: Date.now(),
+      });
+      return 2;
+    }
+
+    try {
+      let count: number | null = null;
+
+      if (chatId.startsWith('chat_')) {
+        // Regular group chat - get participants count from chat entity
+        const rawChatId = chatId.replace('chat_', '');
+        try {
+          const entity = await client.getEntity(rawChatId);
+          if (entity instanceof Api.Chat) {
+            count = entity.participantsCount ?? null;
+          }
+        } catch {
+          this.logger.debug(`Could not get chat entity for ${chatId}`);
+        }
+      } else if (chatId.startsWith('channel_')) {
+        // Channel or supergroup - get from entity or full channel info
+        const rawChannelId = chatId.replace('channel_', '');
+        try {
+          const entity = await client.getEntity(rawChannelId);
+          if (entity instanceof Api.Channel) {
+            // First try the count from channel entity itself
+            if (entity.participantsCount) {
+              count = entity.participantsCount;
+            } else {
+              // Fallback to full channel info
+              const fullChannel = await client.invoke(
+                new Api.channels.GetFullChannel({
+                  channel: entity,
+                }),
+              );
+              if (fullChannel.fullChat instanceof Api.ChannelFull) {
+                count = fullChannel.fullChat.participantsCount ?? null;
+              }
+            }
+          }
+        } catch {
+          // If we can't get the channel info, skip
+          this.logger.debug(`Could not get participants count for ${chatId}`);
+        }
+      }
+
+      // Cache the result
+      this.chatInfoCache.set(chatId, {
+        participantsCount: count,
+        cachedAt: Date.now(),
+      });
+
+      return count;
+    } catch (error) {
+      this.logger.warn(`Failed to get participants count for ${chatId}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Invalidate cached chat info (call on join/leave events)
+   */
+  invalidateChatCache(chatId: string): void {
+    this.chatInfoCache.delete(chatId);
+  }
+
+  /**
    * Infer chat type from chatId prefix.
    * Note: This is a simple inference based on chatId format.
    * For accurate type detection (especially forum vs supergroup),
@@ -292,6 +399,7 @@ export class MessageHandlerService {
       chatType: ChatType;
       topicId?: number;
       topicName?: string;
+      participantsCount?: number;
     },
   ): Promise<MessageResponse> {
     const chatId = this.getChatId(message);
