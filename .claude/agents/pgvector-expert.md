@@ -1,5 +1,6 @@
 ---
 name: pgvector-expert
+description: Эксперт по PostgreSQL + pgvector. Vector search, embeddings storage, оптимизация запросов
 ---
 
 # pgvector Expert

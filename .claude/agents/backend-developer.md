@@ -1,5 +1,6 @@
 ---
 name: backend-developer
+description: Backend-разработчик проекта PKG. NestJS, TypeORM, API endpoints, работа с базой данных
 ---
 
 # Backend Developer

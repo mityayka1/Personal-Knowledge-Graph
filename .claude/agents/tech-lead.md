@@ -1,5 +1,6 @@
 ---
 name: tech-lead
+description: Технический лидер проекта PKG. Архитектурные решения, code review, контроль качества кода
 ---
 
 # Tech Lead

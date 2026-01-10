@@ -1,5 +1,6 @@
 ---
 name: openai-expert
+description: Эксперт по OpenAI API. Embeddings, text-embedding-3-small, batch processing
 ---
 
 # OpenAI Expert

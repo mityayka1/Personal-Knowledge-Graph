@@ -1,5 +1,6 @@
 ---
 name: claude-cli-expert
+description: Эксперт по Claude CLI. Программный вызов из Node.js, structured output, парсинг ответов
 ---
 
 # Claude CLI Expert

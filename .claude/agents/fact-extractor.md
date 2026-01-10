@@ -1,5 +1,6 @@
 ---
 name: fact-extractor
+description: Агент для извлечения структурированных фактов из текстовых сообщений
 ---
 
 # Fact Extractor Agent

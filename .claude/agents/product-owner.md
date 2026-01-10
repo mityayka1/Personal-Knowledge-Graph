@@ -1,5 +1,6 @@
 ---
 name: product-owner
+description: Владелец продукта PKG. Определяет приоритеты, управляет scope, формулирует user stories
 ---
 
 # Product Owner

@@ -1,5 +1,6 @@
 ---
 name: devops
+description: DevOps инженер проекта PKG. Docker, CI/CD, deployment, инфраструктура и мониторинг
 ---
 
 # DevOps Engineer

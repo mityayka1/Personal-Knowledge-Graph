@@ -1,5 +1,6 @@
 ---
 name: telegram-expert
+description: Эксперт по интеграции с Telegram через GramJS/MTProto. Telegram Adapter сервис
 ---
 
 # Telegram Expert

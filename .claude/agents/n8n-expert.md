@@ -1,5 +1,6 @@
 ---
 name: n8n-expert
+description: Эксперт по n8n workflow automation. Worker сервис, асинхронные задачи
 ---
 
 # n8n Expert
