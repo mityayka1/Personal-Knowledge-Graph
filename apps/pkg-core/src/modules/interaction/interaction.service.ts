@@ -51,19 +51,30 @@ export class InteractionService {
     });
   }
 
-  async findOrCreateSession(chatId: string, lastMessageTime?: Date) {
+  /**
+   * Find an active session or create a new one.
+   * If the gap between the message time and last activity exceeds threshold,
+   * the existing session is ended and a new one is created.
+   *
+   * @param chatId - Telegram chat ID
+   * @param messageTime - Timestamp of the current message
+   */
+  async findOrCreateSession(chatId: string, messageTime?: Date) {
     const existing = await this.findActiveSession(chatId);
 
-    if (existing && lastMessageTime) {
+    if (existing && messageTime) {
       const lastActivity = existing.updatedAt || existing.startedAt;
-      const gap = lastMessageTime.getTime() - lastActivity.getTime();
+      const gap = messageTime.getTime() - lastActivity.getTime();
 
       if (gap > SESSION_GAP_THRESHOLD_MS) {
-        // End current session and create new one
-        await this.endSession(existing.id);
-        return this.createSession(chatId);
+        // End current session with last known activity time (not current time)
+        await this.endSession(existing.id, lastActivity);
+        // Create new session with message timestamp as startedAt
+        return this.createSession(chatId, messageTime);
       }
 
+      // Update interaction's updatedAt to track last message time for gap calculation
+      await this.updateLastActivity(existing.id);
       return existing;
     }
 
@@ -71,28 +82,54 @@ export class InteractionService {
       return existing;
     }
 
-    return this.createSession(chatId);
+    // Create new session with message timestamp (or now if not provided)
+    return this.createSession(chatId, messageTime);
   }
 
-  async createSession(chatId: string) {
+  /**
+   * Create a new Telegram session.
+   * @param chatId - Telegram chat ID
+   * @param startedAt - Timestamp of the first message in the session (defaults to now for real-time)
+   */
+  async createSession(chatId: string, startedAt?: Date) {
     const interaction = this.interactionRepo.create({
       type: InteractionType.TELEGRAM_SESSION,
       source: 'telegram',
       status: InteractionStatus.ACTIVE,
-      startedAt: new Date(),
+      startedAt: startedAt || new Date(),
       sourceMetadata: { telegram_chat_id: chatId },
     });
 
     return this.interactionRepo.save(interaction);
   }
 
-  async endSession(id: string) {
+  /**
+   * End a session and mark it as completed.
+   * @param id - Interaction ID
+   * @param endedAt - Timestamp of the last message in the session (defaults to now for real-time)
+   */
+  async endSession(id: string, endedAt?: Date) {
     const interaction = await this.findOne(id);
 
     interaction.status = InteractionStatus.COMPLETED;
-    interaction.endedAt = new Date();
+    interaction.endedAt = endedAt || new Date();
 
     return this.interactionRepo.save(interaction);
+  }
+
+  /**
+   * Update interaction's updatedAt timestamp.
+   * Used to track last activity for session gap calculation.
+   * Note: TypeORM's @UpdateDateColumn doesn't auto-update on raw UPDATE queries,
+   * so we explicitly set updated_at = NOW().
+   */
+  async updateLastActivity(id: string): Promise<void> {
+    await this.interactionRepo
+      .createQueryBuilder()
+      .update(Interaction)
+      .set({ updatedAt: () => 'NOW()' })
+      .where('id = :id', { id })
+      .execute();
   }
 
   async addParticipant(
