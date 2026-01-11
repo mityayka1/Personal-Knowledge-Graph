@@ -54,13 +54,24 @@ interface ImportConfig {
 
 /**
  * Options for startImport method.
+ *
+ * Note on skipExisting vs incrementalOnly:
+ * - skipExisting=true: Completely skips dialogs that exist in PKG Core (fastest for initial import)
+ * - incrementalOnly=true: Imports only NEW messages (id > lastMessageId) from existing dialogs
+ * - Both true: skipExisting takes precedence (existing dialogs are skipped entirely)
+ * - Both false: Full re-import of all dialogs and all messages
+ *
+ * Recommended usage:
+ * - First import: privateOnly=true (import all private chats fully)
+ * - Subsequent imports: skipExisting=true (only import new dialogs)
+ * - Sync updates: incrementalOnly=true (fetch only new messages from existing dialogs)
  */
 interface StartImportOptions {
   /** If true, import only private chats (personal dialogs) */
   privateOnly?: boolean;
-  /** If true, skip dialogs that already have messages in PKG Core */
+  /** If true, skip dialogs that already have messages in PKG Core (takes precedence over incrementalOnly) */
   skipExisting?: boolean;
-  /** If true, only import new messages (using minId from existing data) */
+  /** If true, only import new messages (using minId from existing data). Does not apply to forums. */
   incrementalOnly?: boolean;
 }
 
@@ -160,8 +171,8 @@ export class HistoryImportService {
       const { privateChats, groupChats, forumChats } = await this.classifyDialogs(client);
 
       // Enrich dialogs with existing stats and sort (new first)
-      const enrichedPrivateChats = this.enrichAndSortDialogs(privateChats, chatStatsMap, 'user');
-      const enrichedGroupChats = this.enrichAndSortDialogs(groupChats, chatStatsMap, 'chat');
+      const enrichedPrivateChats = this.enrichAndSortDialogs(privateChats, chatStatsMap);
+      const enrichedGroupChats = this.enrichAndSortDialogs(groupChats, chatStatsMap);
 
       // Count dialogs to process
       const privateToProcess = skipExisting
@@ -193,10 +204,12 @@ export class HistoryImportService {
         }
 
         try {
-          // Use minId for incremental import
-          const minId = incrementalOnly && existingStats?.lastMessageId
-            ? parseInt(existingStats.lastMessageId, 10)
-            : undefined;
+          // Use minId for incremental import (validate parsed value)
+          let minId: number | undefined;
+          if (incrementalOnly && existingStats?.lastMessageId) {
+            const parsed = parseInt(existingStats.lastMessageId, 10);
+            minId = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+          }
           await this.importPrivateChat(client, dialog, { minId });
           this.progress.processedDialogs++;
         } catch (error) {
@@ -220,10 +233,12 @@ export class HistoryImportService {
           }
 
           try {
-            // Use minId for incremental import
-            const minId = incrementalOnly && existingStats?.lastMessageId
-              ? parseInt(existingStats.lastMessageId, 10)
-              : undefined;
+            // Use minId for incremental import (validate parsed value)
+            let minId: number | undefined;
+            if (incrementalOnly && existingStats?.lastMessageId) {
+              const parsed = parseInt(existingStats.lastMessageId, 10);
+              minId = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+            }
             await this.importGroupChat(client, dialog, { minId });
             this.progress.processedDialogs++;
           } catch (error) {
@@ -236,6 +251,8 @@ export class HistoryImportService {
         }
 
         // Phase 3: Forums (limit per topic)
+        // Note: Forums do not support skipExisting/incrementalOnly optimizations
+        // because topics are imported separately and tracking per-topic stats is not implemented
         this.progress.phase = 'forums';
         for (const { dialog, channel } of forumChats) {
           try {
@@ -327,10 +344,9 @@ export class HistoryImportService {
   private enrichAndSortDialogs(
     dialogs: Dialog[],
     chatStatsMap: Map<string, ChatStats>,
-    idPrefix: 'user' | 'chat' | 'channel',
   ): DialogWithStats[] {
     const enriched: DialogWithStats[] = dialogs.map((dialog) => {
-      const telegramChatId = this.buildChatId(dialog, idPrefix);
+      const telegramChatId = this.buildChatId(dialog);
       const existingStats = telegramChatId ? chatStatsMap.get(telegramChatId) : undefined;
       return {
         dialog,
@@ -352,8 +368,9 @@ export class HistoryImportService {
 
   /**
    * Build telegram_chat_id from dialog.
+   * Detects entity type automatically (User -> user_, Chat -> chat_, Channel -> channel_).
    */
-  private buildChatId(dialog: Dialog, prefix: 'user' | 'chat' | 'channel'): string | null {
+  private buildChatId(dialog: Dialog): string | null {
     const entity = dialog.entity;
     if (!entity) return null;
 

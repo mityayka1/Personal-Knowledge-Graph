@@ -169,11 +169,12 @@ export class InteractionService {
     }>;
   }> {
     // Query to get chat stats with last message info
+    // Note: source_message_id is VARCHAR, so we cast to BIGINT for proper numeric MAX
     const result = await this.interactionRepo
       .createQueryBuilder('i')
       .select("i.source_metadata->>'telegram_chat_id'", 'telegramChatId')
       .addSelect('COUNT(DISTINCT m.id)', 'messageCount')
-      .addSelect('MAX(m.source_message_id)', 'lastMessageId')
+      .addSelect('MAX(m.source_message_id::BIGINT)', 'lastMessageId')
       .addSelect('MAX(m.timestamp)', 'lastMessageTimestamp')
       .leftJoin('messages', 'm', 'm.interaction_id = i.id')
       .where('i.source = :source', { source: 'telegram' })
@@ -182,12 +183,25 @@ export class InteractionService {
       .getRawMany();
 
     return {
-      chats: result.map(r => ({
-        telegramChatId: r.telegramChatId,
-        lastMessageId: r.lastMessageId,
-        lastMessageTimestamp: r.lastMessageTimestamp?.toISOString() || null,
-        messageCount: parseInt(r.messageCount, 10) || 0,
-      })),
+      chats: result.map(r => {
+        // Handle lastMessageTimestamp - could be Date or string from raw query
+        let timestamp: string | null = null;
+        if (r.lastMessageTimestamp) {
+          timestamp = r.lastMessageTimestamp instanceof Date
+            ? r.lastMessageTimestamp.toISOString()
+            : String(r.lastMessageTimestamp);
+        }
+
+        // lastMessageId is now BIGINT from MAX, convert to string
+        const lastMessageId = r.lastMessageId != null ? String(r.lastMessageId) : null;
+
+        return {
+          telegramChatId: r.telegramChatId,
+          lastMessageId,
+          lastMessageTimestamp: timestamp,
+          messageCount: parseInt(r.messageCount, 10) || 0,
+        };
+      }),
     };
   }
 }
