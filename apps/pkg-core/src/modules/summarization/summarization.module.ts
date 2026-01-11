@@ -12,6 +12,7 @@ import {
 } from '@pkg/entities';
 import { SummarizationService } from './summarization.service';
 import { SummarizationProcessor } from './summarization.processor';
+import { SummarizationController } from './summarization.controller';
 import { EntityProfileService } from './entity-profile.service';
 import { EntityProfileProcessor } from './entity-profile.processor';
 import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
@@ -47,6 +48,7 @@ import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
     ScheduleModule.forRoot(),
     ClaudeCliModule,
   ],
+  controllers: [SummarizationController],
   providers: [
     SummarizationService,
     SummarizationProcessor,

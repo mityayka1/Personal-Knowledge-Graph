@@ -1,9 +1,18 @@
 <script setup lang="ts">
-import { ArrowLeft, MessageSquare, User, ExternalLink } from 'lucide-vue-next';
+import { ArrowLeft, MessageSquare, User, ExternalLink, Sparkles, Loader2, FileText } from 'lucide-vue-next';
 import { formatDateTime } from '~/lib/utils';
+import {
+  useSummarizationStatus,
+  useTriggerSummarization,
+  getToneInfo,
+} from '~/composables/useSummarization';
 
 const route = useRoute();
 const interactionId = computed(() => route.params.id as string);
+
+// Summarization
+const { data: summaryStatus, refetch: refetchStatus } = useSummarizationStatus(interactionId);
+const triggerSummarization = useTriggerSummarization();
 
 interface Message {
   id: string;
@@ -96,6 +105,16 @@ const chatInfo = computed(() => {
 
   return { displayName, link, rawId: chatId };
 });
+
+// Handle summarization
+async function handleSummarize() {
+  try {
+    await triggerSummarization.mutateAsync(interactionId.value);
+    await refetchStatus();
+  } catch (error) {
+    console.error('Summarization failed:', error);
+  }
+}
 </script>
 
 <template>
@@ -136,7 +155,67 @@ const chatInfo = computed(() => {
             </Badge>
           </div>
         </div>
+        <div class="flex gap-2">
+          <Button
+            v-if="!summaryStatus?.hasSummary"
+            @click="handleSummarize"
+            :disabled="triggerSummarization.isPending.value"
+          >
+            <Loader2 v-if="triggerSummarization.isPending.value" class="mr-2 h-4 w-4 animate-spin" />
+            <Sparkles v-else class="mr-2 h-4 w-4" />
+            Создать резюме
+          </Button>
+          <Badge v-else variant="secondary" class="flex items-center gap-1">
+            <FileText class="h-3 w-3" />
+            Резюме создано
+          </Badge>
+        </div>
       </div>
+
+      <!-- Summary Card (if exists) -->
+      <Card v-if="summaryStatus?.hasSummary && summaryStatus.summary" class="border-primary/20 bg-primary/5">
+        <CardHeader>
+          <div class="flex items-center justify-between">
+            <CardTitle class="text-lg flex items-center gap-2">
+              <Sparkles class="h-5 w-5 text-primary" />
+              AI Резюме
+            </CardTitle>
+            <div class="flex items-center gap-2">
+              <Badge
+                v-if="summaryStatus.summary.tone"
+                :class="getToneInfo(summaryStatus.summary.tone).color"
+              >
+                {{ getToneInfo(summaryStatus.summary.tone).label }}
+              </Badge>
+              <span class="text-xs text-muted-foreground">
+                {{ summaryStatus.summary.messageCount }} сообщений
+              </span>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <!-- Summary text -->
+          <div>
+            <p class="text-sm font-medium text-muted-foreground mb-1">Краткое содержание</p>
+            <p class="text-sm">{{ summaryStatus.summary.summaryText }}</p>
+          </div>
+
+          <!-- Key points -->
+          <div v-if="summaryStatus.summary.keyPoints?.length">
+            <p class="text-sm font-medium text-muted-foreground mb-2">Ключевые темы</p>
+            <div class="flex flex-wrap gap-2">
+              <Badge v-for="(point, idx) in summaryStatus.summary.keyPoints" :key="idx" variant="outline">
+                {{ point }}
+              </Badge>
+            </div>
+          </div>
+
+          <!-- Compression ratio -->
+          <div v-if="summaryStatus.summary.compressionRatio" class="text-xs text-muted-foreground">
+            Сжатие: {{ summaryStatus.summary.compressionRatio?.toFixed(1) }}x
+          </div>
+        </CardContent>
+      </Card>
 
       <!-- Metadata -->
       <Card>
