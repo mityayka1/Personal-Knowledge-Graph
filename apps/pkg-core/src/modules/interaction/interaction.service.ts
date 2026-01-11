@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Interaction, InteractionType, InteractionStatus, InteractionParticipant, ParticipantRole } from '@pkg/entities';
-import { SESSION_GAP_THRESHOLD_MS } from '@pkg/shared';
+import { SettingsService } from '../settings/settings.service';
 
 @Injectable()
 export class InteractionService {
@@ -11,6 +11,7 @@ export class InteractionService {
     private interactionRepo: Repository<Interaction>,
     @InjectRepository(InteractionParticipant)
     private participantRepo: Repository<InteractionParticipant>,
+    private settingsService: SettingsService,
   ) {}
 
   async findAll(params: { limit?: number; offset?: number } = {}) {
@@ -66,7 +67,10 @@ export class InteractionService {
       const lastActivity = existing.updatedAt || existing.startedAt;
       const gap = messageTime.getTime() - lastActivity.getTime();
 
-      if (gap > SESSION_GAP_THRESHOLD_MS) {
+      // Get configurable session gap threshold
+      const sessionGapMs = await this.settingsService.getSessionGapMs();
+
+      if (gap > sessionGapMs) {
         // End current session with last known activity time (not current time)
         await this.endSession(existing.id, lastActivity);
         // Create new session with message timestamp as startedAt

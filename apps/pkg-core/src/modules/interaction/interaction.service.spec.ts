@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { InteractionService } from './interaction.service';
 import { Interaction, InteractionParticipant, InteractionType, InteractionStatus } from '@pkg/entities';
+import { SettingsService } from '../settings/settings.service';
+import { DEFAULT_SESSION_GAP_MINUTES } from '@pkg/shared';
 
 describe('InteractionService', () => {
   let service: InteractionService;
@@ -30,6 +32,7 @@ describe('InteractionService', () => {
     findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
+    createQueryBuilder: jest.fn(),
   };
 
   const mockParticipantRepository = {
@@ -37,6 +40,10 @@ describe('InteractionService', () => {
     create: jest.fn(),
     save: jest.fn(),
     update: jest.fn(),
+  };
+
+  const mockSettingsService = {
+    getSessionGapMs: jest.fn().mockResolvedValue(DEFAULT_SESSION_GAP_MINUTES * 60 * 1000),
   };
 
   beforeEach(async () => {
@@ -50,6 +57,10 @@ describe('InteractionService', () => {
         {
           provide: getRepositoryToken(InteractionParticipant),
           useValue: mockParticipantRepository,
+        },
+        {
+          provide: SettingsService,
+          useValue: mockSettingsService,
         },
       ],
     }).compile();
@@ -223,6 +234,134 @@ describe('InteractionService', () => {
 
       expect(result).toEqual(newParticipant);
       expect(participantRepo.create).toHaveBeenCalled();
+    });
+  });
+
+  describe('findOrCreateSession', () => {
+    beforeEach(() => {
+      mockInteractionRepository.findOne.mockReset();
+      mockInteractionRepository.create.mockReset();
+      mockInteractionRepository.save.mockReset();
+      mockSettingsService.getSessionGapMs.mockReset();
+      mockSettingsService.getSessionGapMs.mockResolvedValue(DEFAULT_SESSION_GAP_MINUTES * 60 * 1000);
+    });
+
+    it('should return existing session when no messageTime provided', async () => {
+      mockInteractionRepository.findOne.mockResolvedValue(mockInteraction);
+
+      const result = await service.findOrCreateSession('123');
+
+      expect(result).toEqual(mockInteraction);
+      expect(mockSettingsService.getSessionGapMs).not.toHaveBeenCalled();
+    });
+
+    it('should create new session when no existing session found', async () => {
+      mockInteractionRepository.findOne.mockResolvedValue(null);
+      const newSession = { ...mockInteraction, id: 'new-uuid' };
+      mockInteractionRepository.create.mockReturnValue(newSession);
+      mockInteractionRepository.save.mockResolvedValue(newSession);
+
+      const result = await service.findOrCreateSession('123', new Date());
+
+      expect(result).toEqual(newSession);
+      expect(mockInteractionRepository.create).toHaveBeenCalled();
+    });
+
+    it('should continue existing session when gap is within threshold', async () => {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const existingSession = {
+        ...mockInteraction,
+        id: 'existing-session',
+        updatedAt: oneHourAgo,
+      };
+      mockInteractionRepository.findOne.mockResolvedValue(existingSession);
+
+      // Mock updateLastActivity
+      const mockExecute = jest.fn().mockResolvedValue({});
+      mockInteractionRepository.createQueryBuilder = jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: mockExecute,
+      });
+
+      const result = await service.findOrCreateSession('123', new Date());
+
+      expect(result).toEqual(existingSession);
+      expect(mockExecute).toHaveBeenCalled();
+      expect(mockInteractionRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('should create new session when gap exceeds threshold', async () => {
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
+      const existingSession = {
+        ...mockInteraction,
+        id: 'old-session',
+        updatedAt: fiveHoursAgo,
+      };
+      mockInteractionRepository.findOne
+        .mockResolvedValueOnce(existingSession) // findActiveSession
+        .mockResolvedValueOnce(existingSession); // findOne in endSession
+
+      const newSession = { ...mockInteraction, id: 'new-session' };
+      mockInteractionRepository.create.mockReturnValue(newSession);
+      mockInteractionRepository.save
+        .mockResolvedValueOnce({ ...existingSession, status: InteractionStatus.COMPLETED })
+        .mockResolvedValueOnce(newSession);
+
+      const result = await service.findOrCreateSession('123', new Date());
+
+      expect(result.id).toBe('new-session');
+      expect(mockSettingsService.getSessionGapMs).toHaveBeenCalled();
+    });
+
+    it('should respect custom session gap threshold', async () => {
+      // Set threshold to 30 minutes
+      mockSettingsService.getSessionGapMs.mockResolvedValue(30 * 60 * 1000);
+
+      const fortyFiveMinutesAgo = new Date(Date.now() - 45 * 60 * 1000);
+      const existingSession = {
+        ...mockInteraction,
+        id: 'old-session',
+        updatedAt: fortyFiveMinutesAgo,
+      };
+      mockInteractionRepository.findOne
+        .mockResolvedValueOnce(existingSession)
+        .mockResolvedValueOnce(existingSession);
+
+      const newSession = { ...mockInteraction, id: 'new-session' };
+      mockInteractionRepository.create.mockReturnValue(newSession);
+      mockInteractionRepository.save
+        .mockResolvedValueOnce({ ...existingSession, status: InteractionStatus.COMPLETED })
+        .mockResolvedValueOnce(newSession);
+
+      const result = await service.findOrCreateSession('123', new Date());
+
+      // 45 min > 30 min threshold, should create new session
+      expect(result.id).toBe('new-session');
+    });
+
+    it('should use startedAt when updatedAt is null', async () => {
+      const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const existingSession = {
+        ...mockInteraction,
+        updatedAt: null,
+        startedAt: threeHoursAgo,
+      };
+      mockInteractionRepository.findOne.mockResolvedValue(existingSession);
+
+      // Mock updateLastActivity
+      mockInteractionRepository.createQueryBuilder = jest.fn().mockReturnValue({
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({}),
+      });
+
+      const result = await service.findOrCreateSession('123', new Date());
+
+      // 3 hours < 4 hours threshold, should return existing
+      expect(result).toEqual(existingSession);
     });
   });
 });

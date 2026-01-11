@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Setting } from '@pkg/entities';
+import { DEFAULT_SESSION_GAP_MINUTES } from '@pkg/shared';
 
 // Default settings with their values and descriptions
 const DEFAULT_SETTINGS: Array<{
@@ -28,11 +29,21 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Модель Claude для извлечения фактов (haiku, sonnet, opus)',
     category: 'extraction',
   },
+  {
+    key: 'session.gapThresholdMinutes',
+    value: DEFAULT_SESSION_GAP_MINUTES,
+    description: 'Порог разделения сессий в минутах. Если между сообщениями прошло больше этого времени, создаётся новая сессия.',
+    category: 'session',
+  },
 ];
 
 @Injectable()
 export class SettingsService implements OnModuleInit {
   private readonly logger = new Logger(SettingsService.name);
+
+  // Cache for session gap threshold (queried on every message)
+  private sessionGapCache: { value: number; expiresAt: number } | null = null;
+  private readonly CACHE_TTL_MS = 60_000; // 1 minute
 
   constructor(
     @InjectRepository(Setting)
@@ -68,6 +79,16 @@ export class SettingsService implements OnModuleInit {
   }
 
   async update(key: string, value: unknown, description?: string): Promise<Setting> {
+    // Validate and handle session.gapThresholdMinutes
+    if (key === 'session.gapThresholdMinutes') {
+      const numValue = Number(value);
+      if (isNaN(numValue) || numValue < 15 || numValue > 1440) {
+        throw new Error('Session gap must be between 15 and 1440 minutes');
+      }
+      this.sessionGapCache = null;
+      this.logger.log(`Session gap threshold changed to ${numValue} minutes`);
+    }
+
     let setting = await this.settingRepo.findOne({ where: { key } });
 
     if (!setting) {
@@ -108,5 +129,23 @@ export class SettingsService implements OnModuleInit {
       minConfidence: minConfidence ?? 0.6,
       model: model ?? 'haiku',
     };
+  }
+
+  /**
+   * Get session gap threshold in milliseconds.
+   * Cached for 1 minute to avoid DB query on every message.
+   */
+  async getSessionGapMs(): Promise<number> {
+    const now = Date.now();
+
+    if (this.sessionGapCache && this.sessionGapCache.expiresAt > now) {
+      return this.sessionGapCache.value;
+    }
+
+    const minutes = await this.getValue<number>('session.gapThresholdMinutes');
+    const value = (minutes ?? DEFAULT_SESSION_GAP_MINUTES) * 60 * 1000;
+
+    this.sessionGapCache = { value, expiresAt: now + this.CACHE_TTL_MS };
+    return value;
   }
 }
