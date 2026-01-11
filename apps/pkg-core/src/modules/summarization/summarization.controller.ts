@@ -11,8 +11,9 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { InteractionSummary, Interaction } from '@pkg/entities';
+import { InteractionSummary, Interaction, EntityRelationshipProfile, EntityRecord } from '@pkg/entities';
 import { SummarizationService } from './summarization.service';
+import { EntityProfileService } from './entity-profile.service';
 
 interface TriggerSummarizationDto {
   interactionId: string;
@@ -36,10 +37,15 @@ interface SummarizationStatusResponse {
 export class SummarizationController {
   constructor(
     private readonly summarizationService: SummarizationService,
+    private readonly entityProfileService: EntityProfileService,
     @InjectRepository(InteractionSummary)
     private readonly summaryRepo: Repository<InteractionSummary>,
     @InjectRepository(Interaction)
     private readonly interactionRepo: Repository<Interaction>,
+    @InjectRepository(EntityRelationshipProfile)
+    private readonly profileRepo: Repository<EntityRelationshipProfile>,
+    @InjectRepository(EntityRecord)
+    private readonly entityRepo: Repository<EntityRecord>,
   ) {}
 
   /**
@@ -190,5 +196,119 @@ export class SummarizationController {
   async triggerDailySummarization(): Promise<{ message: string }> {
     await this.summarizationService.scheduleDailySummarization();
     return { message: 'Daily summarization job triggered' };
+  }
+
+  // ==================== Entity Profile Endpoints ====================
+
+  /**
+   * Trigger profile aggregation for a specific entity
+   */
+  @Post('profile/trigger/:entityId')
+  @HttpCode(HttpStatus.OK)
+  async triggerProfileAggregation(
+    @Param('entityId') entityId: string,
+  ): Promise<{ success: boolean; profileId?: string; message: string }> {
+    // Check if entity exists
+    const entity = await this.entityRepo.findOne({
+      where: { id: entityId },
+    });
+
+    if (!entity) {
+      throw new NotFoundException(`Entity ${entityId} not found`);
+    }
+
+    try {
+      const profile = await this.entityProfileService.processProfileAggregation(entityId);
+
+      if (!profile) {
+        return {
+          success: false,
+          message: 'Profile aggregation skipped (need at least 3 summaries)',
+        };
+      }
+
+      return {
+        success: true,
+        profileId: profile.id,
+        message: 'Profile created/updated successfully',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException(`Profile aggregation failed: ${message}`);
+    }
+  }
+
+  /**
+   * Get profile by entity ID
+   */
+  @Get('profile/entity/:entityId')
+  async getProfileByEntity(
+    @Param('entityId') entityId: string,
+  ): Promise<EntityRelationshipProfile> {
+    const profile = await this.profileRepo.findOne({
+      where: { entityId },
+    });
+
+    if (!profile) {
+      throw new NotFoundException(`Profile for entity ${entityId} not found`);
+    }
+
+    return profile;
+  }
+
+  /**
+   * Get profile status for an entity
+   */
+  @Get('profile/status/:entityId')
+  async getProfileStatus(
+    @Param('entityId') entityId: string,
+  ): Promise<{
+    entityId: string;
+    hasProfile: boolean;
+    summariesCount: number;
+    profile?: {
+      id: string;
+      relationshipType: string;
+      relationshipSummary: string;
+      totalInteractions: number;
+      updatedAt: Date;
+    };
+  }> {
+    // Count summaries for this entity
+    const summariesCount = await this.summaryRepo
+      .createQueryBuilder('s')
+      .innerJoin('interactions', 'i', 'i.id = s.interaction_id')
+      .innerJoin('interaction_participants', 'ip', 'ip.interaction_id = i.id')
+      .where('ip.entity_id = :entityId', { entityId })
+      .getCount();
+
+    const profile = await this.profileRepo.findOne({
+      where: { entityId },
+    });
+
+    return {
+      entityId,
+      hasProfile: !!profile,
+      summariesCount,
+      profile: profile
+        ? {
+            id: profile.id,
+            relationshipType: profile.relationshipType,
+            relationshipSummary: profile.relationshipSummary,
+            totalInteractions: profile.totalInteractions,
+            updatedAt: profile.updatedAt,
+          }
+        : undefined,
+    };
+  }
+
+  /**
+   * Manually trigger the weekly profile aggregation job
+   */
+  @Post('profile/trigger-weekly')
+  @HttpCode(HttpStatus.OK)
+  async triggerWeeklyProfileUpdate(): Promise<{ message: string }> {
+    await this.entityProfileService.scheduleWeeklyProfileUpdate();
+    return { message: 'Weekly profile aggregation job triggered' };
   }
 }
