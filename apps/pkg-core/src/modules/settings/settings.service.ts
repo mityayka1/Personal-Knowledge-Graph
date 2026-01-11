@@ -79,9 +79,14 @@ export class SettingsService implements OnModuleInit {
   }
 
   async update(key: string, value: unknown, description?: string): Promise<Setting> {
-    // Invalidate cache if session gap threshold is updated
+    // Validate and handle session.gapThresholdMinutes
     if (key === 'session.gapThresholdMinutes') {
+      const numValue = Number(value);
+      if (isNaN(numValue) || numValue < 15 || numValue > 1440) {
+        throw new Error('Session gap must be between 15 and 1440 minutes');
+      }
       this.sessionGapCache = null;
+      this.logger.log(`Session gap threshold changed to ${numValue} minutes`);
     }
 
     let setting = await this.settingRepo.findOne({ where: { key } });

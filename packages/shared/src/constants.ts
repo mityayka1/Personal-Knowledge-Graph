@@ -1,6 +1,5 @@
-// Session gap threshold defaults (used as fallback when DB setting unavailable)
+// Session gap threshold default (used as fallback when DB setting unavailable)
 export const DEFAULT_SESSION_GAP_MINUTES = 240; // 4 hours
-export const SESSION_GAP_THRESHOLD_MS = DEFAULT_SESSION_GAP_MINUTES * 60 * 1000;
 
 // Embedding dimensions (OpenAI text-embedding-3-small)
 export const EMBEDDING_DIMENSIONS = 1536;
