@@ -60,7 +60,7 @@
 ```
 
 **Логика PKG Core:**
-1. Найти или создать interaction для chat_id (session logic: gap > 4h = new session)
+1. Найти или создать interaction для chat_id (session logic: gap > настраиваемый порог = new session, см. Settings API)
 2. Resolve entity по telegram_user_id
 3. Если entity не найден → создать PendingEntityResolution
 4. Сохранить message
@@ -520,6 +520,67 @@
   "callback_url": "http://pkg-core:3000/api/v1/internal/context/req-uuid/complete"
 }
 ```
+
+---
+
+## Settings API
+
+### GET /settings
+
+Получение всех настроек системы.
+
+**Response:**
+```json
+[
+  {
+    "key": "session.gapThresholdMinutes",
+    "value": 240,
+    "description": "Порог разделения сессий в минутах",
+    "category": "session"
+  },
+  {
+    "key": "extraction.minConfidence",
+    "value": 0.6,
+    "description": "Минимальная уверенность для извлечённых фактов",
+    "category": "extraction"
+  }
+]
+```
+
+### GET /settings/{key}
+
+Получение конкретной настройки.
+
+**Response:**
+```json
+{
+  "key": "session.gapThresholdMinutes",
+  "value": 240,
+  "description": "Порог разделения сессий в минутах",
+  "category": "session"
+}
+```
+
+### PUT /settings/{key}
+
+Обновление настройки.
+
+**Request:**
+```json
+{
+  "value": 120
+}
+```
+
+**Валидация для `session.gapThresholdMinutes`:**
+- Минимум: 15 минут
+- Максимум: 1440 минут (24 часа)
+- По умолчанию: 240 минут (4 часа)
+
+**Response:** Обновлённая настройка
+
+**Ошибки:**
+- 400 Bad Request — значение вне допустимого диапазона
 
 ---
 

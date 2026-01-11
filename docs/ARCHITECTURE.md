@@ -13,7 +13,7 @@
 **Ответственность:**
 - Подключение к Telegram как userbot (GramJS/MTProto)
 - Получение сообщений в реальном времени
-- Session management (определение границ сессий по gap > 4 часов)
+- Session management (определение границ сессий по настраиваемому gap threshold, по умолчанию 4 часа)
 - Отправка сообщений в PKG Core через API
 - Сохранение voice messages в file storage и постановка в очередь транскрипции
 

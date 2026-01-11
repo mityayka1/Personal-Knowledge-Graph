@@ -26,7 +26,7 @@
 
 3. **Session Management:**
    - Проверить `last_message_time` для chat_id
-   - IF (now - last_message_time) > 4 hours:
+   - IF (now - last_message_time) > session_gap_threshold (настраивается, по умолчанию 4 часа):
      - Отправить POST /sessions/end для предыдущей сессии
      - Сбросить session state
    - Обновить last_message_time = now
@@ -79,14 +79,16 @@
 
 3. **Interaction Management:**
    - Поиск активной interaction для chat_id
-   - IF найдена И (now - last_message) ≤ 4h:
+   - IF найдена И (now - last_message) ≤ session_gap_threshold:
      - interaction_id = найденная
-   - IF найдена И (now - last_message) > 4h:
+   - IF найдена И (now - last_message) > session_gap_threshold:
      - Завершить текущую: status = 'completed', ended_at = now
      - Создать новую interaction
    - IF не найдена:
      - Создать новую interaction
      - Добавить participants (self + other)
+
+   > **Note:** session_gap_threshold настраивается через Settings API (по умолчанию 240 минут / 4 часа)
 
 4. **Создание Message:**
    - INSERT в messages с interaction_id, entity_id, content, etc.
@@ -435,7 +437,7 @@ _6-12 января 2025_
 **Триггер:** Schedule (hourly)
 
 **Шаги:**
-1. Найти активные interactions где last_message > 4 hours ago
+1. Найти активные interactions где last_message > session_gap_threshold (настраивается, по умолчанию 4 часа)
 2. Обновить status = 'completed', ended_at = last_message_time
 3. Опционально: trigger summarization
 
