@@ -1,4 +1,4 @@
-import { IsEnum, IsString, IsOptional, IsUUID, IsArray, ValidateNested } from 'class-validator';
+import { IsEnum, IsString, IsOptional, IsUUID, IsArray, ValidateNested, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 import { EntityType, IdentifierType, FactType, FactCategory, FactSource, CreationSource } from '@pkg/entities';
 
@@ -58,6 +58,10 @@ export class CreateEntityDto {
   @IsOptional()
   @IsEnum(CreationSource)
   creationSource?: CreationSource;
+
+  @IsOptional()
+  @IsBoolean()
+  isBot?: boolean;
 
   @IsOptional()
   @IsArray()

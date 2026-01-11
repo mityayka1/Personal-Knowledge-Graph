@@ -28,6 +28,12 @@ export class ChatCategoryRecord {
   @Column({ name: 'participants_count', type: 'integer', nullable: true })
   participantsCount: number | null;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  title: string | null;
+
+  @Column({ name: 'is_forum', type: 'boolean', default: false })
+  isForum: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

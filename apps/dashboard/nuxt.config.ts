@@ -26,6 +26,7 @@ export default defineNuxtConfig({
     // Server-side only (not exposed to client)
     apiKey: process.env.API_KEY || '',
     pkgCoreUrl: process.env.PKG_CORE_URL || 'http://localhost:3000/api/v1',
+    telegramAdapterUrl: process.env.TELEGRAM_ADAPTER_URL || 'http://localhost:3001',
 
     // Public (exposed to client)
     public: {

@@ -2,6 +2,7 @@
 import {
   Users,
   MessageSquare,
+  MessagesSquare,
   Search,
   Sparkles,
   HelpCircle,
@@ -16,6 +17,7 @@ const route = useRoute();
 const navigation = [
   { name: 'Сущности', href: '/entities', icon: Users },
   { name: 'Взаимодействия', href: '/interactions', icon: MessageSquare },
+  { name: 'Чаты', href: '/chats', icon: MessagesSquare },
   { name: 'Поиск', href: '/search', icon: Search },
   { name: 'Контекст', href: '/context', icon: Sparkles },
   { name: 'Связывание', href: '/resolutions', icon: HelpCircle },

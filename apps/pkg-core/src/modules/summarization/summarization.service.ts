@@ -71,6 +71,12 @@ export class SummarizationService {
       .andWhere(`NOT EXISTS (
         SELECT 1 FROM interaction_summaries s WHERE s.interaction_id = i.id
       )`)
+      // Exclude interactions where any participant is a bot
+      .andWhere(`NOT EXISTS (
+        SELECT 1 FROM interaction_participants ip
+        INNER JOIN entities e ON e.id = ip.entity_id
+        WHERE ip.interaction_id = i.id AND e.is_bot = true
+      )`)
       .orderBy('i.ended_at', 'ASC')
       .limit(20)
       .getMany();
@@ -108,6 +114,13 @@ export class SummarizationService {
 
     if (!interaction) {
       throw new Error(`Interaction ${interactionId} not found`);
+    }
+
+    // Skip if any participant is a bot
+    const hasBot = interaction.participants?.some(p => p.entity?.isBot);
+    if (hasBot) {
+      this.logger.debug(`Interaction ${interactionId} has bot participant, skipping`);
+      return null;
     }
 
     // Fetch messages
