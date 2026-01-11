@@ -66,8 +66,18 @@ function formatSettingKey(key: string): string {
     'extraction.autoSaveThreshold': 'Порог авто-сохранения',
     'extraction.minConfidence': 'Минимальная уверенность',
     'extraction.model': 'Модель Claude',
+    'session.gapThresholdMinutes': 'Порог разделения сессий',
   };
   return labels[key] || key;
+}
+
+function formatMinutesToHuman(minutes: number | string): string {
+  const m = Number(minutes);
+  if (isNaN(m)) return '';
+  if (m < 60) return `${m} мин`;
+  const hours = Math.floor(m / 60);
+  const mins = m % 60;
+  return mins > 0 ? `${hours} ч ${mins} мин` : `${hours} ч`;
 }
 
 function getInputType(value: unknown): 'number' | 'text' | 'select' {
@@ -89,6 +99,7 @@ const groupedSettings = computed(() => {
 
 const categoryLabels: Record<string, string> = {
   extraction: 'Извлечение фактов',
+  session: 'Настройки сессий',
   general: 'Общие',
 };
 
@@ -191,6 +202,30 @@ onMounted(() => {
               </select>
             </div>
 
+            <!-- Session gap threshold in minutes -->
+            <div v-else-if="setting.key === 'session.gapThresholdMinutes'" class="flex items-center gap-4">
+              <Input
+                :id="setting.key"
+                v-model.number="editedSettings[setting.key]"
+                type="number"
+                step="15"
+                min="15"
+                max="1440"
+                class="w-32"
+              />
+              <span class="text-sm text-muted-foreground min-w-[80px]">
+                {{ formatMinutesToHuman(editedSettings[setting.key]) }}
+              </span>
+              <input
+                type="range"
+                v-model.number="editedSettings[setting.key]"
+                min="15"
+                max="1440"
+                step="15"
+                class="flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer"
+              />
+            </div>
+
             <!-- Text input fallback -->
             <Input
               v-else
@@ -219,6 +254,11 @@ onMounted(() => {
           <p>
             <strong>Модель Claude:</strong> Haiku — быстрый и дешёвый, Sonnet — баланс
             скорости и качества, Opus — максимальное качество.
+          </p>
+          <p>
+            <strong>Порог разделения сессий:</strong> Если между сообщениями прошло больше
+            указанного времени, будет создана новая сессия. Рекомендуемые значения: 60 мин
+            для активных переписок, 240 мин (4 часа) стандартно, 480 мин (8 часов) для редких контактов.
           </p>
         </CardContent>
       </Card>

@@ -6,6 +6,7 @@ import {
   Body,
   Query,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { SettingsService } from './settings.service';
 import { UpdateSettingDto } from './dto/update-setting.dto';
@@ -33,6 +34,16 @@ export class SettingsController {
 
   @Put(':key')
   async update(@Param('key') key: string, @Body() dto: UpdateSettingDto) {
+    // Validate session.gapThresholdMinutes (15-1440 minutes)
+    if (key === 'session.gapThresholdMinutes') {
+      const value = Number(dto.value);
+      if (isNaN(value) || value < 15 || value > 1440) {
+        throw new BadRequestException(
+          'Порог сессии должен быть числом от 15 до 1440 минут (от 15 минут до 24 часов)',
+        );
+      }
+    }
+
     return this.settingsService.update(key, dto.value, dto.description);
   }
 
