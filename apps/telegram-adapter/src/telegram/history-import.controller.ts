@@ -4,6 +4,12 @@ import { HistoryImportService, ImportProgress } from './history-import.service';
 
 interface StartImportDto {
   limitPerDialog?: number;
+  /** If true, import only private chats (personal dialogs) */
+  privateOnly?: boolean;
+  /** If true, skip dialogs that already have messages in PKG Core */
+  skipExisting?: boolean;
+  /** If true, only import new messages (using minId from existing data) */
+  incrementalOnly?: boolean;
 }
 
 interface ReimportChatDto {
@@ -47,7 +53,11 @@ export class HistoryImportController {
     // IMPORT_GROUP_LIMIT (default: 1000) - messages per group chat
     // IMPORT_TOPIC_LIMIT (default: 1000) - messages per forum topic
     this.historyImportService
-      .startImport(client)
+      .startImport(client, {
+        privateOnly: dto.privateOnly,
+        skipExisting: dto.skipExisting,
+        incrementalOnly: dto.incrementalOnly,
+      })
       .catch((error) => {
         console.error('Import error:', error);
       });

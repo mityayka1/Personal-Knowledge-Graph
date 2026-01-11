@@ -4,6 +4,7 @@ import { Api } from 'telegram';
 import { TelegramClient } from 'telegram';
 import { Dialog } from 'telegram/tl/custom/dialog';
 import { MessageHandlerService, ChatType } from './message-handler.service';
+import { PkgCoreApiService, ChatStats } from '../api/pkg-core-api.service';
 
 /**
  * Forum topic information from Telegram.
@@ -52,6 +53,27 @@ interface ImportConfig {
 }
 
 /**
+ * Options for startImport method.
+ */
+interface StartImportOptions {
+  /** If true, import only private chats (personal dialogs) */
+  privateOnly?: boolean;
+  /** If true, skip dialogs that already have messages in PKG Core */
+  skipExisting?: boolean;
+  /** If true, only import new messages (using minId from existing data) */
+  incrementalOnly?: boolean;
+}
+
+/**
+ * Dialog with existing stats from PKG Core.
+ */
+interface DialogWithStats {
+  dialog: Dialog;
+  existingStats?: ChatStats;
+  isNew: boolean;
+}
+
+/**
  * Service for importing Telegram history with sequential phases:
  * 1. Private chats - ALL history, auto-create Entity
  * 2. Group chats - with message limit
@@ -66,6 +88,7 @@ export class HistoryImportService {
   constructor(
     private messageHandler: MessageHandlerService,
     private configService: ConfigService,
+    private pkgCoreApi: PkgCoreApiService,
   ) {
     this.config = {
       groupMessageLimit: this.configService.get<number>('IMPORT_GROUP_LIMIT', 1000),
@@ -96,10 +119,15 @@ export class HistoryImportService {
   /**
    * Start sequential import of Telegram history.
    * Phase 1: Private chats (ALL history, auto-create Entity)
-   * Phase 2: Group chats (with limit)
-   * Phase 3: Forums (limit per topic)
+   * Phase 2: Group chats (with limit) - skipped if privateOnly=true
+   * Phase 3: Forums (limit per topic) - skipped if privateOnly=true
+   *
+   * Optimization: Dialogs are sorted with new ones first.
+   * - skipExisting: Skip dialogs that already exist in PKG Core
+   * - incrementalOnly: Only fetch new messages (using minId)
    */
-  async startImport(client: TelegramClient): Promise<void> {
+  async startImport(client: TelegramClient, options: StartImportOptions = {}): Promise<void> {
+    const { privateOnly = false, skipExisting = false, incrementalOnly = false } = options;
     if (this.progress.status === 'running') {
       throw new Error('Import is already running');
     }
@@ -111,24 +139,65 @@ export class HistoryImportService {
     };
 
     try {
-      this.logger.log('Starting sequential Telegram history import...');
+      this.logger.log(`Starting Telegram history import...`);
+      this.logger.log(`Options: privateOnly=${privateOnly}, skipExisting=${skipExisting}, incrementalOnly=${incrementalOnly}`);
       this.logger.log(`Config: group limit=${this.config.groupMessageLimit}, topic limit=${this.config.forumTopicLimit}`);
+
+      // Fetch existing chat stats from PKG Core for optimization
+      let chatStatsMap: Map<string, ChatStats> = new Map();
+      try {
+        this.logger.log('Fetching existing chat stats from PKG Core...');
+        const statsResponse = await this.pkgCoreApi.getChatStats();
+        for (const stats of statsResponse.chats) {
+          chatStatsMap.set(stats.telegramChatId, stats);
+        }
+        this.logger.log(`Found ${chatStatsMap.size} existing chats in PKG Core`);
+      } catch (error) {
+        this.logger.warn(`Could not fetch chat stats, proceeding without optimization: ${error}`);
+      }
 
       // Classify all dialogs
       const { privateChats, groupChats, forumChats } = await this.classifyDialogs(client);
 
-      this.progress.totalDialogs =
-        privateChats.length + groupChats.length + forumChats.length;
+      // Enrich dialogs with existing stats and sort (new first)
+      const enrichedPrivateChats = this.enrichAndSortDialogs(privateChats, chatStatsMap, 'user');
+      const enrichedGroupChats = this.enrichAndSortDialogs(groupChats, chatStatsMap, 'chat');
+
+      // Count dialogs to process
+      const privateToProcess = skipExisting
+        ? enrichedPrivateChats.filter(d => d.isNew).length
+        : enrichedPrivateChats.length;
+      const groupsToProcess = privateOnly ? 0 : (skipExisting
+        ? enrichedGroupChats.filter(d => d.isNew).length
+        : enrichedGroupChats.length);
+      const forumsToProcess = privateOnly ? 0 : forumChats.length;
+
+      this.progress.totalDialogs = privateToProcess + groupsToProcess + forumsToProcess;
 
       this.logger.log(
-        `Found ${privateChats.length} private, ${groupChats.length} group, ${forumChats.length} forum chats`,
+        `Found ${privateChats.length} private (${enrichedPrivateChats.filter(d => d.isNew).length} new), ` +
+        `${groupChats.length} group (${enrichedGroupChats.filter(d => d.isNew).length} new), ` +
+        `${forumChats.length} forum chats` +
+        (privateOnly ? ' (importing private only)' : '') +
+        (skipExisting ? ' (skipping existing)' : '') +
+        (incrementalOnly ? ' (incremental mode)' : ''),
       );
 
       // Phase 1: Private chats (ALL history, auto-create Entity)
       this.progress.phase = 'private';
-      for (const dialog of privateChats) {
+      for (const { dialog, existingStats, isNew } of enrichedPrivateChats) {
+        // Skip existing if option enabled
+        if (skipExisting && !isNew) {
+          this.logger.debug(`Skipping existing private chat: ${this.getDialogName(dialog)}`);
+          continue;
+        }
+
         try {
-          await this.importPrivateChat(client, dialog);
+          // Use minId for incremental import
+          const minId = incrementalOnly && existingStats?.lastMessageId
+            ? parseInt(existingStats.lastMessageId, 10)
+            : undefined;
+          await this.importPrivateChat(client, dialog, { minId });
           this.progress.processedDialogs++;
         } catch (error) {
           const dialogId = dialog.id?.toString() ?? 'unknown';
@@ -139,34 +208,47 @@ export class HistoryImportService {
         await this.delay(this.config.chatDelayMs);
       }
 
-      // Phase 2: Group chats (with limit)
-      this.progress.phase = 'groups';
-      for (const dialog of groupChats) {
-        try {
-          await this.importGroupChat(client, dialog);
-          this.progress.processedDialogs++;
-        } catch (error) {
-          const dialogId = dialog.id?.toString() ?? 'unknown';
-          const errMsg = `[groups] Dialog ${dialogId}: ${error instanceof Error ? error.message : String(error)}`;
-          this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
-          this.progress.errors.push(errMsg);
-        }
-        await this.delay(this.config.chatDelayMs);
-      }
+      // Skip groups and forums if privateOnly
+      if (!privateOnly) {
+        // Phase 2: Group chats (with limit)
+        this.progress.phase = 'groups';
+        for (const { dialog, existingStats, isNew } of enrichedGroupChats) {
+          // Skip existing if option enabled
+          if (skipExisting && !isNew) {
+            this.logger.debug(`Skipping existing group chat: ${this.getDialogName(dialog)}`);
+            continue;
+          }
 
-      // Phase 3: Forums (limit per topic)
-      this.progress.phase = 'forums';
-      for (const { dialog, channel } of forumChats) {
-        try {
-          await this.importForum(client, dialog, channel);
-          this.progress.processedDialogs++;
-        } catch (error) {
-          const forumName = channel.title ?? dialog.id?.toString() ?? 'unknown';
-          const errMsg = `[forums] Forum ${forumName}: ${error instanceof Error ? error.message : String(error)}`;
-          this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
-          this.progress.errors.push(errMsg);
+          try {
+            // Use minId for incremental import
+            const minId = incrementalOnly && existingStats?.lastMessageId
+              ? parseInt(existingStats.lastMessageId, 10)
+              : undefined;
+            await this.importGroupChat(client, dialog, { minId });
+            this.progress.processedDialogs++;
+          } catch (error) {
+            const dialogId = dialog.id?.toString() ?? 'unknown';
+            const errMsg = `[groups] Dialog ${dialogId}: ${error instanceof Error ? error.message : String(error)}`;
+            this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
+            this.progress.errors.push(errMsg);
+          }
+          await this.delay(this.config.chatDelayMs);
         }
-        await this.delay(this.config.chatDelayMs);
+
+        // Phase 3: Forums (limit per topic)
+        this.progress.phase = 'forums';
+        for (const { dialog, channel } of forumChats) {
+          try {
+            await this.importForum(client, dialog, channel);
+            this.progress.processedDialogs++;
+          } catch (error) {
+            const forumName = channel.title ?? dialog.id?.toString() ?? 'unknown';
+            const errMsg = `[forums] Forum ${forumName}: ${error instanceof Error ? error.message : String(error)}`;
+            this.logger.error(errMsg, error instanceof Error ? error.stack : undefined);
+            this.progress.errors.push(errMsg);
+          }
+          await this.delay(this.config.chatDelayMs);
+        }
       }
 
       this.progress.status = 'completed';
@@ -240,13 +322,80 @@ export class HistoryImportService {
   }
 
   /**
+   * Enrich dialogs with existing stats and sort (new dialogs first).
+   */
+  private enrichAndSortDialogs(
+    dialogs: Dialog[],
+    chatStatsMap: Map<string, ChatStats>,
+    idPrefix: 'user' | 'chat' | 'channel',
+  ): DialogWithStats[] {
+    const enriched: DialogWithStats[] = dialogs.map((dialog) => {
+      const telegramChatId = this.buildChatId(dialog, idPrefix);
+      const existingStats = telegramChatId ? chatStatsMap.get(telegramChatId) : undefined;
+      return {
+        dialog,
+        existingStats,
+        isNew: !existingStats,
+      };
+    });
+
+    // Sort: new dialogs first, then existing by message count (fewer first)
+    return enriched.sort((a, b) => {
+      if (a.isNew && !b.isNew) return -1;
+      if (!a.isNew && b.isNew) return 1;
+      // Both existing: sort by message count (fewer messages = less work already done)
+      const aCount = a.existingStats?.messageCount || 0;
+      const bCount = b.existingStats?.messageCount || 0;
+      return aCount - bCount;
+    });
+  }
+
+  /**
+   * Build telegram_chat_id from dialog.
+   */
+  private buildChatId(dialog: Dialog, prefix: 'user' | 'chat' | 'channel'): string | null {
+    const entity = dialog.entity;
+    if (!entity) return null;
+
+    if (entity instanceof Api.User) {
+      return `user_${entity.id}`;
+    }
+    if (entity instanceof Api.Chat) {
+      return `chat_${entity.id}`;
+    }
+    if (entity instanceof Api.Channel) {
+      return `channel_${entity.id}`;
+    }
+    return null;
+  }
+
+  /**
+   * Get dialog name for logging.
+   */
+  private getDialogName(dialog: Dialog): string {
+    const entity = dialog.entity;
+    if (!entity) return 'Unknown';
+
+    if (entity instanceof Api.User) {
+      return `${entity.firstName || ''} ${entity.lastName || ''}`.trim() || entity.username || 'Unknown';
+    }
+    if ('title' in entity) {
+      return (entity as Api.Chat | Api.Channel).title || 'Unknown';
+    }
+    return 'Unknown';
+  }
+
+  /**
    * Import ALL messages from a private chat.
    * No limit - private chats contain valuable personal contacts.
    * Auto-creates Entity for the contact.
+   *
+   * @param options.minId - If provided, only fetch messages with id > minId (incremental import)
    */
   private async importPrivateChat(
     client: TelegramClient,
     dialog: Dialog,
+    options: { minId?: number } = {},
   ): Promise<void> {
     const entity = dialog.entity as Api.User;
     const chatName = `${entity.firstName || ''} ${entity.lastName || ''}`.trim() || entity.username || 'Unknown';
@@ -257,18 +406,24 @@ export class HistoryImportService {
       return;
     }
 
+    const { minId } = options;
     this.progress.currentDialog = chatName;
-    this.logger.log(`[Phase 1/3] Importing private chat: ${chatName} (no limit)`);
+    this.logger.log(
+      `[Phase 1/3] Importing private chat: ${chatName}` +
+      (minId ? ` (incremental, minId=${minId})` : ' (full)'),
+    );
 
     let offsetId = 0;
     let batchCount = 0;
+    let reachedMinId = false;
 
-    // No limit for private chats - import everything
+    // No limit for private chats - import everything (or until minId in incremental mode)
     while (true) {
       try {
         const messages = await client.getMessages(dialog.inputEntity, {
           limit: 100,
           offsetId,
+          minId: minId, // GramJS supports minId parameter
         });
 
         if (!messages.length) {
@@ -277,6 +432,12 @@ export class HistoryImportService {
 
         for (const message of messages) {
           if (message instanceof Api.Message) {
+            // In incremental mode, stop if we've reached messages already imported
+            if (minId && message.id <= minId) {
+              reachedMinId = true;
+              break;
+            }
+
             try {
               const result = await this.messageHandler.processMessageWithContext(
                 message,
@@ -294,6 +455,11 @@ export class HistoryImportService {
               this.handleMessageError(message.id, error);
             }
           }
+        }
+
+        // Stop if we've reached minId
+        if (reachedMinId) {
+          break;
         }
 
         offsetId = messages[messages.length - 1].id;
@@ -320,10 +486,13 @@ export class HistoryImportService {
 
   /**
    * Import messages from a group chat with a limit.
+   *
+   * @param options.minId - If provided, only fetch messages with id > minId (incremental import)
    */
   private async importGroupChat(
     client: TelegramClient,
     dialog: Dialog,
+    options: { minId?: number } = {},
   ): Promise<void> {
     const entity = dialog.entity;
     if (!entity) {
@@ -332,14 +501,17 @@ export class HistoryImportService {
     }
     const chatName = 'title' in entity ? (entity as Api.Chat | Api.Channel).title : 'Unknown Group';
     const chatType: ChatType = entity instanceof Api.Channel ? 'supergroup' : 'group';
+    const { minId } = options;
 
     this.progress.currentDialog = chatName;
     this.logger.log(
-      `[Phase 2/3] Importing ${chatType}: ${chatName} (limit: ${this.config.groupMessageLimit})`,
+      `[Phase 2/3] Importing ${chatType}: ${chatName} (limit: ${this.config.groupMessageLimit})` +
+      (minId ? ` (incremental, minId=${minId})` : ''),
     );
 
     let offsetId = 0;
     let messagesImported = 0;
+    let reachedMinId = false;
 
     while (messagesImported < this.config.groupMessageLimit) {
       const batchSize = Math.min(100, this.config.groupMessageLimit - messagesImported);
@@ -348,6 +520,7 @@ export class HistoryImportService {
         const messages = await client.getMessages(dialog.inputEntity, {
           limit: batchSize,
           offsetId,
+          minId: minId, // GramJS supports minId parameter
         });
 
         if (!messages.length) {
@@ -356,6 +529,12 @@ export class HistoryImportService {
 
         for (const message of messages) {
           if (message instanceof Api.Message) {
+            // In incremental mode, stop if we've reached messages already imported
+            if (minId && message.id <= minId) {
+              reachedMinId = true;
+              break;
+            }
+
             try {
               await this.messageHandler.processMessageWithContext(message, client, {
                 chatType,
@@ -366,6 +545,11 @@ export class HistoryImportService {
               this.handleMessageError(message.id, error);
             }
           }
+        }
+
+        // Stop if we've reached minId
+        if (reachedMinId) {
+          break;
         }
 
         messagesImported += messages.length;

@@ -155,4 +155,39 @@ export class InteractionService {
       messageCount: p.interaction.messages?.length || 0,
     }));
   }
+
+  /**
+   * Get statistics for all Telegram chats (for import optimization).
+   * Returns telegram_chat_id, last message info, and message count.
+   */
+  async getChatStats(): Promise<{
+    chats: Array<{
+      telegramChatId: string;
+      lastMessageId: string | null;
+      lastMessageTimestamp: string | null;
+      messageCount: number;
+    }>;
+  }> {
+    // Query to get chat stats with last message info
+    const result = await this.interactionRepo
+      .createQueryBuilder('i')
+      .select("i.source_metadata->>'telegram_chat_id'", 'telegramChatId')
+      .addSelect('COUNT(DISTINCT m.id)', 'messageCount')
+      .addSelect('MAX(m.source_message_id)', 'lastMessageId')
+      .addSelect('MAX(m.timestamp)', 'lastMessageTimestamp')
+      .leftJoin('messages', 'm', 'm.interaction_id = i.id')
+      .where('i.source = :source', { source: 'telegram' })
+      .andWhere("i.source_metadata->>'telegram_chat_id' IS NOT NULL")
+      .groupBy("i.source_metadata->>'telegram_chat_id'")
+      .getRawMany();
+
+    return {
+      chats: result.map(r => ({
+        telegramChatId: r.telegramChatId,
+        lastMessageId: r.lastMessageId,
+        lastMessageTimestamp: r.lastMessageTimestamp?.toISOString() || null,
+        messageCount: parseInt(r.messageCount, 10) || 0,
+      })),
+    };
+  }
 }

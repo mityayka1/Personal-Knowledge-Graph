@@ -22,6 +22,15 @@ export class InteractionController {
     return this.interactionService.findByIdentifier(identifierType, identifierValue, limit);
   }
 
+  /**
+   * Get statistics for all Telegram chats (for import optimization).
+   * Returns list of chats with last message info and message count.
+   */
+  @Get('chat-stats')
+  async getChatStats() {
+    return this.interactionService.getChatStats();
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.interactionService.findOne(id);
