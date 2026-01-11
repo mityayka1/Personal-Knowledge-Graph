@@ -89,10 +89,10 @@ export class InteractionSummaryService {
   }
 
   async update(id: string, data: Partial<CreateSummaryDto>): Promise<InteractionSummary | null> {
-    await this.summaryRepo.update(id, {
-      ...data,
-      revisionCount: () => 'revision_count + 1',
-    } as any);
+    // Apply provided updates
+    await this.summaryRepo.update(id, data);
+    // Safely increment revisionCount without bypassing TypeScript's type system
+    await this.summaryRepo.increment({ id }, 'revisionCount', 1);
     return this.summaryRepo.findOne({ where: { id } });
   }
 }

@@ -1,11 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   InteractionSummary,
   Interaction,
@@ -16,6 +14,7 @@ import {
   ToneType,
 } from '@pkg/entities';
 import { ClaudeCliService } from '../claude-cli/claude-cli.service';
+import { SchemaLoaderService } from '../claude-cli/schema-loader.service';
 
 // Result from Claude CLI
 interface SummarizationResult {
@@ -46,19 +45,11 @@ export class SummarizationService {
     @InjectRepository(Message)
     private messageRepo: Repository<Message>,
     private claudeCliService: ClaudeCliService,
+    private schemaLoader: SchemaLoaderService,
     @InjectQueue('summarization')
     private summarizationQueue: Queue,
   ) {
-    // Load schema from file
-    const schemaPath = path.join(
-      process.cwd(), '..', '..', 'claude-workspace', 'schemas', 'summarization-schema.json'
-    );
-    try {
-      this.schema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
-    } catch {
-      this.logger.warn('Could not load summarization schema from file, using inline schema');
-      this.schema = this.getInlineSchema();
-    }
+    this.schema = this.schemaLoader.load('summarization', this.getInlineSchema());
   }
 
   /**
@@ -195,7 +186,7 @@ export class SummarizationService {
     // Patterns for importance detection
     const DATE_PATTERN = /\d{1,2}[.\/]\d{1,2}|\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)|завтра|послезавтра|в\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/i;
     const AMOUNT_PATTERN = /\d+[kкКK]|\$\d+|€\d+|\d+\s*(руб|рублей|долларов|евро|usd|eur)/i;
-    const AGREEMENT_PATTERN = /договорились|согласен|окей|ок,|хорошо,\s*сделаю|принято|deal|договор/i;
+    const AGREEMENT_PATTERN = /договорились|согласен|\bокей\b|\bок\b|хорошо[,.]?\s*сделаю|принято|\bdeal\b|договор/i;
     const DEADLINE_PATTERN = /дедлайн|срок|до\s+\d|крайний срок|deadline/i;
 
     return messages.map(msg => {

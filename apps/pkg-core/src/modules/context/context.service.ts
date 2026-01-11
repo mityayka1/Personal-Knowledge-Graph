@@ -1,28 +1,29 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan, IsNull } from 'typeorm';
-import * as fs from 'fs';
-import * as path from 'path';
+import { ConfigService } from '@nestjs/config';
+import { Repository, IsNull } from 'typeorm';
 import {
   Message,
   InteractionSummary,
   EntityRelationshipProfile,
   EntityFact,
+  TranscriptSegment,
 } from '@pkg/entities';
 import { ContextRequest, ContextResponse, SynthesizedContext, SearchResult } from '@pkg/shared';
 import { EntityService } from '../entity/entity.service';
 import { VectorService } from '../search/vector.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { ClaudeCliService } from '../claude-cli/claude-cli.service';
+import { SchemaLoaderService } from '../claude-cli/schema-loader.service';
 
 @Injectable()
 export class ContextService {
   private readonly logger = new Logger(ContextService.name);
   private readonly schema: object;
 
-  // Tier boundaries in days
-  private readonly HOT_TIER_DAYS = 7;
-  private readonly WARM_TIER_DAYS = 90;
+  // Tier boundaries in days (configurable via ConfigService)
+  private readonly HOT_TIER_DAYS: number;
+  private readonly WARM_TIER_DAYS: number;
 
   constructor(
     @InjectRepository(Message)
@@ -33,25 +34,24 @@ export class ContextService {
     private profileRepo: Repository<EntityRelationshipProfile>,
     @InjectRepository(EntityFact)
     private factRepo: Repository<EntityFact>,
+    @InjectRepository(TranscriptSegment)
+    private segmentRepo: Repository<TranscriptSegment>,
     private entityService: EntityService,
     private vectorService: VectorService,
     private embeddingService: EmbeddingService,
     private claudeCliService: ClaudeCliService,
+    private schemaLoader: SchemaLoaderService,
+    private configService: ConfigService,
   ) {
-    // Load schema from file
-    const schemaPath = path.join(
-      process.cwd(), '..', '..', 'claude-workspace', 'schemas', 'context-schema.json'
-    );
-    try {
-      this.schema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
-    } catch {
-      this.logger.warn('Could not load context schema from file, using inline schema');
-      this.schema = this.getInlineSchema();
-    }
+    // Load tier boundaries from config (with defaults)
+    this.HOT_TIER_DAYS = this.configService.get<number>('context.hotTierDays', 7);
+    this.WARM_TIER_DAYS = this.configService.get<number>('context.warmTierDays', 90);
+    // Load schema using SchemaLoaderService
+    this.schema = this.schemaLoader.load('context', this.getInlineSchema());
   }
 
   async generateContext(request: ContextRequest): Promise<ContextResponse> {
-    const { entityId, taskHint, maxTokens = 4000 } = request;
+    const { entityId, taskHint } = request;
     const now = new Date();
 
     // 1. Fetch entity with facts
@@ -63,9 +63,10 @@ export class ContextService {
       order: { createdAt: 'DESC' },
     });
 
-    // 3. HOT tier: Recent messages (< 7 days)
+    // 3. HOT tier: Recent messages and transcript segments (< 7 days)
     const hotCutoff = new Date(now.getTime() - this.HOT_TIER_DAYS * 24 * 60 * 60 * 1000);
     const hotMessages = await this.getHotMessages(entityId, hotCutoff);
+    const hotSegments = await this.getHotSegments(entityId, hotCutoff);
 
     // 4. WARM tier: Summaries (7-90 days)
     const warmCutoff = new Date(now.getTime() - this.WARM_TIER_DAYS * 24 * 60 * 60 * 1000);
@@ -85,6 +86,7 @@ export class ContextService {
       entity,
       facts,
       hotMessages,
+      hotSegments,
       warmSummaries,
       profile,
       relevantChunks,
@@ -126,6 +128,7 @@ export class ContextService {
       tokenCount: this.estimateTokens(contextMarkdown),
       sources: {
         hotMessagesCount: hotMessages.length,
+        hotSegmentsCount: hotSegments.length,
         warmSummariesCount: warmSummaries.length,
         coldDecisionsCount: profile?.keyDecisions?.length || 0,
         relevantChunksCount: relevantChunks.length,
@@ -136,16 +139,37 @@ export class ContextService {
   }
 
   /**
-   * Get HOT tier: Recent messages from entity
+   * Get HOT tier: Recent messages from/to entity
+   * Includes both incoming and outgoing messages from interactions where entity is a participant
    */
   private async getHotMessages(entityId: string, since: Date): Promise<Message[]> {
-    return this.messageRepo.find({
-      where: [
-        { senderEntityId: entityId, timestamp: MoreThan(since), isArchived: false },
-      ],
-      order: { timestamp: 'DESC' },
-      take: 50,
-    });
+    // Use JOIN through interaction_participants to get ALL messages from conversations with this entity
+    // This includes both incoming messages FROM entity and outgoing messages TO entity
+    return this.messageRepo
+      .createQueryBuilder('m')
+      .innerJoin('interactions', 'i', 'i.id = m.interaction_id')
+      .innerJoin('interaction_participants', 'ip', 'ip.interaction_id = i.id')
+      .where('ip.entity_id = :entityId', { entityId })
+      .andWhere('m.timestamp > :since', { since })
+      .andWhere('m.is_archived = :isArchived', { isArchived: false })
+      .orderBy('m.timestamp', 'DESC')
+      .take(50)
+      .getMany();
+  }
+
+  /**
+   * Get HOT tier: Recent transcript segments from calls with entity
+   */
+  private async getHotSegments(entityId: string, since: Date): Promise<TranscriptSegment[]> {
+    return this.segmentRepo
+      .createQueryBuilder('ts')
+      .innerJoin('interactions', 'i', 'i.id = ts.interaction_id')
+      .innerJoin('interaction_participants', 'ip', 'ip.interaction_id = i.id')
+      .where('ip.entity_id = :entityId', { entityId })
+      .andWhere('ts.created_at > :since', { since })
+      .orderBy('ts.start_time', 'DESC')
+      .take(30)
+      .getMany();
   }
 
   /**
@@ -187,12 +211,13 @@ export class ContextService {
     entity: { id: string; name: string; type: string; organization?: { name: string } | null };
     facts: EntityFact[];
     hotMessages: Message[];
+    hotSegments: TranscriptSegment[];
     warmSummaries: InteractionSummary[];
     profile: EntityRelationshipProfile | null;
     relevantChunks: SearchResult[];
     taskHint?: string;
   }): string {
-    const { entity, facts, hotMessages, warmSummaries, profile, relevantChunks, taskHint } = params;
+    const { entity, facts, hotMessages, hotSegments, warmSummaries, profile, relevantChunks, taskHint } = params;
 
     const sections: string[] = [];
 
@@ -267,6 +292,22 @@ ${summariesSection}`);
 
       sections.push(`\n## HOT: Recent Messages (< 7 дней)
 ${messagesSection}`);
+    }
+
+    // HOT: Recent Call Transcripts
+    if (hotSegments.length > 0) {
+      const segmentsSection = hotSegments
+        .slice(0, 15)
+        .reverse()
+        .map(s => {
+          const timestamp = s.createdAt.toISOString().split('T')[0];
+          const speaker = s.speakerLabel === 'self' ? 'Я' : entity.name;
+          return `[${timestamp}] ${speaker}: ${(s.content || '').slice(0, 200)}`;
+        })
+        .join('\n');
+
+      sections.push(`\n## HOT: Recent Call Transcripts (< 7 дней)
+${segmentsSection}`);
     }
 
     // RELEVANT: Task-related chunks

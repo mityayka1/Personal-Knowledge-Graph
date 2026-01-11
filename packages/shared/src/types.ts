@@ -91,6 +91,7 @@ export interface ContextResponse {
   tokenCount: number;
   sources: {
     hotMessagesCount: number;
+    hotSegmentsCount: number;
     warmSummariesCount: number;
     coldDecisionsCount: number;
     relevantChunksCount: number;

@@ -4,8 +4,6 @@ import { Repository, IsNull } from 'typeorm';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import * as fs from 'fs';
-import * as path from 'path';
 import {
   EntityRelationshipProfile,
   InteractionSummary,
@@ -18,6 +16,7 @@ import {
   OpenActionItem,
 } from '@pkg/entities';
 import { ClaudeCliService } from '../claude-cli/claude-cli.service';
+import { SchemaLoaderService } from '../claude-cli/schema-loader.service';
 
 // Result from Claude CLI profile aggregation
 interface ProfileAggregationResult {
@@ -65,19 +64,11 @@ export class EntityProfileService {
     @InjectRepository(EntityFact)
     private factRepo: Repository<EntityFact>,
     private claudeCliService: ClaudeCliService,
+    private schemaLoader: SchemaLoaderService,
     @InjectQueue('entity-profile')
     private profileQueue: Queue,
   ) {
-    // Load schema from file
-    const schemaPath = path.join(
-      process.cwd(), '..', '..', 'claude-workspace', 'schemas', 'profile-schema.json'
-    );
-    try {
-      this.schema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
-    } catch {
-      this.logger.warn('Could not load profile schema from file, using inline schema');
-      this.schema = this.getInlineSchema();
-    }
+    this.schema = this.schemaLoader.load('profile', this.getInlineSchema());
   }
 
   /**
@@ -99,6 +90,7 @@ export class EntityProfileService {
       .innerJoin('interactions', 'i', 'i.id = ip.interaction_id')
       .innerJoin('interaction_summaries', 's', 's.interaction_id = i.id')
       .where('i.ended_at < :cutoff', { cutoff: cutoffDate })
+      // NOTE: PostgreSQL-specific INTERVAL syntax. This project is PostgreSQL-only (see ARCHITECTURE.md)
       .andWhere(`(
         NOT EXISTS (
           SELECT 1 FROM entity_relationship_profiles p WHERE p.entity_id = e.id
@@ -203,9 +195,25 @@ export class EntityProfileService {
     let profile = await this.profileRepo.findOne({ where: { entityId } });
 
     if (profile) {
-      // Update existing profile (exclude entity relation for update query)
-      const { entity: _, ...updateData } = profileData as EntityRelationshipProfile;
-      await this.profileRepo.update(profile.id, updateData);
+      // Update existing profile with explicitly selected fields
+      await this.profileRepo.update(profile.id, {
+        relationshipType: profileData.relationshipType,
+        communicationFrequency: profileData.communicationFrequency,
+        relationshipSummary: profileData.relationshipSummary,
+        relationshipTimeline: profileData.relationshipTimeline,
+        firstInteractionDate: profileData.firstInteractionDate,
+        lastMeaningfulContact: profileData.lastMeaningfulContact,
+        totalInteractions: profileData.totalInteractions,
+        totalMessages: profileData.totalMessages,
+        topTopics: profileData.topTopics,
+        milestones: profileData.milestones,
+        keyDecisions: profileData.keyDecisions,
+        openActionItems: profileData.openActionItems,
+        summarizedInteractionsCount: profileData.summarizedInteractionsCount,
+        coverageStart: profileData.coverageStart,
+        coverageEnd: profileData.coverageEnd,
+        modelVersion: profileData.modelVersion,
+      });
       profile = await this.profileRepo.findOne({ where: { id: profile.id } });
     } else {
       profile = await this.profileRepo.save(this.profileRepo.create(profileData as EntityRelationshipProfile));

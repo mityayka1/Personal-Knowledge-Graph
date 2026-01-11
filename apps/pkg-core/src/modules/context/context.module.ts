@@ -5,6 +5,7 @@ import {
   InteractionSummary,
   EntityRelationshipProfile,
   EntityFact,
+  TranscriptSegment,
 } from '@pkg/entities';
 import { ContextController } from './context.controller';
 import { ContextService } from './context.service';
@@ -21,6 +22,7 @@ import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
       InteractionSummary,
       EntityRelationshipProfile,
       EntityFact,
+      TranscriptSegment,
     ]),
     EntityModule,
     forwardRef(() => InteractionModule),
