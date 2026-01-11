@@ -14,6 +14,6 @@ import { EmbeddingModule } from '../embedding/embedding.module';
   ],
   controllers: [SearchController],
   providers: [SearchService, FtsService, VectorService],
-  exports: [SearchService],
+  exports: [SearchService, VectorService],
 })
 export class SearchModule {}

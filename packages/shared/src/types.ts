@@ -75,14 +75,26 @@ export interface ContextRequest {
   includeRecentDays?: number;
 }
 
+// Synthesized context from Claude
+export interface SynthesizedContext {
+  currentStatus: string;
+  recentContext: string[];
+  keyFacts: string[];
+  recommendations: string[];
+}
+
 export interface ContextResponse {
   entityId: string;
   entityName: string;
   contextMarkdown: string;
+  synthesizedContext?: SynthesizedContext;
   tokenCount: number;
   sources: {
-    interactionsUsed: number;
-    messagesAnalyzed: number;
+    hotMessagesCount: number;
+    hotSegmentsCount: number;
+    warmSummariesCount: number;
+    coldDecisionsCount: number;
+    relevantChunksCount: number;
     factsIncluded: number;
   };
   generatedAt: string;

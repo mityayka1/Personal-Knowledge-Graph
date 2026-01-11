@@ -1,30 +1,47 @@
-# PKG Fact Extraction Workspace
+# PKG AI Tasks Workspace
 
-This workspace is used by PKG Core service for automated fact extraction via Claude CLI.
+Окружение для выполнения AI-задач проекта PKG (Personal Knowledge Graph).
 
-## Purpose
+## Контекст
 
-Extract structured facts from text messages about people and organizations.
+PKG — система для интеллектуального хранения и извлечения контекста взаимодействий с людьми и организациями.
 
-## Available Agents
+**Цель:** Перед любым взаимодействием получить компактный, релевантный контекст: кто это, о чём договаривались, какие открытые вопросы.
 
-- `fact-extractor` - Extracts facts from messages in JSON format
+## Задачи выполняются через Claude CLI
 
-## Usage
+Все AI-задачи в PKG выполняются программно через Claude CLI с structured output.
 
-This directory is used programmatically by `FactExtractionService` in PKG Core.
-Claude CLI is called with `--print --model haiku` for cost-efficient extraction.
+## Доступные агенты
 
-## Output Format
+| Агент | Описание | Модель |
+|-------|----------|--------|
+| `fact-extractor` | Извлечение структурированных фактов из сообщений | haiku |
+| `summarizer` | Создание структурированных резюме переписок | sonnet |
+| `profile-aggregator` | Агрегация профиля отношений из summaries | sonnet |
+| `context-synthesizer` | Синтез контекста для подготовки к общению | sonnet |
 
-All responses must be valid JSON arrays:
-```json
-[
-  {
-    "factType": "position",
-    "value": "CEO",
-    "confidence": 0.9,
-    "sourceQuote": "exact quote from text"
-  }
-]
-```
+## Общие правила
+
+1. Возвращать только JSON согласно переданной схеме
+2. Не выдумывать факты — только явно указанные в тексте
+3. Русский язык для русскоязычного контента
+4. Краткость и точность
+5. При отсутствии данных — пустые массивы/null
+
+## Структура схем
+
+JSON Schema файлы находятся в директории `schemas/`:
+- `facts-schema.json` — для извлечения фактов
+- `summarization-schema.json` — для резюме переписок
+- `profile-schema.json` — для профилей отношений
+- `context-schema.json` — для синтеза контекста
+
+## Использование
+
+Этот workspace используется программно через `ClaudeCliService` в PKG Core.
+Claude CLI вызывается с параметрами:
+- `--print` — неинтерактивный режим
+- `--output-format json` — JSON вывод
+- `--json-schema` — схема для structured output
+- `--model haiku|sonnet` — модель в зависимости от задачи

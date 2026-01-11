@@ -18,6 +18,7 @@ import {
   getEventTypeInfo,
   useCompleteEvent,
 } from '~/composables/useEntityEvents';
+import CostWidget from '~/components/claude-cli/CostWidget.vue';
 
 definePageMeta({
   title: 'Главная',
@@ -147,7 +148,7 @@ async function handleComplete(eventId: string) {
 
     <!-- Group Memberships -->
     <h2 class="text-xl font-semibold mb-4">Членство в группах</h2>
-    <div class="grid gap-4 md:grid-cols-4">
+    <div class="grid gap-4 md:grid-cols-4 mb-8">
       <Card>
         <CardHeader class="pb-2">
           <CardTitle class="text-sm font-medium">Всего записей</CardTitle>
@@ -183,6 +184,12 @@ async function handleComplete(eventId: string) {
           <div class="text-2xl font-bold">{{ membershipStats?.uniqueUsers ?? 0 }}</div>
         </CardContent>
       </Card>
+    </div>
+
+    <!-- Claude CLI Costs -->
+    <h2 class="text-xl font-semibold mb-4">AI затраты</h2>
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mb-8">
+      <CostWidget />
     </div>
 
     <!-- Entity Events -->

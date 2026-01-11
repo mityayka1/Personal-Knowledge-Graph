@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "currentStatus": {
+      "type": "string",
+      "minLength": 10,
+      "description": "1-2 предложения о текущем статусе отношений"
+    },
+    "recentContext": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Актуальные темы, открытые вопросы, незавершённые договорённости"
+    },
+    "keyFacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ключевые факты для запоминания"
+    },
+    "recommendations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Рекомендации для общения (если есть task_hint)"
+    }
+  },
+  "required": ["currentStatus", "recentContext", "keyFacts", "recommendations"]
+}

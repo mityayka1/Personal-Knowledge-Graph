@@ -16,6 +16,8 @@ import {
   ChatCategoryRecord,
   GroupMembership,
   EntityEvent,
+  EntityRelationshipProfile,
+  ClaudeCliRun,
 } from '@pkg/entities';
 
 export default registerAs('database', (): TypeOrmModuleOptions => {
@@ -59,6 +61,8 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       ChatCategoryRecord,
       GroupMembership,
       EntityEvent,
+      EntityRelationshipProfile,
+      ClaudeCliRun,
     ],
 
     // Synchronize only for tests (creates tables automatically)

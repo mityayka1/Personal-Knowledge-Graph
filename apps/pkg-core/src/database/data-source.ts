@@ -27,6 +27,8 @@ import {
   ChatCategoryRecord,
   GroupMembership,
   EntityEvent,
+  EntityRelationshipProfile,
+  ClaudeCliRun,
 } from '@pkg/entities';
 
 // Database configuration for TypeORM CLI
@@ -68,6 +70,8 @@ export const dataSourceOptions: DataSourceOptions = {
     ChatCategoryRecord,
     GroupMembership,
     EntityEvent,
+    EntityRelationshipProfile,
+    ClaudeCliRun,
   ],
 
   // Migrations
