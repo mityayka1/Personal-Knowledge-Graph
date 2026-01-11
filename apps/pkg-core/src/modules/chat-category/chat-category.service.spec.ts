@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
 import { ChatCategoryRecord, ChatCategory } from '@pkg/entities';
 import { ChatCategoryService } from './chat-category.service';
 import { SettingsService } from '../settings/settings.service';
@@ -21,6 +23,14 @@ describe('ChatCategoryService', () => {
     getValue: jest.fn(),
   };
 
+  const mockHttpService = {
+    get: jest.fn(),
+  };
+
+  const mockConfigService = {
+    get: jest.fn().mockReturnValue('http://localhost:3001'),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -32,6 +42,14 @@ describe('ChatCategoryService', () => {
         {
           provide: SettingsService,
           useValue: mockSettingsService,
+        },
+        {
+          provide: HttpService,
+          useValue: mockHttpService,
+        },
+        {
+          provide: ConfigService,
+          useValue: mockConfigService,
         },
       ],
     }).compile();
@@ -282,6 +300,102 @@ describe('ChatCategoryService', () => {
       const result = await service.updateParticipantsCount('chat-123', 15);
 
       expect(result?.category).toBe(ChatCategory.WORKING);
+    });
+
+    it('should NOT recategorize when isManualOverride is true', async () => {
+      const existingRecord = {
+        id: '123',
+        telegramChatId: 'chat-123',
+        category: ChatCategory.PERSONAL,
+        participantsCount: 5,
+        autoExtractionEnabled: true,
+        isManualOverride: true,
+      };
+      mockRepo.findOne.mockResolvedValue(existingRecord);
+      mockRepo.save.mockResolvedValue(existingRecord);
+
+      // Try to update with count that would normally trigger MASS category
+      const result = await service.updateParticipantsCount('chat-123', 100);
+
+      // Category should remain PERSONAL because isManualOverride = true
+      expect(result?.category).toBe(ChatCategory.PERSONAL);
+      expect(existingRecord.category).toBe(ChatCategory.PERSONAL);
+      expect(existingRecord.participantsCount).toBe(100); // Count still updated
+    });
+  });
+
+  describe('updateCategory (manual override)', () => {
+    it('should update category and set isManualOverride to true', async () => {
+      const existingRecord = {
+        id: '123',
+        telegramChatId: 'chat-123',
+        category: ChatCategory.MASS,
+        participantsCount: 100,
+        autoExtractionEnabled: false,
+        isManualOverride: false,
+      };
+      mockRepo.findOne.mockResolvedValue(existingRecord);
+      mockRepo.save.mockImplementation((record) => Promise.resolve(record));
+
+      const result = await service.updateCategory('chat-123', ChatCategory.PERSONAL);
+
+      expect(result.category).toBe(ChatCategory.PERSONAL);
+      expect(result.isManualOverride).toBe(true);
+      expect(mockRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: ChatCategory.PERSONAL,
+          isManualOverride: true,
+        }),
+      );
+    });
+
+    it('should create new record with isManualOverride = true if chat not exists', async () => {
+      mockRepo.findOne.mockResolvedValue(null);
+      mockRepo.create.mockImplementation((data) => ({
+        id: 'new-id',
+        ...data,
+      }));
+      mockRepo.save.mockImplementation((record) => Promise.resolve(record));
+
+      const result = await service.updateCategory('new-chat', ChatCategory.WORKING);
+
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          telegramChatId: 'new-chat',
+          category: ChatCategory.WORKING,
+          isManualOverride: true,
+        }),
+      );
+      expect(result.isManualOverride).toBe(true);
+    });
+  });
+
+  describe('resetManualOverride', () => {
+    it('should reset isManualOverride to false', async () => {
+      const existingRecord = {
+        id: '123',
+        telegramChatId: 'chat-123',
+        category: ChatCategory.PERSONAL,
+        isManualOverride: true,
+      };
+      mockRepo.findOne.mockResolvedValue(existingRecord);
+      mockRepo.save.mockImplementation((record) => Promise.resolve(record));
+
+      const result = await service.resetManualOverride('chat-123');
+
+      expect(result?.isManualOverride).toBe(false);
+      expect(mockRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ isManualOverride: false }),
+      );
+    });
+
+    it('should return null if chat not found', async () => {
+      mockRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.resetManualOverride('unknown-chat');
+
+      expect(result).toBeNull();
+      expect(mockRepo.save).not.toHaveBeenCalled();
     });
   });
 

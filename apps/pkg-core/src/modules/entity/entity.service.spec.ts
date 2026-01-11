@@ -19,6 +19,7 @@ describe('EntityService', () => {
     name: 'John Doe',
     organizationId: null,
     notes: null,
+    isBot: false,
     identifiers: [],
     facts: [],
     createdAt: new Date(),
@@ -161,6 +162,41 @@ describe('EntityService', () => {
       });
 
       expect(identifierService.create).toHaveBeenCalledWith('new-uuid', { type: 'phone', value: '+1234567890' });
+    });
+
+    it('should create entity with isBot: true', async () => {
+      const botEntity = { ...mockEntity, id: 'bot-uuid', isBot: true };
+      mockEntityRepository.create.mockReturnValue(botEntity);
+      mockEntityRepository.save.mockResolvedValue(botEntity);
+      mockEntityRepository.findOne.mockResolvedValue(botEntity);
+
+      const result = await service.create({
+        type: EntityType.PERSON,
+        name: 'Test Bot',
+        isBot: true,
+      });
+
+      expect(result.isBot).toBe(true);
+      expect(entityRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isBot: true }),
+      );
+    });
+
+    it('should default isBot to false when not provided', async () => {
+      const humanEntity = { ...mockEntity, id: 'human-uuid', isBot: false };
+      mockEntityRepository.create.mockReturnValue(humanEntity);
+      mockEntityRepository.save.mockResolvedValue(humanEntity);
+      mockEntityRepository.findOne.mockResolvedValue(humanEntity);
+
+      const result = await service.create({
+        type: EntityType.PERSON,
+        name: 'Human User',
+      });
+
+      expect(result.isBot).toBe(false);
+      expect(entityRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ isBot: false }),
+      );
     });
   });
 

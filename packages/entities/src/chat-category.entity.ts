@@ -34,6 +34,14 @@ export class ChatCategoryRecord {
   @Column({ name: 'is_forum', type: 'boolean', default: false })
   isForum: boolean;
 
+  /**
+   * Indicates if category was manually set by user.
+   * When true, automatic recategorization (e.g., when participants count changes)
+   * will NOT override the manually set category.
+   */
+  @Column({ name: 'is_manual_override', type: 'boolean', default: false })
+  isManualOverride: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

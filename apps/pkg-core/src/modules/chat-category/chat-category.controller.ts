@@ -69,4 +69,17 @@ export class ChatCategoryController {
     }
     return result;
   }
+
+  /**
+   * Reset manual override flag to allow automatic categorization again
+   * DELETE /chat-categories/:telegramChatId/manual-override
+   */
+  @Post(':telegramChatId/reset-override')
+  async resetManualOverride(@Param('telegramChatId') telegramChatId: string) {
+    const result = await this.chatCategoryService.resetManualOverride(telegramChatId);
+    if (!result) {
+      throw new NotFoundException(`Chat not found: ${telegramChatId}`);
+    }
+    return result;
+  }
 }

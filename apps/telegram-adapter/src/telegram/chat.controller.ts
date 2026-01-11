@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { TelegramService } from './telegram.service';
 import { MessageHandlerService } from './message-handler.service';
 import { Api } from 'telegram';
+import { TelegramClient } from 'telegram';
 import bigInt from 'big-integer';
 
 export interface ChatInfoResponse {
@@ -16,6 +17,36 @@ export interface ChatInfoResponse {
   isForum?: boolean;
 }
 
+// ===== Type Guards for Telegram API structures =====
+
+/**
+ * Type guard: Check if message media is a photo with accessible photo object
+ */
+function isPhotoMedia(media: Api.TypeMessageMedia): media is Api.MessageMediaPhoto & { photo: Api.Photo } {
+  return media instanceof Api.MessageMediaPhoto && media.photo instanceof Api.Photo;
+}
+
+/**
+ * Type guard: Check if message media is a document with accessible document object
+ */
+function isDocumentMedia(media: Api.TypeMessageMedia): media is Api.MessageMediaDocument & { document: Api.Document } {
+  return media instanceof Api.MessageMediaDocument && media.document instanceof Api.Document;
+}
+
+/**
+ * Type guard: Check if entity is a Channel with accessHash
+ */
+function isChannelWithAccess(entity: Api.TypeUser | Api.TypeChat): entity is Api.Channel & { accessHash: bigInt.BigInteger } {
+  return entity instanceof Api.Channel && entity.accessHash !== undefined;
+}
+
+/**
+ * Type guard: Check if entity is a User with accessHash
+ */
+function isUserWithAccess(entity: Api.TypeUser | Api.TypeChat): entity is Api.User & { accessHash: bigInt.BigInteger } {
+  return entity instanceof Api.User && entity.accessHash !== undefined;
+}
+
 @Controller('chats')
 export class ChatController {
   private readonly logger = new Logger(ChatController.name);
@@ -26,15 +57,22 @@ export class ChatController {
   ) {}
 
   /**
+   * Get connected Telegram client or throw ServiceUnavailableException
+   */
+  private getConnectedClient(): TelegramClient {
+    const client = this.telegramService.getClient();
+    if (!client || !this.telegramService.isClientConnected()) {
+      throw new ServiceUnavailableException('Telegram client not connected');
+    }
+    return client;
+  }
+
+  /**
    * Get chat info by telegram_chat_id (e.g., channel_1234567890, chat_123456)
    */
   @Get(':chatId/info')
   async getChatInfo(@Param('chatId') chatId: string): Promise<ChatInfoResponse> {
-    const client = this.telegramService.getClient();
-
-    if (!client || !this.telegramService.isClientConnected()) {
-      throw new ServiceUnavailableException('Telegram client not connected');
-    }
+    const client = this.getConnectedClient();
 
     try {
       // Parse chat ID to get raw ID
@@ -169,11 +207,7 @@ export class ChatController {
     @Param('chatId') chatId: string,
     @Param('messageId') messageId: string,
   ) {
-    const client = this.telegramService.getClient();
-
-    if (!client || !this.telegramService.isClientConnected()) {
-      throw new ServiceUnavailableException('Telegram client not connected');
-    }
+    const client = this.getConnectedClient();
 
     try {
       // Parse chat ID
@@ -181,10 +215,16 @@ export class ChatController {
       if (chatId.startsWith('channel_')) {
         const rawId = chatId.replace('channel_', '');
         const entity = await client.getEntity(new Api.PeerChannel({ channelId: bigInt(rawId) }));
-        if (entity instanceof Api.Channel) {
+        if (isChannelWithAccess(entity)) {
           peer = new Api.InputPeerChannel({
             channelId: bigInt(rawId),
-            accessHash: entity.accessHash || bigInt(0),
+            accessHash: entity.accessHash,
+          });
+        } else if (entity instanceof Api.Channel) {
+          // Channel without accessHash - use 0 as fallback
+          peer = new Api.InputPeerChannel({
+            channelId: bigInt(rawId),
+            accessHash: bigInt(0),
           });
         } else {
           throw new NotFoundException('Not a channel');
@@ -194,7 +234,7 @@ export class ChatController {
       }
 
       // Get message
-      const messages = await client.getMessages(peer, { ids: [parseInt(messageId)] });
+      const messages = await client.getMessages(peer, { ids: [parseInt(messageId, 10)] });
       const message = messages[0];
 
       if (!message || !message.media) {
@@ -207,7 +247,7 @@ export class ChatController {
         chatId,
       };
 
-      if (message.media instanceof Api.MessageMediaPhoto && message.media.photo instanceof Api.Photo) {
+      if (isPhotoMedia(message.media)) {
         const photo = message.media.photo;
         mediaInfo.type = 'photo';
         mediaInfo.id = photo.id.toString();
@@ -221,7 +261,7 @@ export class ChatController {
         // Construct file_id for Bot API (simplified - may not work)
         // Real file_id is base64 encoded binary with specific format
         mediaInfo.note = 'Bot API file_id requires different format - testing raw values';
-      } else if (message.media instanceof Api.MessageMediaDocument && message.media.document instanceof Api.Document) {
+      } else if (isDocumentMedia(message.media)) {
         const doc = message.media.document;
         mediaInfo.type = 'document';
         mediaInfo.id = doc.id.toString();
@@ -254,28 +294,24 @@ export class ChatController {
     @Query('thumb') thumb: string = 'false',
     @Res() res: Response,
   ) {
-    const client = this.telegramService.getClient();
-
-    if (!client || !this.telegramService.isClientConnected()) {
-      throw new ServiceUnavailableException('Telegram client not connected');
-    }
+    const client = this.getConnectedClient();
 
     try {
       // Parse chat ID and get peer
       const peer = await this.resolvePeer(client, chatId);
 
       // Get message
-      const messages = await client.getMessages(peer, { ids: [parseInt(messageId)] });
+      const messages = await client.getMessages(peer, { ids: [parseInt(messageId, 10)] });
       const message = messages[0];
 
       if (!message || !message.media) {
         throw new NotFoundException('Message or media not found');
       }
 
-      // Handle different media types
-      if (message.media instanceof Api.MessageMediaPhoto && message.media.photo instanceof Api.Photo) {
+      // Handle different media types using type guards
+      if (isPhotoMedia(message.media)) {
         await this.streamPhoto(client, message.media.photo, size, res);
-      } else if (message.media instanceof Api.MessageMediaDocument && message.media.document instanceof Api.Document) {
+      } else if (isDocumentMedia(message.media)) {
         await this.streamDocument(client, message.media.document, thumb === 'true', res);
       } else {
         throw new NotFoundException('Unsupported media type');
@@ -285,33 +321,52 @@ export class ChatController {
         throw error;
       }
       this.logger.error(`Failed to download media for ${chatId}/${messageId}:`, error);
+
+      // Proper error handling for streaming
       if (!res.headersSent) {
         res.status(500).json({ error: 'Failed to download media' });
+      } else if (!res.writableEnded) {
+        // Headers sent but stream not ended - destroy connection gracefully
+        res.destroy();
       }
+      // If writableEnded - nothing to do, connection already closed
     }
   }
 
   /**
    * Resolve chat ID to InputPeer
+   * @param client - Connected TelegramClient (non-null guaranteed by caller)
    */
-  private async resolvePeer(client: ReturnType<typeof this.telegramService.getClient>, chatId: string): Promise<Api.TypeInputPeer> {
+  private async resolvePeer(client: TelegramClient, chatId: string): Promise<Api.TypeInputPeer> {
     if (chatId.startsWith('channel_')) {
       const rawId = chatId.replace('channel_', '');
-      const entity = await client!.getEntity(new Api.PeerChannel({ channelId: bigInt(rawId) }));
-      if (entity instanceof Api.Channel) {
+      const entity = await client.getEntity(new Api.PeerChannel({ channelId: bigInt(rawId) }));
+      if (isChannelWithAccess(entity)) {
         return new Api.InputPeerChannel({
           channelId: bigInt(rawId),
-          accessHash: entity.accessHash || bigInt(0),
+          accessHash: entity.accessHash,
+        });
+      } else if (entity instanceof Api.Channel) {
+        // Fallback for channel without accessHash
+        return new Api.InputPeerChannel({
+          channelId: bigInt(rawId),
+          accessHash: bigInt(0),
         });
       }
       throw new NotFoundException('Not a channel');
     } else if (chatId.startsWith('user_')) {
       const rawId = chatId.replace('user_', '');
-      const entity = await client!.getEntity(new Api.PeerUser({ userId: bigInt(rawId) }));
-      if (entity instanceof Api.User) {
+      const entity = await client.getEntity(new Api.PeerUser({ userId: bigInt(rawId) }));
+      if (isUserWithAccess(entity)) {
         return new Api.InputPeerUser({
           userId: bigInt(rawId),
-          accessHash: entity.accessHash || bigInt(0),
+          accessHash: entity.accessHash,
+        });
+      } else if (entity instanceof Api.User) {
+        // Fallback for user without accessHash
+        return new Api.InputPeerUser({
+          userId: bigInt(rawId),
+          accessHash: bigInt(0),
         });
       }
       throw new NotFoundException('Not a user');
@@ -324,9 +379,10 @@ export class ChatController {
 
   /**
    * Stream photo with specified size
+   * @param client - Connected TelegramClient (non-null guaranteed by caller)
    */
   private async streamPhoto(
-    client: ReturnType<typeof this.telegramService.getClient>,
+    client: TelegramClient,
     photo: Api.Photo,
     size: string,
     res: Response,
@@ -348,21 +404,34 @@ export class ChatController {
       thumbSize: targetSize.type,
     });
 
-    for await (const chunk of client!.iterDownload({
-      file: inputLocation,
-      requestSize: 256 * 1024,
-    })) {
-      res.write(chunk);
+    try {
+      for await (const chunk of client.iterDownload({
+        file: inputLocation,
+        requestSize: 256 * 1024,
+      })) {
+        // Check if client disconnected
+        if (res.writableEnded || res.destroyed) {
+          this.logger.warn('Client disconnected during photo streaming');
+          return;
+        }
+        res.write(chunk);
+      }
+      res.end();
+    } catch (error) {
+      this.logger.error('Error during photo streaming:', error);
+      if (!res.writableEnded) {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw error;
     }
-
-    res.end();
   }
 
   /**
    * Stream document (video, audio, voice, file)
+   * @param client - Connected TelegramClient (non-null guaranteed by caller)
    */
   private async streamDocument(
-    client: ReturnType<typeof this.telegramService.getClient>,
+    client: TelegramClient,
     doc: Api.Document,
     thumbnail: boolean,
     res: Response,
@@ -382,14 +451,25 @@ export class ChatController {
           thumbSize: thumb.type,
         });
 
-        for await (const chunk of client!.iterDownload({
-          file: inputLocation,
-          requestSize: 256 * 1024,
-        })) {
-          res.write(chunk);
+        try {
+          for await (const chunk of client.iterDownload({
+            file: inputLocation,
+            requestSize: 256 * 1024,
+          })) {
+            if (res.writableEnded || res.destroyed) {
+              this.logger.warn('Client disconnected during thumbnail streaming');
+              return;
+            }
+            res.write(chunk);
+          }
+          res.end();
+        } catch (error) {
+          this.logger.error('Error during thumbnail streaming:', error);
+          if (!res.writableEnded) {
+            res.destroy(error instanceof Error ? error : new Error(String(error)));
+          }
+          throw error;
         }
-
-        res.end();
         return;
       }
     }
@@ -414,13 +494,24 @@ export class ChatController {
       thumbSize: '',
     });
 
-    for await (const chunk of client!.iterDownload({
-      file: inputLocation,
-      requestSize: 512 * 1024,
-    })) {
-      res.write(chunk);
+    try {
+      for await (const chunk of client.iterDownload({
+        file: inputLocation,
+        requestSize: 512 * 1024,
+      })) {
+        if (res.writableEnded || res.destroyed) {
+          this.logger.warn('Client disconnected during document streaming');
+          return;
+        }
+        res.write(chunk);
+      }
+      res.end();
+    } catch (error) {
+      this.logger.error('Error during document streaming:', error);
+      if (!res.writableEnded) {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw error;
     }
-
-    res.end();
   }
 }

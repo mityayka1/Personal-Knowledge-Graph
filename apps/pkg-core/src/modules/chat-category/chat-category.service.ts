@@ -140,7 +140,8 @@ export class ChatCategoryService {
   }
 
   /**
-   * Update participants count and recategorize if needed
+   * Update participants count and recategorize if needed.
+   * NOTE: Will NOT recategorize if isManualOverride is true.
    */
   async updateParticipantsCount(
     telegramChatId: string,
@@ -157,8 +158,9 @@ export class ChatCategoryService {
     // Update count
     existing.participantsCount = participantsCount;
 
-    // Check if category should change (only for non-personal chats)
-    if (existing.category !== ChatCategory.PERSONAL) {
+    // Check if category should change (only for non-personal chats and non-manual overrides)
+    // IMPORTANT: Skip recategorization if user manually set the category
+    if (existing.category !== ChatCategory.PERSONAL && !existing.isManualOverride) {
       const threshold = await this.getWorkingGroupThreshold();
       const newCategory = participantsCount <= threshold
         ? ChatCategory.WORKING
@@ -170,6 +172,10 @@ export class ChatCategoryService {
         );
         existing.category = newCategory;
       }
+    } else if (existing.isManualOverride) {
+      this.logger.debug(
+        `Skipping auto-recategorization for ${telegramChatId} - manual override is set`,
+      );
     }
 
     await this.chatCategoryRepo.save(existing);
@@ -191,7 +197,8 @@ export class ChatCategoryService {
   }
 
   /**
-   * Manually update category for a chat
+   * Manually update category for a chat.
+   * Sets isManualOverride = true to prevent automatic recategorization.
    * Used to override automatic categorization (e.g., mark small group as PERSONAL instead of WORKING)
    */
   async updateCategory(
@@ -207,15 +214,35 @@ export class ChatCategoryService {
       record = this.chatCategoryRepo.create({
         telegramChatId,
         category,
+        isManualOverride: true, // Mark as manually set
       });
     } else {
       // Update existing record
       const oldCategory = record.category;
       record.category = category;
+      record.isManualOverride = true; // Protect from auto-recategorization
       this.logger.log(
-        `Manual category change for ${telegramChatId}: ${oldCategory} -> ${category}`,
+        `Manual category change for ${telegramChatId}: ${oldCategory} -> ${category} (manual override set)`,
       );
     }
+
+    return this.chatCategoryRepo.save(record);
+  }
+
+  /**
+   * Reset manual override and allow automatic categorization again
+   */
+  async resetManualOverride(telegramChatId: string): Promise<ChatCategoryRecord | null> {
+    const record = await this.chatCategoryRepo.findOne({
+      where: { telegramChatId },
+    });
+
+    if (!record) {
+      return null;
+    }
+
+    record.isManualOverride = false;
+    this.logger.log(`Manual override reset for ${telegramChatId}`);
 
     return this.chatCategoryRepo.save(record);
   }

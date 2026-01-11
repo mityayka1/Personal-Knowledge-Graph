@@ -303,6 +303,7 @@
     "id": "entity-uuid",
     "type": "person",
     "name": "Иван Петров",
+    "isBot": false,
     "organization": { "id": "org-uuid", "name": "ООО Рога и Копыта" },
     "last_interaction_at": "2025-01-07T15:30:00Z",
     "interaction_count": 42
@@ -325,6 +326,7 @@
   "id": "entity-uuid",
   "type": "person",
   "name": "Иван Петров",
+  "isBot": false,
   "organization": { "id": "org-uuid", "name": "ООО Рога и Копыта" },
   "notes": "Технический директор",
   "identifiers": [
@@ -623,11 +625,34 @@
   "title": "Рабочая группа",
   "participantsCount": 15,
   "autoExtractionEnabled": true,
+  "isManualOverride": true,
   "updatedAt": "2025-01-07T16:00:00Z"
 }
 ```
 
-**Примечание:** При изменении категории существующие Entity не удаляются. Изменение влияет только на обработку новых сообщений.
+**Примечание:**
+- При изменении категории существующие Entity не удаляются
+- Изменение влияет только на обработку новых сообщений
+- Устанавливается флаг `isManualOverride: true`, который предотвращает автоматическую перекатегоризацию при изменении числа участников
+
+---
+
+### POST /chat-categories/{telegramChatId}/reset-override
+
+Сброс флага ручного переопределения. После сброса категория будет автоматически обновляться при изменении числа участников.
+
+**Response 200:**
+```json
+{
+  "id": "uuid",
+  "telegramChatId": "channel_1234567890",
+  "category": "working",
+  "isManualOverride": false,
+  "updatedAt": "2025-01-07T16:00:00Z"
+}
+```
+
+**Response 404:** Чат не найден
 
 ---
 
@@ -650,13 +675,15 @@
 
 ---
 
-## Media Download API (Telegram Adapter)
+## Media Proxy API (PKG Core)
 
-**Base URL:** `http://telegram-adapter:3001/api/v1`
+**Base URL:** `http://pkg-core:3000/api/v1`
 
-### GET /chats/{chatId}/messages/{messageId}/download
+> **Архитектурное примечание:** Все клиенты (Dashboard, мобильное приложение и т.д.) должны получать медиа через PKG Core, а не напрямую через Telegram Adapter. Это обеспечивает source-agnostic архитектуру.
 
-Стриминг медиа-файла из Telegram через MTProto.
+### GET /media/{chatId}/{messageId}
+
+Стриминг медиа-файла. PKG Core проксирует запрос к Telegram Adapter.
 
 **Parameters:**
 - `chatId` — ID чата (channel_xxx, user_xxx, chat_xxx)
@@ -677,14 +704,53 @@
 
 **Пример:**
 ```
-GET /chats/channel_1234567890/messages/999/download?size=x
+GET /api/v1/media/channel_1234567890/999?size=x
 → JPEG image stream
 
-GET /chats/user_87654321/messages/1000/download?thumb=true
+GET /api/v1/media/user_87654321/1000?thumb=true
 → Video thumbnail JPEG stream
 ```
 
-**Примечание:** Dashboard проксирует этот endpoint через `/api/telegram/media/{chatId}/{messageId}`.
+---
+
+### GET /media/chat/{chatId}/info
+
+Получение информации о чате из Telegram (title, participantsCount, isForum).
+
+**Response 200:**
+```json
+{
+  "title": "Название чата",
+  "participantsCount": 15,
+  "isForum": false
+}
+```
+
+---
+
+## Media Download API (Telegram Adapter) — Internal
+
+**Base URL:** `http://telegram-adapter:3001/api/v1`
+
+> ⚠️ **ВАЖНО:** Это внутренний API. Клиенты должны использовать Media Proxy API в PKG Core, а не обращаться к Telegram Adapter напрямую.
+
+### GET /chats/{chatId}/messages/{messageId}/download
+
+Стриминг медиа-файла из Telegram через MTProto.
+
+**Parameters:**
+- `chatId` — ID чата (channel_xxx, user_xxx, chat_xxx)
+- `messageId` — source_message_id сообщения
+
+**Query:**
+- `size` — размер фото: `s` (small), `m` (medium), `x` (large). По умолчанию: `x`
+- `thumb` — `true` для получения превью документа/видео
+
+**Response 200:**
+- `Content-Type`: соответствует типу файла (image/jpeg, video/mp4, audio/ogg, etc.)
+- `Content-Length`: размер файла в байтах
+- `Content-Disposition`: для документов с filename
+- Body: бинарные данные файла (streaming)
 
 ---
 
