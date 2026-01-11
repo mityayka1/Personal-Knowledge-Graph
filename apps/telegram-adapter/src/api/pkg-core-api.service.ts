@@ -49,6 +49,17 @@ interface HealthResponse {
   };
 }
 
+export interface ChatStats {
+  telegramChatId: string;
+  lastMessageId: string | null;
+  lastMessageTimestamp: string | null;
+  messageCount: number;
+}
+
+export interface ChatStatsResponse {
+  chats: ChatStats[];
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -93,6 +104,15 @@ export class PkgCoreApiService {
     return this.withRetry(async () => {
       await this.client.post('/group-memberships/change', payload);
     });
+  }
+
+  /**
+   * Get statistics for all Telegram chats (for import optimization).
+   * Returns telegram_chat_id, last message info, and message count.
+   */
+  async getChatStats(): Promise<ChatStatsResponse> {
+    const response = await this.client.get<ChatStatsResponse>('/interactions/chat-stats');
+    return response.data;
   }
 
   private async withRetry<T>(operation: () => Promise<T>): Promise<T> {

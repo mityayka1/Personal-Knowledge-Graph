@@ -3,7 +3,19 @@ import { TelegramService } from './telegram.service';
 import { HistoryImportService, ImportProgress } from './history-import.service';
 
 interface StartImportDto {
+  /**
+   * @deprecated This parameter is ignored. Use environment variables instead:
+   * - IMPORT_GROUP_LIMIT (default: 1000) - messages per group chat
+   * - IMPORT_TOPIC_LIMIT (default: 1000) - messages per forum topic
+   * Private chats have no limit (full history is imported).
+   */
   limitPerDialog?: number;
+  /** If true, import only private chats (personal dialogs) */
+  privateOnly?: boolean;
+  /** If true, skip dialogs that already have messages in PKG Core (takes precedence over incrementalOnly) */
+  skipExisting?: boolean;
+  /** If true, only import new messages (using minId from existing data). Does not apply to forums. */
+  incrementalOnly?: boolean;
 }
 
 interface ReimportChatDto {
@@ -47,7 +59,11 @@ export class HistoryImportController {
     // IMPORT_GROUP_LIMIT (default: 1000) - messages per group chat
     // IMPORT_TOPIC_LIMIT (default: 1000) - messages per forum topic
     this.historyImportService
-      .startImport(client)
+      .startImport(client, {
+        privateOnly: dto.privateOnly,
+        skipExisting: dto.skipExisting,
+        incrementalOnly: dto.incrementalOnly,
+      })
       .catch((error) => {
         console.error('Import error:', error);
       });
