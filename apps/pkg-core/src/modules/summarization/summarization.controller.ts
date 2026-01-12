@@ -50,8 +50,15 @@ export interface QueueStatus {
   delayed: number;
 }
 
-interface TriggerSummarizationDto {
-  interactionId: string;
+/**
+ * Helper function to safely parse numeric metrics from database results
+ */
+function parseNumericMetric(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const num = Number(value);
+  return Number.isNaN(num) ? null : Math.round(num * 100) / 100;
 }
 
 interface SummarizationStatusResponse {
@@ -94,69 +101,84 @@ export class SummarizationController {
    */
   @Get('stats')
   async getStats(): Promise<SummarizationMetrics> {
-    // Total completed interactions (excluding bot interactions)
-    const totalInteractions = await this.interactionRepo
-      .createQueryBuilder('i')
-      .where('i.status = :status', { status: 'completed' })
-      .andWhere(`NOT EXISTS (
-        SELECT 1 FROM interaction_participants ip
-        INNER JOIN entities e ON e.id = ip.entity_id
-        WHERE ip.interaction_id = i.id AND e.is_bot = true
-      )`)
-      .getCount();
+    // Bot exclusion subquery (reusable)
+    const botExclusionSubquery = `NOT EXISTS (
+      SELECT 1 FROM interaction_participants ip
+      INNER JOIN entities e ON e.id = ip.entity_id
+      WHERE ip.interaction_id = i.id AND e.is_bot = true
+    )`;
 
-    // Summarized interactions
-    const summarizedInteractions = await this.summaryRepo.count();
+    // Execute all independent queries in parallel for better performance
+    const [
+      totalInteractions,
+      summarizedInteractions,
+      pendingInQueue,
+      oldestUnsummarized,
+      compressionResult,
+      keyPointsResult,
+      decisionsResult,
+      openActionItemsResult,
+    ] = await Promise.all([
+      // Total completed interactions (excluding bot interactions)
+      this.interactionRepo
+        .createQueryBuilder('i')
+        .where('i.status = :status', { status: 'completed' })
+        .andWhere(botExclusionSubquery)
+        .getCount(),
+
+      // Summarized interactions (excluding those for interactions with bot participants)
+      this.summaryRepo
+        .createQueryBuilder('s')
+        .innerJoin('interactions', 'i', 'i.id = s.interaction_id')
+        .andWhere(botExclusionSubquery)
+        .getCount(),
+
+      // Pending in queue
+      this.summarizationQueue.getWaitingCount(),
+
+      // Oldest unsummarized interaction
+      this.interactionRepo
+        .createQueryBuilder('i')
+        .where('i.status = :status', { status: 'completed' })
+        .andWhere(`NOT EXISTS (
+          SELECT 1 FROM interaction_summaries s WHERE s.interaction_id = i.id
+        )`)
+        .andWhere(botExclusionSubquery)
+        .orderBy('i.ended_at', 'ASC')
+        .getOne(),
+
+      // Average compression ratio
+      this.summaryRepo
+        .createQueryBuilder('s')
+        .select('AVG(s.compression_ratio)', 'avg')
+        .where('s.compression_ratio IS NOT NULL')
+        .getRawOne(),
+
+      // Average key points per summary
+      this.summaryRepo
+        .createQueryBuilder('s')
+        .select('AVG(jsonb_array_length(s.key_points))', 'avg')
+        .getRawOne(),
+
+      // Average decisions per summary
+      this.summaryRepo
+        .createQueryBuilder('s')
+        .select('AVG(jsonb_array_length(s.decisions))', 'avg')
+        .getRawOne(),
+
+      // Total open action items across all summaries (using CROSS JOIN LATERAL for clarity)
+      this.summaryRepo.query(`
+        SELECT COUNT(*) AS count
+        FROM interaction_summaries s
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.action_items, '[]'::jsonb)) AS item
+        WHERE item->>'status' = 'open'
+      `),
+    ]);
 
     // Coverage percentage
     const summarizationCoverage = totalInteractions > 0
       ? Math.round((summarizedInteractions / totalInteractions) * 100 * 10) / 10
       : 0;
-
-    // Pending in queue
-    const pendingInQueue = await this.summarizationQueue.getWaitingCount();
-
-    // Oldest unsummarized interaction
-    const oldestUnsummarized = await this.interactionRepo
-      .createQueryBuilder('i')
-      .where('i.status = :status', { status: 'completed' })
-      .andWhere(`NOT EXISTS (
-        SELECT 1 FROM interaction_summaries s WHERE s.interaction_id = i.id
-      )`)
-      .andWhere(`NOT EXISTS (
-        SELECT 1 FROM interaction_participants ip
-        INNER JOIN entities e ON e.id = ip.entity_id
-        WHERE ip.interaction_id = i.id AND e.is_bot = true
-      )`)
-      .orderBy('i.ended_at', 'ASC')
-      .getOne();
-
-    // Average compression ratio
-    const compressionResult = await this.summaryRepo
-      .createQueryBuilder('s')
-      .select('AVG(s.compression_ratio)', 'avg')
-      .where('s.compression_ratio IS NOT NULL')
-      .getRawOne();
-
-    // Average key points per summary
-    const keyPointsResult = await this.summaryRepo
-      .createQueryBuilder('s')
-      .select('AVG(jsonb_array_length(s.key_points))', 'avg')
-      .getRawOne();
-
-    // Average decisions per summary
-    const decisionsResult = await this.summaryRepo
-      .createQueryBuilder('s')
-      .select('AVG(jsonb_array_length(s.decisions))', 'avg')
-      .getRawOne();
-
-    // Total open action items across all summaries
-    const openActionItemsResult = await this.summaryRepo.query(`
-      SELECT COUNT(*) as count
-      FROM interaction_summaries s,
-           jsonb_array_elements(s.action_items) as item
-      WHERE item->>'status' = 'open'
-    `);
 
     return {
       totalInteractions,
@@ -164,9 +186,9 @@ export class SummarizationController {
       summarizationCoverage,
       pendingInQueue,
       oldestUnsummarized: oldestUnsummarized?.endedAt?.toISOString() || null,
-      avgCompressionRatio: compressionResult?.avg ? Number(compressionResult.avg) : null,
-      avgKeyPointsPerSummary: keyPointsResult?.avg ? Number(keyPointsResult.avg) : null,
-      avgDecisionsPerSummary: decisionsResult?.avg ? Number(decisionsResult.avg) : null,
+      avgCompressionRatio: parseNumericMetric(compressionResult?.avg),
+      avgKeyPointsPerSummary: parseNumericMetric(keyPointsResult?.avg),
+      avgDecisionsPerSummary: parseNumericMetric(decisionsResult?.avg),
       totalOpenActionItems: Number(openActionItemsResult?.[0]?.count || 0),
     };
   }
