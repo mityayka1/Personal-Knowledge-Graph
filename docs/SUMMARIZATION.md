@@ -1802,35 +1802,37 @@ export class SummarizationController {
 
 ## 7. Checklist для реализации
 
-### Фаза 1: Data Model (День 1)
-- [ ] Создать `InteractionSummary` entity
-- [ ] Создать `EntityRelationshipProfile` entity
-- [ ] Добавить поля в `Message` entity
-- [ ] Написать и выполнить миграцию
-- [ ] Добавить entities в TypeORM config
+> **Статус: ✅ ЗАВЕРШЕНО** (12.01.2026)
 
-### Фаза 2: Summarization Service (Дни 2-3)
-- [ ] Создать `SummarizationService`
-- [ ] Реализовать `scoreMessages()` эвристики
-- [ ] Реализовать prompt building
-- [ ] Настроить BullMQ queue
-- [ ] Добавить cron job
-- [ ] Реализовать backfill endpoint
+### Фаза 1: Data Model (День 1) ✅
+- [x] Создать `InteractionSummary` entity
+- [x] Создать `EntityRelationshipProfile` entity
+- [x] Добавить поля в `Message` entity
+- [x] Написать и выполнить миграцию
+- [x] Добавить entities в TypeORM config
 
-### Фаза 3: Profile Aggregation (День 4)
-- [ ] Создать `EntityProfileService`
-- [ ] Реализовать агрегацию summaries
-- [ ] Добавить weekly cron job
+### Фаза 2: Summarization Service (Дни 2-3) ✅
+- [x] Создать `SummarizationService`
+- [x] Реализовать `scoreMessages()` эвристики
+- [x] Реализовать prompt building
+- [x] Настроить BullMQ queue
+- [x] Добавить cron job
+- [x] Реализовать backfill endpoint
 
-### Фаза 4: Context Retrieval (Дни 5-6)
-- [ ] Обновить `ContextService` с tiered logic
-- [ ] Реализовать synthesis prompt
-- [ ] Добавить `/context` endpoint
+### Фаза 3: Profile Aggregation (День 4) ✅
+- [x] Создать `EntityProfileService`
+- [x] Реализовать агрегацию summaries
+- [x] Добавить weekly cron job
 
-### Фаза 5: Monitoring (День 7)
-- [ ] Добавить метрики в `MetricsService`
-- [ ] Создать endpoints для мониторинга
-- [ ] Добавить виджеты в Dashboard
+### Фаза 4: Context Retrieval (Дни 5-6) ✅
+- [x] Обновить `ContextService` с tiered logic
+- [x] Реализовать synthesis prompt
+- [x] Добавить `/context` endpoint
+
+### Фаза 5: Monitoring (День 7) ✅
+- [x] Добавить метрики в `MetricsService` (GET /summarization/stats)
+- [x] Создать endpoints для мониторинга (GET /summarization/queue)
+- [x] Добавить виджеты в Dashboard (Bull Board с summarization/entity-profile queues)
 
 ---
 
