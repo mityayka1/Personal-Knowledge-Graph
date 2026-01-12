@@ -21,6 +21,21 @@ interface TelegramUserInfo {
  */
 export type ChatType = 'private' | 'group' | 'supergroup' | 'channel' | 'forum';
 
+interface MediaMetadata {
+  id: string;
+  accessHash: string;
+  fileReference: string;
+  dcId: number;
+  sizes?: Array<{ type: string; width: number; height: number; size: number }>;
+  mimeType?: string;
+  size?: number;
+  fileName?: string;
+  duration?: number;
+  width?: number;
+  height?: number;
+  hasThumb?: boolean;
+}
+
 interface ProcessedMessage {
   source: string;
   telegram_chat_id: string;
@@ -35,6 +50,7 @@ interface ProcessedMessage {
   reply_to_message_id?: string;
   media_type?: string;
   media_url?: string;
+  media_metadata?: MediaMetadata;
   /** Type of chat: private, group, supergroup, channel, forum */
   chat_type?: ChatType;
   /** Forum topic ID (for forums with topics) */
@@ -43,10 +59,13 @@ interface ProcessedMessage {
   topic_name?: string;
   /** Number of participants in the chat (for categorization) */
   participants_count?: number;
+  /** Chat title (for groups/channels) */
+  chat_title?: string;
 }
 
 interface CachedChatInfo {
   participantsCount: number | null;
+  title: string | null;
   cachedAt: number;
 }
 
@@ -203,10 +222,15 @@ export class MessageHandlerService {
     // Determine chat type from chatId prefix if not provided
     const chatType = options?.chatType || this.inferChatType(chatId);
 
-    // Get participants count (from options or fetch with caching)
+    // Get chat info (participants count and title) from cache or fetch
     let participantsCount = options?.participantsCount;
-    if (participantsCount === undefined && client) {
-      participantsCount = (await this.getParticipantsCount(chatId, client)) ?? undefined;
+    let chatTitle: string | undefined;
+    if (client) {
+      const chatInfo = await this.getChatInfo(chatId, client);
+      if (participantsCount === undefined) {
+        participantsCount = chatInfo?.participantsCount ?? undefined;
+      }
+      chatTitle = chatInfo?.title ?? undefined;
     }
 
     const processed: ProcessedMessage = {
@@ -224,6 +248,7 @@ export class MessageHandlerService {
       topic_id: options?.topicId,
       topic_name: options?.topicName,
       participants_count: participantsCount,
+      chat_title: chatTitle,
     };
 
     // Handle reply
@@ -237,32 +262,75 @@ export class MessageHandlerService {
       if (mediaInfo) {
         processed.media_type = mediaInfo.type;
         processed.media_url = mediaInfo.url;
+        processed.media_metadata = mediaInfo.metadata;
       }
     }
 
     return processed;
   }
 
-  private extractMediaInfo(media: Api.TypeMessageMedia): { type: string; url?: string } | null {
-    if (media instanceof Api.MessageMediaPhoto) {
-      return { type: 'photo' };
+  private extractMediaInfo(media: Api.TypeMessageMedia): { type: string; url?: string; metadata?: MediaMetadata } | null {
+    if (media instanceof Api.MessageMediaPhoto && media.photo instanceof Api.Photo) {
+      const photo = media.photo;
+      const sizes = photo.sizes
+        .filter((s): s is Api.PhotoSize => s instanceof Api.PhotoSize)
+        .map((s) => ({ type: s.type, width: s.w, height: s.h, size: s.size }));
+
+      return {
+        type: 'photo',
+        metadata: {
+          id: photo.id.toString(),
+          accessHash: photo.accessHash.toString(),
+          fileReference: Buffer.from(photo.fileReference).toString('base64'),
+          dcId: photo.dcId,
+          sizes,
+        },
+      };
     } else if (media instanceof Api.MessageMediaDocument) {
       const document = media.document;
       if (document && document instanceof Api.Document) {
-        // Check for voice message
-        const voiceAttr = document.attributes?.find(
-          (attr) => attr instanceof Api.DocumentAttributeAudio && attr.voice,
+        const metadata: MediaMetadata = {
+          id: document.id.toString(),
+          accessHash: document.accessHash.toString(),
+          fileReference: Buffer.from(document.fileReference).toString('base64'),
+          dcId: document.dcId,
+          mimeType: document.mimeType,
+          size: Number(document.size),
+          hasThumb: document.thumbs && document.thumbs.length > 0,
+        };
+
+        // Extract filename
+        const fileNameAttr = document.attributes?.find(
+          (attr): attr is Api.DocumentAttributeFilename => attr instanceof Api.DocumentAttributeFilename,
         );
-        if (voiceAttr) {
-          return { type: 'voice' };
+        if (fileNameAttr) {
+          metadata.fileName = fileNameAttr.fileName;
+        }
+
+        // Check for voice message
+        const audioAttr = document.attributes?.find(
+          (attr): attr is Api.DocumentAttributeAudio => attr instanceof Api.DocumentAttributeAudio,
+        );
+        if (audioAttr) {
+          metadata.duration = audioAttr.duration;
+          if (audioAttr.voice) {
+            return { type: 'voice', metadata };
+          }
+          return { type: 'audio', metadata };
         }
 
         // Check for video
         const videoAttr = document.attributes?.find(
-          (attr) => attr instanceof Api.DocumentAttributeVideo,
+          (attr): attr is Api.DocumentAttributeVideo => attr instanceof Api.DocumentAttributeVideo,
         );
         if (videoAttr) {
-          return { type: 'video' };
+          metadata.duration = videoAttr.duration;
+          metadata.width = videoAttr.w;
+          metadata.height = videoAttr.h;
+          if (videoAttr.roundMessage) {
+            return { type: 'video_note', metadata };
+          }
+          return { type: 'video', metadata };
         }
 
         // Check for sticker
@@ -270,10 +338,18 @@ export class MessageHandlerService {
           (attr) => attr instanceof Api.DocumentAttributeSticker,
         );
         if (stickerAttr) {
-          return { type: 'sticker' };
+          return { type: 'sticker', metadata };
         }
 
-        return { type: 'document' };
+        // Check for animation (GIF)
+        const animatedAttr = document.attributes?.find(
+          (attr) => attr instanceof Api.DocumentAttributeAnimated,
+        );
+        if (animatedAttr) {
+          return { type: 'animation', metadata };
+        }
+
+        return { type: 'document', metadata };
       }
     }
 
@@ -281,17 +357,17 @@ export class MessageHandlerService {
   }
 
   /**
-   * Get participants count for a chat with caching.
+   * Get chat info (participants count and title) with caching.
    * Uses TTL cache to avoid hitting Telegram rate limits.
    */
-  async getParticipantsCount(
+  async getChatInfo(
     chatId: string,
     client?: TelegramClient,
-  ): Promise<number | null> {
+  ): Promise<{ participantsCount: number | null; title: string | null } | null> {
     // Check cache first
     const cached = this.chatInfoCache.get(chatId);
     if (cached && Date.now() - cached.cachedAt < this.CACHE_TTL_MS) {
-      return cached.participantsCount;
+      return { participantsCount: cached.participantsCount, title: cached.title };
     }
 
     // Can't fetch without client
@@ -299,25 +375,28 @@ export class MessageHandlerService {
       return null;
     }
 
-    // Private chats always have 2 participants (user + self)
+    // Private chats always have 2 participants (user + self), no title needed
     if (chatId.startsWith('user_')) {
       this.chatInfoCache.set(chatId, {
         participantsCount: 2,
+        title: null,
         cachedAt: Date.now(),
       });
-      return 2;
+      return { participantsCount: 2, title: null };
     }
 
     try {
       let count: number | null = null;
+      let title: string | null = null;
 
       if (chatId.startsWith('chat_')) {
-        // Regular group chat - get participants count from chat entity
+        // Regular group chat - get info from chat entity
         const rawChatId = chatId.replace('chat_', '');
         try {
           const entity = await client.getEntity(rawChatId);
           if (entity instanceof Api.Chat) {
             count = entity.participantsCount ?? null;
+            title = entity.title ?? null;
           }
         } catch {
           this.logger.debug(`Could not get chat entity for ${chatId}`);
@@ -328,6 +407,7 @@ export class MessageHandlerService {
         try {
           const entity = await client.getEntity(rawChannelId);
           if (entity instanceof Api.Channel) {
+            title = entity.title ?? null;
             // First try the count from channel entity itself
             if (entity.participantsCount) {
               count = entity.participantsCount;
@@ -345,21 +425,33 @@ export class MessageHandlerService {
           }
         } catch {
           // If we can't get the channel info, skip
-          this.logger.debug(`Could not get participants count for ${chatId}`);
+          this.logger.debug(`Could not get chat info for ${chatId}`);
         }
       }
 
       // Cache the result
       this.chatInfoCache.set(chatId, {
         participantsCount: count,
+        title,
         cachedAt: Date.now(),
       });
 
-      return count;
+      return { participantsCount: count, title };
     } catch (error) {
-      this.logger.warn(`Failed to get participants count for ${chatId}:`, error);
+      this.logger.warn(`Failed to get chat info for ${chatId}:`, error);
       return null;
     }
+  }
+
+  /**
+   * Get participants count for a chat (wrapper for backwards compatibility).
+   */
+  async getParticipantsCount(
+    chatId: string,
+    client?: TelegramClient,
+  ): Promise<number | null> {
+    const info = await this.getChatInfo(chatId, client);
+    return info?.participantsCount ?? null;
   }
 
   /**

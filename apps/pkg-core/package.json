@@ -27,6 +27,7 @@
     "cli:extract": "ts-node -r tsconfig-paths/register src/cli/extract-historical.ts"
   },
   "dependencies": {
+    "@nestjs/axios": "^4.0.1",
     "@nestjs/bullmq": "^11.0.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
@@ -36,7 +37,7 @@
     "@nestjs/typeorm": "^11.0.0",
     "@pkg/entities": "workspace:*",
     "@pkg/shared": "workspace:*",
-    "axios": "^1.7.0",
+    "axios": "^1.13.2",
     "bullmq": "^5.30.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",

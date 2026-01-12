@@ -6,6 +6,7 @@ import {
   IsEnum,
   ValidateNested,
   IsNumber,
+  IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { MediaType, ChatType } from '@pkg/entities';
@@ -92,6 +93,23 @@ export class CreateMessageDto {
   @IsString()
   media_url?: string;
 
+  @IsOptional()
+  @IsObject()
+  media_metadata?: {
+    id: string;
+    accessHash: string;
+    fileReference: string;
+    dcId: number;
+    sizes?: Array<{ type: string; width: number; height: number; size: number }>;
+    mimeType?: string;
+    size?: number;
+    fileName?: string;
+    duration?: number;
+    width?: number;
+    height?: number;
+    hasThumb?: boolean;
+  };
+
   /**
    * Type of chat: private, group, supergroup, channel, forum.
    * Private chats trigger automatic Entity creation for the contact.
@@ -122,4 +140,12 @@ export class CreateMessageDto {
   @IsOptional()
   @IsNumber()
   participants_count?: number;
+
+  /**
+   * Chat title (for groups/channels) or contact name (for private chats).
+   * Used for display in the dashboard.
+   */
+  @IsOptional()
+  @IsString()
+  chat_title?: string;
 }

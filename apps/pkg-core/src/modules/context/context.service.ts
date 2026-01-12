@@ -57,6 +57,26 @@ export class ContextService {
     // 1. Fetch entity with facts
     const entity = await this.entityService.findOne(entityId);
 
+    // Skip context generation for bot entities
+    if (entity.isBot) {
+      this.logger.debug(`Entity ${entityId} is a bot, returning minimal context`);
+      return {
+        entityId: entity.id,
+        entityName: entity.name,
+        contextMarkdown: `## ${entity.name}\n\n*Это бот. Контекст взаимодействий не генерируется.*`,
+        tokenCount: 20,
+        sources: {
+          hotMessagesCount: 0,
+          hotSegmentsCount: 0,
+          warmSummariesCount: 0,
+          coldDecisionsCount: 0,
+          relevantChunksCount: 0,
+          factsIncluded: 0,
+        },
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
     // 2. PERMANENT tier: Get current facts
     const facts = await this.factRepo.find({
       where: { entityId, validUntil: IsNull() },
@@ -147,8 +167,8 @@ export class ContextService {
     // This includes both incoming messages FROM entity and outgoing messages TO entity
     return this.messageRepo
       .createQueryBuilder('m')
-      .innerJoin('interactions', 'i', 'i.id = m.interaction_id')
-      .innerJoin('interaction_participants', 'ip', 'ip.interaction_id = i.id')
+      .innerJoin('m.interaction', 'i')
+      .innerJoin('i.participants', 'ip')
       .where('ip.entity_id = :entityId', { entityId })
       .andWhere('m.timestamp > :since', { since })
       .andWhere('m.is_archived = :isArchived', { isArchived: false })
@@ -161,15 +181,17 @@ export class ContextService {
    * Get HOT tier: Recent transcript segments from calls with entity
    */
   private async getHotSegments(entityId: string, since: Date): Promise<TranscriptSegment[]> {
-    return this.segmentRepo
-      .createQueryBuilder('ts')
-      .innerJoin('interactions', 'i', 'i.id = ts.interaction_id')
-      .innerJoin('interaction_participants', 'ip', 'ip.interaction_id = i.id')
-      .where('ip.entity_id = :entityId', { entityId })
-      .andWhere('ts.created_at > :since', { since })
-      .orderBy('ts.start_time', 'DESC')
-      .take(30)
-      .getMany();
+    // Using raw query to avoid TypeORM QueryBuilder issues with complex joins
+    const segments = await this.segmentRepo.query(
+      `SELECT ts.* FROM transcript_segments ts
+       INNER JOIN interactions i ON i.id = ts.interaction_id
+       INNER JOIN interaction_participants ip ON ip.interaction_id = i.id
+       WHERE ip.entity_id = $1 AND ts.created_at > $2
+       ORDER BY ts.start_time DESC
+       LIMIT 30`,
+      [entityId, since],
+    );
+    return segments;
   }
 
   /**
@@ -180,15 +202,17 @@ export class ContextService {
     since: Date,
     until: Date,
   ): Promise<InteractionSummary[]> {
-    return this.summaryRepo
-      .createQueryBuilder('s')
-      .innerJoin('interactions', 'i', 'i.id = s.interaction_id')
-      .innerJoin('interaction_participants', 'ip', 'ip.interaction_id = i.id')
-      .where('ip.entity_id = :entityId', { entityId })
-      .andWhere('s.created_at BETWEEN :since AND :until', { since, until })
-      .orderBy('s.created_at', 'DESC')
-      .limit(10)
-      .getMany();
+    // Using raw query to avoid TypeORM QueryBuilder issues with complex joins
+    const summaries = await this.summaryRepo.query(
+      `SELECT s.* FROM interaction_summaries s
+       INNER JOIN interactions i ON i.id = s.interaction_id
+       INNER JOIN interaction_participants ip ON ip.interaction_id = i.id
+       WHERE ip.entity_id = $1 AND s.created_at BETWEEN $2 AND $3
+       ORDER BY s.created_at DESC
+       LIMIT 10`,
+      [entityId, since, until],
+    );
+    return summaries;
   }
 
   /**

@@ -22,17 +22,39 @@
 ```json
 {
   "source": "telegram",
-  "telegram_chat_id": "12345678",
+  "telegram_chat_id": "channel_12345678",
   "telegram_user_id": "87654321",
   "telegram_username": "ivan_petrov",
   "telegram_display_name": "Иван Петров",
+  "telegram_user_info": {
+    "username": "ivan_petrov",
+    "firstName": "Иван",
+    "lastName": "Петров",
+    "phone": "+79161234567",
+    "isBot": false,
+    "isVerified": false,
+    "isPremium": true,
+    "photoBase64": "data:image/jpeg;base64,..."
+  },
   "message_id": "999",
   "text": "Привет! Давай созвонимся завтра в 15:00",
   "timestamp": "2025-01-07T15:30:00Z",
   "is_outgoing": false,
   "reply_to_message_id": null,
-  "media_type": null,
-  "media_url": null
+  "media_type": "photo",
+  "media_url": null,
+  "media_metadata": {
+    "id": "123456789",
+    "accessHash": "987654321",
+    "fileReference": "base64...",
+    "dcId": 2,
+    "sizes": [{"type": "x", "width": 800, "height": 600, "size": 45000}]
+  },
+  "chat_type": "supergroup",
+  "topic_id": 123,
+  "topic_name": "General",
+  "participants_count": 15,
+  "chat_title": "Рабочая группа"
 }
 ```
 
@@ -43,6 +65,9 @@
   "interaction_id": "interaction-uuid",
   "entity_id": "entity-uuid",
   "entity_resolution_status": "resolved",
+  "auto_created_entity": true,
+  "chat_category": "working",
+  "is_update": false,
   "created_at": "2025-01-07T15:30:00Z"
 }
 ```
@@ -55,16 +80,21 @@
   "entity_id": null,
   "entity_resolution_status": "pending",
   "pending_resolution_id": "pending-uuid",
+  "chat_category": "mass",
   "created_at": "2025-01-07T15:30:00Z"
 }
 ```
 
 **Логика PKG Core:**
-1. Найти или создать interaction для chat_id (session logic: gap > настраиваемый порог = new session, см. Settings API)
-2. Resolve entity по telegram_user_id
-3. Если entity не найден → создать PendingEntityResolution
-4. Сохранить message
+1. Категоризация чата (personal/working/mass) на основе chat_type и participants_count
+2. Найти или создать interaction для chat_id (session logic: gap > настраиваемый порог = new session)
+3. Resolve entity:
+   - Для known identifier → использовать существующий entity
+   - Для personal/working → автосоздание Entity с данными из telegram_user_info (кроме ботов)
+   - Для mass → создать PendingEntityResolution
+4. Сохранить message с media_metadata
 5. Поставить в очередь генерацию embedding
+6. Для working/personal → поставить в очередь extraction фактов
 
 ---
 
@@ -273,6 +303,7 @@
     "id": "entity-uuid",
     "type": "person",
     "name": "Иван Петров",
+    "isBot": false,
     "organization": { "id": "org-uuid", "name": "ООО Рога и Копыта" },
     "last_interaction_at": "2025-01-07T15:30:00Z",
     "interaction_count": 42
@@ -295,6 +326,7 @@
   "id": "entity-uuid",
   "type": "person",
   "name": "Иван Петров",
+  "isBot": false,
   "organization": { "id": "org-uuid", "name": "ООО Рога и Копыта" },
   "notes": "Технический директор",
   "identifiers": [
@@ -520,6 +552,205 @@
   "callback_url": "http://pkg-core:3000/api/v1/internal/context/req-uuid/complete"
 }
 ```
+
+---
+
+## Chat Categories API
+
+### GET /chat-categories
+
+Получение списка категоризированных чатов.
+
+**Query:** `?category=working&limit=50&offset=0`
+
+**Response 200:**
+```json
+{
+  "items": [{
+    "id": "uuid",
+    "telegramChatId": "channel_1234567890",
+    "category": "working",
+    "title": "Рабочая группа",
+    "participantsCount": 15,
+    "autoExtractionEnabled": true,
+    "isForum": false,
+    "createdAt": "2025-01-07T10:00:00Z",
+    "updatedAt": "2025-01-07T15:30:00Z"
+  }],
+  "total": 42,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+### GET /chat-categories/{telegramChatId}
+
+Получение информации о конкретном чате.
+
+**Response 200:**
+```json
+{
+  "id": "uuid",
+  "telegramChatId": "channel_1234567890",
+  "category": "working",
+  "title": "Рабочая группа",
+  "participantsCount": 15,
+  "autoExtractionEnabled": true,
+  "isForum": true,
+  "createdAt": "2025-01-07T10:00:00Z"
+}
+```
+
+---
+
+### PUT /chat-categories/{telegramChatId}
+
+Изменение категории чата вручную.
+
+**Request:**
+```json
+{
+  "category": "personal"
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "uuid",
+  "telegramChatId": "channel_1234567890",
+  "category": "personal",
+  "title": "Рабочая группа",
+  "participantsCount": 15,
+  "autoExtractionEnabled": true,
+  "isManualOverride": true,
+  "updatedAt": "2025-01-07T16:00:00Z"
+}
+```
+
+**Примечание:**
+- При изменении категории существующие Entity не удаляются
+- Изменение влияет только на обработку новых сообщений
+- Устанавливается флаг `isManualOverride: true`, который предотвращает автоматическую перекатегоризацию при изменении числа участников
+
+---
+
+### POST /chat-categories/{telegramChatId}/reset-override
+
+Сброс флага ручного переопределения. После сброса категория будет автоматически обновляться при изменении числа участников.
+
+**Response 200:**
+```json
+{
+  "id": "uuid",
+  "telegramChatId": "channel_1234567890",
+  "category": "working",
+  "isManualOverride": false,
+  "updatedAt": "2025-01-07T16:00:00Z"
+}
+```
+
+**Response 404:** Чат не найден
+
+---
+
+### POST /chat-categories/{telegramChatId}/refresh
+
+Обновление информации о чате из Telegram (title, participantsCount, isForum).
+
+**Response 200:**
+```json
+{
+  "id": "uuid",
+  "telegramChatId": "channel_1234567890",
+  "category": "working",
+  "title": "Обновлённое название",
+  "participantsCount": 18,
+  "isForum": true,
+  "updatedAt": "2025-01-07T16:00:00Z"
+}
+```
+
+---
+
+## Media Proxy API (PKG Core)
+
+**Base URL:** `http://pkg-core:3000/api/v1`
+
+> **Архитектурное примечание:** Все клиенты (Dashboard, мобильное приложение и т.д.) должны получать медиа через PKG Core, а не напрямую через Telegram Adapter. Это обеспечивает source-agnostic архитектуру.
+
+### GET /media/{chatId}/{messageId}
+
+Стриминг медиа-файла. PKG Core проксирует запрос к Telegram Adapter.
+
+**Parameters:**
+- `chatId` — ID чата (channel_xxx, user_xxx, chat_xxx)
+- `messageId` — source_message_id сообщения
+
+**Query:**
+- `size` — размер фото: `s` (small), `m` (medium), `x` (large). По умолчанию: `x`
+- `thumb` — `true` для получения превью документа/видео
+
+**Response 200:**
+- `Content-Type`: соответствует типу файла (image/jpeg, video/mp4, audio/ogg, etc.)
+- `Content-Length`: размер файла в байтах
+- `Content-Disposition`: для документов с filename
+- Body: бинарные данные файла (streaming)
+
+**Response 404:**
+- Сообщение не найдено или медиа отсутствует
+
+**Пример:**
+```
+GET /api/v1/media/channel_1234567890/999?size=x
+→ JPEG image stream
+
+GET /api/v1/media/user_87654321/1000?thumb=true
+→ Video thumbnail JPEG stream
+```
+
+---
+
+### GET /media/chat/{chatId}/info
+
+Получение информации о чате из Telegram (title, participantsCount, isForum).
+
+**Response 200:**
+```json
+{
+  "title": "Название чата",
+  "participantsCount": 15,
+  "isForum": false
+}
+```
+
+---
+
+## Media Download API (Telegram Adapter) — Internal
+
+**Base URL:** `http://telegram-adapter:3001/api/v1`
+
+> ⚠️ **ВАЖНО:** Это внутренний API. Клиенты должны использовать Media Proxy API в PKG Core, а не обращаться к Telegram Adapter напрямую.
+
+### GET /chats/{chatId}/messages/{messageId}/download
+
+Стриминг медиа-файла из Telegram через MTProto.
+
+**Parameters:**
+- `chatId` — ID чата (channel_xxx, user_xxx, chat_xxx)
+- `messageId` — source_message_id сообщения
+
+**Query:**
+- `size` — размер фото: `s` (small), `m` (medium), `x` (large). По умолчанию: `x`
+- `thumb` — `true` для получения превью документа/видео
+
+**Response 200:**
+- `Content-Type`: соответствует типу файла (image/jpeg, video/mp4, audio/ogg, etc.)
+- `Content-Length`: размер файла в байтах
+- `Content-Disposition`: для документов с filename
+- Body: бинарные данные файла (streaming)
 
 ---
 

@@ -22,6 +22,7 @@ import { GroupMembershipModule } from './modules/group-membership/group-membersh
 import { EntityEventModule } from './modules/entity-event/entity-event.module';
 import { ClaudeCliModule } from './modules/claude-cli/claude-cli.module';
 import { SummarizationModule } from './modules/summarization/summarization.module';
+import { MediaModule } from './modules/media/media.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { SummarizationModule } from './modules/summarization/summarization.modul
     EntityEventModule,
     ClaudeCliModule,
     SummarizationModule,
+    MediaModule,
   ],
 })
 export class AppModule {}

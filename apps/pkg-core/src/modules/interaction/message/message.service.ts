@@ -42,10 +42,13 @@ export class MessageService {
 
   async create(dto: CreateMessageDto) {
     // 1. Categorize chat
+    // For private chats, use display name as title; for groups, use chat_title
+    const chatTitle = dto.chat_title || (dto.chat_type === 'private' ? dto.telegram_display_name : null);
     const chatCategory = await this.chatCategoryService.categorize({
       telegramChatId: dto.telegram_chat_id,
       chatType: dto.chat_type || 'group',
       participantsCount: dto.participants_count,
+      title: chatTitle,
     });
 
     // 2. Find or create interaction (session)
@@ -78,12 +81,13 @@ export class MessageService {
         notes: 'Auto-created from Telegram private chat',
         profilePhoto: dto.telegram_user_info?.photoBase64,
         creationSource: CreationSource.PRIVATE_CHAT,
+        isBot: dto.telegram_user_info?.isBot ?? false,
         identifiers,
       });
       entityId = entity.id;
       autoCreatedEntity = true;
       this.logger.log(
-        `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id} with ${identifiers.length} identifiers`,
+        `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id} with ${identifiers.length} identifiers (isBot: ${entity.isBot})`,
       );
     } else if (chatCategory.category === ChatCategory.WORKING && !dto.is_outgoing) {
       // Working group (<=20 people) - auto-create Entity with all available data
@@ -95,12 +99,13 @@ export class MessageService {
         notes: 'Auto-created from working group',
         profilePhoto: dto.telegram_user_info?.photoBase64,
         creationSource: CreationSource.WORKING_GROUP,
+        isBot: dto.telegram_user_info?.isBot ?? false,
         identifiers,
       });
       entityId = entity.id;
       autoCreatedEntity = true;
       this.logger.log(
-        `Auto-created Entity "${entityName}" for working group participant ${dto.telegram_user_id} with ${identifiers.length} identifiers`,
+        `Auto-created Entity "${entityName}" for working group participant ${dto.telegram_user_id} with ${identifiers.length} identifiers (isBot: ${entity.isBot})`,
       );
     } else if (!dto.is_outgoing) {
       // Mass group or channel - create pending resolution
@@ -154,6 +159,7 @@ export class MessageService {
         if (dto.text !== undefined) existingMessage.content = dto.text;
         if (dto.media_type !== undefined) existingMessage.mediaType = dto.media_type;
         if (dto.media_url !== undefined) existingMessage.mediaUrl = dto.media_url;
+        if (dto.media_metadata !== undefined) existingMessage.mediaMetadata = dto.media_metadata;
         saved = await messageRepo.save(existingMessage);
         this.logger.debug(`Updated existing message ${saved.id} for sourceMessageId ${dto.message_id}`);
       } else {
@@ -170,6 +176,7 @@ export class MessageService {
           replyToSourceMessageId: dto.reply_to_message_id, // FIX: Save reply_to for context
           mediaType: dto.media_type,
           mediaUrl: dto.media_url,
+          mediaMetadata: dto.media_metadata,
           // New fields for import logic and forum support
           chatType: dto.chat_type,
           topicId: dto.topic_id,
@@ -371,5 +378,57 @@ export class MessageService {
 
   async updateEmbedding(messageId: string, embedding: number[]) {
     await this.messageRepo.update(messageId, { embedding });
+  }
+
+  /**
+   * Get messages by Telegram chat ID
+   * Joins through interaction to find messages belonging to this chat
+   */
+  async findByTelegramChatId(
+    telegramChatId: string,
+    options?: {
+      limit?: number;
+      offset?: number;
+      order?: 'ASC' | 'DESC';
+    },
+  ) {
+    const { limit = 100, offset = 0, order = 'DESC' } = options || {};
+
+    const [items, total] = await this.messageRepo
+      .createQueryBuilder('m')
+      .innerJoin('interactions', 'i', 'm.interaction_id = i.id')
+      .where("i.source_metadata->>'telegram_chat_id' = :chatId", { chatId: telegramChatId })
+      .orderBy('m.timestamp', order)
+      .limit(limit)
+      .offset(offset)
+      .getManyAndCount();
+
+    return { items, total, limit, offset };
+  }
+
+  /**
+   * Get message with sender info for display
+   */
+  async findByTelegramChatIdWithSenders(
+    telegramChatId: string,
+    options?: {
+      limit?: number;
+      offset?: number;
+      order?: 'ASC' | 'DESC';
+    },
+  ) {
+    const { limit = 100, offset = 0, order = 'DESC' } = options || {};
+
+    const [items, total] = await this.messageRepo
+      .createQueryBuilder('m')
+      .innerJoin('interactions', 'i', 'm.interaction_id = i.id')
+      .leftJoinAndSelect('m.senderEntity', 'entity')
+      .where("i.source_metadata->>'telegram_chat_id' = :chatId", { chatId: telegramChatId })
+      .orderBy('m.timestamp', order)
+      .limit(limit)
+      .offset(offset)
+      .getManyAndCount();
+
+    return { items, total, limit, offset };
   }
 }

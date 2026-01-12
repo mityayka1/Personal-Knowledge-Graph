@@ -71,6 +71,14 @@ export class SummarizationService {
       .andWhere(`NOT EXISTS (
         SELECT 1 FROM interaction_summaries s WHERE s.interaction_id = i.id
       )`)
+      // Exclude interactions where any participant is a bot
+      // NOTE: This is the authoritative bot filter. No duplicate check in processSummarization()
+      // because if an interaction is manually queued, it's intentional.
+      .andWhere(`NOT EXISTS (
+        SELECT 1 FROM interaction_participants ip
+        INNER JOIN entities e ON e.id = ip.entity_id
+        WHERE ip.interaction_id = i.id AND e.is_bot = true
+      )`)
       .orderBy('i.ended_at', 'ASC')
       .limit(20)
       .getMany();
@@ -109,6 +117,9 @@ export class SummarizationService {
     if (!interaction) {
       throw new Error(`Interaction ${interactionId} not found`);
     }
+
+    // NOTE: Bot filtering is done at scheduling time in scheduleDailySummarization()
+    // If an interaction with bot is manually queued, we proceed intentionally.
 
     // Fetch messages
     const messages = await this.messageRepo.find({

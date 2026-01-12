@@ -44,6 +44,33 @@ export interface ExtractionMetadata {
   errorMessage?: string;
 }
 
+export interface MediaMetadata {
+  // Common fields for file download
+  id: string;
+  accessHash: string;
+  fileReference: string; // base64 encoded
+  dcId: number;
+
+  // Photo-specific
+  sizes?: Array<{
+    type: string;
+    width: number;
+    height: number;
+    size: number;
+  }>;
+
+  // Document-specific
+  mimeType?: string;
+  size?: number;
+  fileName?: string;
+  duration?: number; // for video/audio/voice
+  width?: number; // for video
+  height?: number; // for video
+
+  // For thumbnail
+  hasThumb?: boolean;
+}
+
 @Entity('messages')
 export class Message {
   @PrimaryGeneratedColumn('uuid')
@@ -104,6 +131,9 @@ export class Message {
 
   @Column({ name: 'media_url', type: 'varchar', length: 500, nullable: true })
   mediaUrl: string | null;
+
+  @Column({ name: 'media_metadata', type: 'jsonb', nullable: true })
+  mediaMetadata: MediaMetadata | null;
 
   // Chat type for import logic (private chats get auto-entity creation)
   @Column({ name: 'chat_type', type: 'varchar', length: 20, nullable: true })

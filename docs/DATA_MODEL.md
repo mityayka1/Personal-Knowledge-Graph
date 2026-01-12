@@ -66,10 +66,13 @@
 | name | VARCHAR(255) | Отображаемое имя |
 | organization_id | UUID | FK → entities (для person, связь с организацией) |
 | notes | TEXT | Свободные заметки пользователя |
+| profile_photo | TEXT | Base64 фото профиля (data:image/jpeg;base64,...) |
+| is_bot | BOOLEAN | TRUE для Telegram ботов (исключаются из summarization/context) |
+| creation_source | ENUM | 'manual', 'private_chat', 'working_group' |
 | created_at | TIMESTAMP | |
 | updated_at | TIMESTAMP | |
 
-**Индексы:** name (для поиска), organization_id
+**Индексы:** name (для поиска), organization_id, is_bot (partial WHERE is_bot = true)
 
 ---
 
@@ -156,17 +159,49 @@
 | id | UUID | PK |
 | interaction_id | UUID | FK → interactions |
 | sender_entity_id | UUID | FK → entities (NULL если pending) |
+| sender_identifier_type | VARCHAR(50) | 'telegram_user_id', 'phone' |
+| sender_identifier_value | VARCHAR(255) | Значение идентификатора отправителя |
 | content | TEXT | Текст сообщения |
 | is_outgoing | BOOLEAN | TRUE если отправлено пользователем |
 | timestamp | TIMESTAMP | Время сообщения |
 | source_message_id | VARCHAR(100) | ID в исходной системе |
-| reply_to_message_id | UUID | FK → messages |
-| media_type | VARCHAR(50) | 'photo', 'document', 'voice', 'video' |
-| media_url | VARCHAR(500) | Путь к файлу |
+| reply_to_message_id | UUID | FK → messages (resolved) |
+| reply_to_source_message_id | VARCHAR(100) | ID reply_to в исходной системе |
+| media_type | VARCHAR(50) | 'photo', 'document', 'voice', 'video', 'video_note', 'sticker', 'animation' |
+| media_url | VARCHAR(500) | Путь к файлу (deprecated, используй media_metadata) |
+| media_metadata | JSONB | Метаданные для скачивания медиа (см. ниже) |
+| chat_type | VARCHAR(20) | 'private', 'group', 'supergroup', 'channel', 'forum' |
+| topic_id | INTEGER | ID топика форума |
+| topic_name | VARCHAR(255) | Название топика форума |
 | embedding | VECTOR(1536) | Для semantic search |
+| extraction_status | VARCHAR(20) | 'unprocessed', 'pending', 'processing', 'processed', 'error' |
+| extraction_metadata | JSONB | {relevanceScore, extractedAt, factsFound, eventsFound, errorMessage} |
+| importance_score | DECIMAL(3,2) | 0.00-1.00 для summarization |
+| importance_reason | VARCHAR(50) | 'has_date', 'has_amount', 'has_agreement', 'has_deadline', 'long_message' |
+| is_archived | BOOLEAN | TRUE для архивированных сообщений |
+| archived_at | TIMESTAMP | Время архивации |
 | created_at | TIMESTAMP | |
 
+**media_metadata JSONB структура:**
+```json
+{
+  "id": "telegram_file_id",
+  "accessHash": "access_hash_string",
+  "fileReference": "base64_encoded_file_reference",
+  "dcId": 2,
+  "sizes": [{"type": "x", "width": 800, "height": 600, "size": 45000}],
+  "mimeType": "video/mp4",
+  "size": 1234567,
+  "fileName": "document.pdf",
+  "duration": 120,
+  "width": 1920,
+  "height": 1080,
+  "hasThumb": true
+}
+```
+
 **FTS:** GIN index на content для full-text search
+**Индексы:** media_metadata (GIN, partial WHERE NOT NULL)
 
 ---
 
@@ -267,6 +302,31 @@
 | created_at | TIMESTAMP | |
 | started_at | TIMESTAMP | |
 | completed_at | TIMESTAMP | |
+
+---
+
+### chat_categories
+
+Категоризация чатов для управления автоматическим созданием Entity.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| id | UUID | PK |
+| telegram_chat_id | VARCHAR(100) | Уникальный ID чата (channel_123, user_456) |
+| category | ENUM | 'personal', 'working', 'mass' |
+| title | VARCHAR(255) | Название чата/контакта |
+| participants_count | INTEGER | Количество участников |
+| auto_extraction_enabled | BOOLEAN | Включено ли автоизвлечение фактов |
+| is_forum | BOOLEAN | Является ли чат форумом (с топиками) |
+| created_at | TIMESTAMP | |
+| updated_at | TIMESTAMP | |
+
+**Категории:**
+- `personal` — приватные чаты, Entity создаются автоматически
+- `working` — рабочие группы (≤20 участников), Entity создаются автоматически
+- `mass` — массовые группы/каналы (>20 участников), создаётся PendingResolution
+
+**Constraints:** UNIQUE(telegram_chat_id)
 
 ---
 

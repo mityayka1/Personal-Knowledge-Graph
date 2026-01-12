@@ -64,6 +64,8 @@
 - API для всех клиентов
 - Генерация embeddings (async queue)
 - **LLM задачи через Claude CLI** (fact extraction, context synthesis)
+- **Media Proxy** — проксирование медиа-запросов к Telegram Adapter
+- **Bot Detection** — фильтрация ботов из summarization, context, search
 
 **НЕ ответственность:**
 - Подключение к внешним источникам (Telegram, etc.)
@@ -77,15 +79,15 @@
 │                                                                │
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │                     REST API Layer                        │ │
-│  │  /entities  /interactions  /messages  /search  /context   │ │
+│  │  /entities  /interactions  /messages  /search  /media     │ │
 │  └──────────────────────────────────────────────────────────┘ │
 │                              │                                 │
 │  ┌───────────┐  ┌───────────┴───────────┐  ┌───────────────┐ │
-│  │  Entity   │  │     Interaction       │  │    Search     │ │
-│  │  Service  │  │     Service           │  │    Service    │ │
-│  └─────┬─────┘  └───────────┬───────────┘  └───────┬───────┘ │
-│        │                    │                      │          │
-│  ┌─────┴────────────────────┴──────────────────────┴───────┐ │
+│  │  Entity   │  │     Interaction       │  │    Media      │ │
+│  │  Service  │  │     Service           │  │    Proxy      │───► Telegram
+│  └─────┬─────┘  └───────────┬───────────┘  └───────────────┘ │   Adapter
+│        │                    │                                 │
+│  ┌─────┴────────────────────┴──────────────────────────────┐ │
 │  │                    Repository Layer                      │ │
 │  └──────────────────────────┬──────────────────────────────┘ │
 │                             │                                 │
@@ -218,6 +220,72 @@ Client              PKG Core          Worker              PostgreSQL
    │                    │                │                      │
    │◄──context──────────│                │                      │
 ```
+
+---
+
+## Bot Detection
+
+### Механизм определения ботов
+
+Entity имеет поле `is_bot: boolean`, которое устанавливается при создании из `telegram_user_info.isBot`.
+
+**Исключение ботов:**
+- **Summarization** — interactions с участниками-ботами исключаются из суммаризации через SQL фильтр
+- **Context Retrieval** — боты не включаются в контекст для LLM
+- **Search** — сообщения от ботов исключаются из результатов поиска
+
+**Пример SQL фильтра (summarization):**
+```sql
+-- Exclude interactions where any participant is a bot
+WHERE NOT EXISTS (
+  SELECT 1 FROM interaction_participants ip
+  INNER JOIN entities e ON e.id = ip.entity_id
+  WHERE ip.interaction_id = i.id AND e.is_bot = true
+)
+```
+
+---
+
+## Chat Categorization
+
+### Категории чатов
+
+| Категория | Условие | Auto-extraction | Entity auto-create |
+|-----------|---------|-----------------|-------------------|
+| `personal` | Приватный чат | ✅ | ✅ |
+| `working` | Группа ≤ threshold участников | ✅ | ✅ |
+| `mass` | Группа > threshold, канал | ❌ | ❌ (→ PendingResolution) |
+
+**Threshold:** настраивается через `session.chatCategoryThreshold` (по умолчанию 20).
+
+### Manual Override
+
+При ручном изменении категории через API устанавливается флаг `isManualOverride: true`.
+
+**Поведение:**
+- При `isManualOverride: true` — автоматическая перекатегоризация отключена
+- Изменение числа участников не влияет на категорию
+- Сброс флага: `POST /chat-categories/{id}/reset-override`
+
+---
+
+## Media Proxy
+
+### Принцип Source-Agnostic
+
+Клиенты (Dashboard, мобильное приложение) НЕ должны обращаться напрямую к Telegram Adapter.
+
+```
+┌─────────┐      ┌──────────┐      ┌──────────────────┐
+│Dashboard│─────►│ PKG Core │─────►│ Telegram Adapter │
+└─────────┘      │  /media  │      │   /download      │
+                 └──────────┘      └──────────────────┘
+```
+
+**Преимущества:**
+- Единая точка входа для всех клиентов
+- PKG Core контролирует авторизацию
+- Легко добавить другие источники (WhatsApp, Email) без изменения клиентов
 
 ---
 

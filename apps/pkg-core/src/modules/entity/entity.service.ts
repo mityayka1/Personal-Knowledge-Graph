@@ -64,6 +64,7 @@ export class EntityService {
       notes: dto.notes,
       profilePhoto: dto.profilePhoto,
       creationSource: dto.creationSource,
+      isBot: dto.isBot ?? false,
     });
 
     const saved = await this.entityRepo.save(entity);

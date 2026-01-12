@@ -19,4 +19,22 @@ export class MessageController {
   ) {
     return this.messageService.findByInteraction(interactionId, limit, offset);
   }
+
+  /**
+   * Get messages by Telegram chat ID
+   * GET /messages/chat/:telegramChatId
+   */
+  @Get('chat/:telegramChatId')
+  async findByTelegramChatId(
+    @Param('telegramChatId') telegramChatId: string,
+    @Query('limit') limit?: number,
+    @Query('offset') offset?: number,
+    @Query('order') order?: 'ASC' | 'DESC',
+  ) {
+    return this.messageService.findByTelegramChatIdWithSenders(telegramChatId, {
+      limit: limit ? Number(limit) : undefined,
+      offset: offset ? Number(offset) : undefined,
+      order,
+    });
+  }
 }

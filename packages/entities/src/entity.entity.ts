@@ -59,6 +59,10 @@ export class EntityRecord {
   @Column({ name: 'creation_source', type: 'varchar', length: 20, default: CreationSource.MANUAL })
   creationSource: CreationSource;
 
+  @Column({ name: 'is_bot', type: 'boolean', default: false })
+  @Index('idx_entities_is_bot', { where: '"is_bot" = true' })
+  isBot: boolean;
+
   @OneToMany(() => EntityIdentifier, (identifier) => identifier.entity)
   identifiers: EntityIdentifier[];
 
