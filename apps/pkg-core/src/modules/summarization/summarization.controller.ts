@@ -10,10 +10,45 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 import { InteractionSummary, Interaction, EntityRelationshipProfile, EntityRecord } from '@pkg/entities';
 import { SummarizationService } from './summarization.service';
 import { EntityProfileService } from './entity-profile.service';
+
+/**
+ * Aggregated summarization metrics
+ */
+export interface SummarizationMetrics {
+  // Coverage
+  totalInteractions: number;
+  summarizedInteractions: number;
+  summarizationCoverage: number; // percentage
+
+  // Backlog
+  pendingInQueue: number;
+  oldestUnsummarized: string | null; // ISO date
+
+  // Performance
+  avgCompressionRatio: number | null;
+
+  // Quality indicators
+  avgKeyPointsPerSummary: number | null;
+  avgDecisionsPerSummary: number | null;
+  totalOpenActionItems: number;
+}
+
+/**
+ * Queue status
+ */
+export interface QueueStatus {
+  waiting: number;
+  active: number;
+  completed: number;
+  failed: number;
+  delayed: number;
+}
 
 interface TriggerSummarizationDto {
   interactionId: string;
@@ -46,7 +81,142 @@ export class SummarizationController {
     private readonly profileRepo: Repository<EntityRelationshipProfile>,
     @InjectRepository(EntityRecord)
     private readonly entityRepo: Repository<EntityRecord>,
+    @InjectQueue('summarization')
+    private readonly summarizationQueue: Queue,
+    @InjectQueue('entity-profile')
+    private readonly entityProfileQueue: Queue,
   ) {}
+
+  // ==================== Monitoring Endpoints ====================
+
+  /**
+   * Get aggregated summarization metrics
+   */
+  @Get('stats')
+  async getStats(): Promise<SummarizationMetrics> {
+    // Total completed interactions (excluding bot interactions)
+    const totalInteractions = await this.interactionRepo
+      .createQueryBuilder('i')
+      .where('i.status = :status', { status: 'completed' })
+      .andWhere(`NOT EXISTS (
+        SELECT 1 FROM interaction_participants ip
+        INNER JOIN entities e ON e.id = ip.entity_id
+        WHERE ip.interaction_id = i.id AND e.is_bot = true
+      )`)
+      .getCount();
+
+    // Summarized interactions
+    const summarizedInteractions = await this.summaryRepo.count();
+
+    // Coverage percentage
+    const summarizationCoverage = totalInteractions > 0
+      ? Math.round((summarizedInteractions / totalInteractions) * 100 * 10) / 10
+      : 0;
+
+    // Pending in queue
+    const pendingInQueue = await this.summarizationQueue.getWaitingCount();
+
+    // Oldest unsummarized interaction
+    const oldestUnsummarized = await this.interactionRepo
+      .createQueryBuilder('i')
+      .where('i.status = :status', { status: 'completed' })
+      .andWhere(`NOT EXISTS (
+        SELECT 1 FROM interaction_summaries s WHERE s.interaction_id = i.id
+      )`)
+      .andWhere(`NOT EXISTS (
+        SELECT 1 FROM interaction_participants ip
+        INNER JOIN entities e ON e.id = ip.entity_id
+        WHERE ip.interaction_id = i.id AND e.is_bot = true
+      )`)
+      .orderBy('i.ended_at', 'ASC')
+      .getOne();
+
+    // Average compression ratio
+    const compressionResult = await this.summaryRepo
+      .createQueryBuilder('s')
+      .select('AVG(s.compression_ratio)', 'avg')
+      .where('s.compression_ratio IS NOT NULL')
+      .getRawOne();
+
+    // Average key points per summary
+    const keyPointsResult = await this.summaryRepo
+      .createQueryBuilder('s')
+      .select('AVG(jsonb_array_length(s.key_points))', 'avg')
+      .getRawOne();
+
+    // Average decisions per summary
+    const decisionsResult = await this.summaryRepo
+      .createQueryBuilder('s')
+      .select('AVG(jsonb_array_length(s.decisions))', 'avg')
+      .getRawOne();
+
+    // Total open action items across all summaries
+    const openActionItemsResult = await this.summaryRepo.query(`
+      SELECT COUNT(*) as count
+      FROM interaction_summaries s,
+           jsonb_array_elements(s.action_items) as item
+      WHERE item->>'status' = 'open'
+    `);
+
+    return {
+      totalInteractions,
+      summarizedInteractions,
+      summarizationCoverage,
+      pendingInQueue,
+      oldestUnsummarized: oldestUnsummarized?.endedAt?.toISOString() || null,
+      avgCompressionRatio: compressionResult?.avg ? Number(compressionResult.avg) : null,
+      avgKeyPointsPerSummary: keyPointsResult?.avg ? Number(keyPointsResult.avg) : null,
+      avgDecisionsPerSummary: decisionsResult?.avg ? Number(decisionsResult.avg) : null,
+      totalOpenActionItems: Number(openActionItemsResult?.[0]?.count || 0),
+    };
+  }
+
+  /**
+   * Get summarization queue status
+   */
+  @Get('queue')
+  async getQueueStatus(): Promise<{ summarization: QueueStatus; entityProfile: QueueStatus }> {
+    const [
+      summWaiting,
+      summActive,
+      summCompleted,
+      summFailed,
+      summDelayed,
+      profWaiting,
+      profActive,
+      profCompleted,
+      profFailed,
+      profDelayed,
+    ] = await Promise.all([
+      this.summarizationQueue.getWaitingCount(),
+      this.summarizationQueue.getActiveCount(),
+      this.summarizationQueue.getCompletedCount(),
+      this.summarizationQueue.getFailedCount(),
+      this.summarizationQueue.getDelayedCount(),
+      this.entityProfileQueue.getWaitingCount(),
+      this.entityProfileQueue.getActiveCount(),
+      this.entityProfileQueue.getCompletedCount(),
+      this.entityProfileQueue.getFailedCount(),
+      this.entityProfileQueue.getDelayedCount(),
+    ]);
+
+    return {
+      summarization: {
+        waiting: summWaiting,
+        active: summActive,
+        completed: summCompleted,
+        failed: summFailed,
+        delayed: summDelayed,
+      },
+      entityProfile: {
+        waiting: profWaiting,
+        active: profActive,
+        completed: profCompleted,
+        failed: profFailed,
+        delayed: profDelayed,
+      },
+    };
+  }
 
   /**
    * Trigger summarization for a specific interaction

@@ -17,6 +17,8 @@ const redisConnection = {
 // Create queues to monitor
 const embeddingQueue = new Queue('embedding', { connection: redisConnection });
 const factExtractionQueue = new Queue('fact-extraction', { connection: redisConnection });
+const summarizationQueue = new Queue('summarization', { connection: redisConnection });
+const entityProfileQueue = new Queue('entity-profile', { connection: redisConnection });
 
 // Setup Bull Board
 const serverAdapter = new ExpressAdapter();
@@ -26,6 +28,8 @@ createBullBoard({
   queues: [
     new BullMQAdapter(embeddingQueue),
     new BullMQAdapter(factExtractionQueue),
+    new BullMQAdapter(summarizationQueue),
+    new BullMQAdapter(entityProfileQueue),
   ],
   serverAdapter,
 });
