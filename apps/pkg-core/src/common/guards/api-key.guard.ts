@@ -64,7 +64,7 @@ export class ApiKeyGuard implements CanActivate {
     // Check query parameter (for webhooks)
     const queryKey = request.query['api_key'];
     if (queryKey) {
-      return Array.isArray(queryKey) ? queryKey[0] : String(queryKey);
+      return Array.isArray(queryKey) ? String(queryKey[0]) : String(queryKey);
     }
 
     return undefined;
