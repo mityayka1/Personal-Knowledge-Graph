@@ -24,6 +24,9 @@ jobs:
           script: |
             cd /opt/apps/pkg
 
+            # Fix git ownership for all projects in /opt/apps/
+            git config --global --add safe.directory '/opt/apps/*'
+
             # Pull latest changes
             git fetch origin master
             git reset --hard origin/master
