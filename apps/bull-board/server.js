@@ -6,6 +6,7 @@ const { Queue } = require('bullmq');
 
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
+const REDIS_PREFIX = process.env.REDIS_PREFIX || 'pkg:bull';
 const PORT = parseInt(process.env.PORT || '3005', 10);
 
 // Connect to Redis
@@ -14,11 +15,17 @@ const redisConnection = {
   port: REDIS_PORT,
 };
 
+// Queue options with prefix
+const queueOptions = {
+  connection: redisConnection,
+  prefix: REDIS_PREFIX,
+};
+
 // Create queues to monitor
-const embeddingQueue = new Queue('embedding', { connection: redisConnection });
-const factExtractionQueue = new Queue('fact-extraction', { connection: redisConnection });
-const summarizationQueue = new Queue('summarization', { connection: redisConnection });
-const entityProfileQueue = new Queue('entity-profile', { connection: redisConnection });
+const embeddingQueue = new Queue('embedding', queueOptions);
+const factExtractionQueue = new Queue('fact-extraction', queueOptions);
+const summarizationQueue = new Queue('summarization', queueOptions);
+const entityProfileQueue = new Queue('entity-profile', queueOptions);
 
 // Setup Bull Board
 const serverAdapter = new ExpressAdapter();

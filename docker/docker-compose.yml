@@ -5,12 +5,11 @@ version: '3.8'
 # Copy docker/.env.example to docker/.env and fill in values
 
 services:
-  # Redis for BullMQ
+  # Redis for BullMQ (internal network only, not exposed to host)
   redis:
     image: redis:7-alpine
     container_name: pkg-redis
-    ports:
-      - "6379:6379"
+    # No ports exposed - only accessible within Docker network
     volumes:
       - redis-data:/data
     healthcheck:
@@ -31,6 +30,8 @@ services:
       NODE_ENV: production
       PORT: 3000
       API_PREFIX: /api/v1
+      # API Key for authentication
+      API_KEY: ${API_KEY:?API_KEY is required}
       # Remote centralized database - credentials from .env
       DB_HOST: ${DB_HOST:?DB_HOST is required}
       DB_PORT: ${DB_PORT:-5432}
@@ -41,10 +42,15 @@ services:
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PREFIX: ${REDIS_PREFIX:-pkg:bull}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       FILE_STORAGE_PATH: /data/files
+      # Claude CLI
+      CLAUDE_WORKSPACE_PATH: /app/claude-workspace
     volumes:
       - file-storage:/data/files
+      # Claude credentials - mount from host after `claude login`
+      - ${CLAUDE_CREDENTIALS_PATH:-~/.claude}:/home/nestjs/.claude:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -67,6 +73,7 @@ services:
       NODE_ENV: production
       PORT: 3001
       PKG_CORE_URL: http://pkg-core:3000/api/v1
+      PKG_CORE_API_KEY: ${API_KEY:?API_KEY is required}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       TELEGRAM_SESSION_STRING: ${TELEGRAM_SESSION_STRING:-}
@@ -92,6 +99,7 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PREFIX: ${REDIS_PREFIX:-pkg:bull}
       PORT: 3002
     depends_on:
       redis:
@@ -113,7 +121,7 @@ services:
     environment:
       NODE_ENV: production
       NUXT_PKG_CORE_URL: http://pkg-core:3000/api/v1
-      NUXT_API_KEY: ${API_KEY:-}
+      NUXT_API_KEY: ${API_KEY:?API_KEY is required}
     depends_on:
       pkg-core:
         condition: service_healthy
@@ -130,12 +138,19 @@ services:
     ports:
       - "5678:5678"
     environment:
+      # n8n 2.0+ uses User Management instead of Basic Auth
+      # First run: create owner account via UI
+      # N8N_BASIC_AUTH_* variables are deprecated but kept for reference
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
       N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?N8N_PASSWORD is required}
+      # Subpath configuration for reverse proxy
+      N8N_PATH: /n8n/
+      N8N_EDITOR_BASE_URL: ${N8N_EDITOR_BASE_URL:-https://pkg.example.com/n8n/}
+      WEBHOOK_URL: ${WEBHOOK_URL:-https://pkg.example.com/webhook/}
+      # Internal PKG Core connection
       PKG_CORE_URL: http://pkg-core:3000/api/v1
-      WEBHOOK_URL: http://n8n:5678
-      GENERIC_TIMEZONE: Europe/Moscow
+      GENERIC_TIMEZONE: ${TIMEZONE:-Europe/Moscow}
     volumes:
       - n8n-data:/home/node/.n8n
       - file-storage:/data/files

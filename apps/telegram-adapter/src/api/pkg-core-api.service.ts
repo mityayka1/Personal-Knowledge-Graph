@@ -70,16 +70,23 @@ export class PkgCoreApiService {
   constructor(private configService: ConfigService) {
     const baseURL = this.configService.get<string>('api.pkgCoreUrl', 'http://localhost:3000/api/v1');
     const timeout = this.configService.get<number>('api.timeout', 30000);
+    const apiKey = this.configService.get<string>('api.pkgCoreApiKey');
 
     this.retryAttempts = this.configService.get<number>('api.retryAttempts', 3);
     this.retryDelay = this.configService.get<number>('api.retryDelay', 1000);
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (apiKey) {
+      headers['X-API-Key'] = apiKey;
+    }
+
     this.client = axios.create({
       baseURL,
       timeout,
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
     });
 
     this.logger.log(`PKG Core API client configured: ${baseURL}`);

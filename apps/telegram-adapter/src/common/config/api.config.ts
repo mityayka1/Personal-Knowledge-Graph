@@ -4,6 +4,9 @@ export default registerAs('api', () => ({
   // PKG Core API URL
   pkgCoreUrl: process.env.PKG_CORE_URL || 'http://localhost:3000/api/v1',
 
+  // PKG Core API Key for authentication
+  pkgCoreApiKey: process.env.PKG_CORE_API_KEY || '',
+
   // Request timeout in ms
   timeout: parseInt(process.env.API_TIMEOUT || '30000', 10),
 

@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
+import { APP_GUARD } from '@nestjs/core';
 
 import { databaseConfig, redisConfig, appConfig } from './common/config';
+import { ApiKeyGuard } from './common/guards';
 
 // Domain modules
 import { EntityModule } from './modules/entity/entity.module';
@@ -51,7 +53,7 @@ import { MediaModule } from './modules/media/media.module';
             host: 'localhost',
             port: 6379,
           },
-          prefix: redisConfig?.prefix || 'bull',
+          prefix: redisConfig?.prefix || 'pkg:bull',
           defaultJobOptions: redisConfig?.defaultJobOptions || {},
         };
       },
@@ -75,6 +77,14 @@ import { MediaModule } from './modules/media/media.module';
     ClaudeCliModule,
     SummarizationModule,
     MediaModule,
+  ],
+  providers: [
+    // Global API Key Guard - all routes require X-API-Key header
+    // Use @Public() decorator to exclude specific routes (e.g., health checks)
+    {
+      provide: APP_GUARD,
+      useClass: ApiKeyGuard,
+    },
   ],
 })
 export class AppModule {}
