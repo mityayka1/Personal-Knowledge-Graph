@@ -4,11 +4,13 @@
 
 ## Содержание
 
+- [Конвенции](#конвенции)
 - [Требования](#требования)
 - [Архитектура деплоя](#архитектура-деплоя)
 - [Подготовка сервера](#подготовка-сервера)
 - [Установка Docker](#установка-docker)
 - [Деплой приложения](#деплой-приложения)
+- [CI/CD (GitHub Actions)](#cicd-github-actions)
 - [Настройка Nginx (reverse proxy)](#настройка-nginx-reverse-proxy)
 - [SSL сертификаты](#ssl-сертификаты)
 - [Автозапуск](#автозапуск)
@@ -16,6 +18,41 @@
 - [Обновление приложения](#обновление-приложения)
 - [Бэкапы](#бэкапы)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Конвенции
+
+### Структура директорий на сервере
+
+**Важно:** Все проекты на серверах размещаются в директории `/opt/apps/`:
+
+```
+/opt/apps/
+├── pkg/                    # PKG (Personal Knowledge Graph)
+│   ├── apps/               # Исходный код приложений
+│   ├── docker/             # Docker Compose и конфигурация
+│   ├── docs/               # Документация
+│   └── ...
+├── other-project/          # Другие проекты
+└── ...
+```
+
+**Путь к PKG:** `/opt/apps/pkg`
+
+Эта конвенция:
+- Обеспечивает единообразие размещения проектов на всех серверах
+- Упрощает автоматизацию деплоя и скриптов
+- Отделяет приложения от системных директорий
+
+### Именование
+
+| Элемент | Конвенция | Пример |
+|---------|-----------|--------|
+| Директория проекта | lowercase | `/opt/apps/pkg` |
+| Docker containers | `pkg-{service}` | `pkg-core`, `pkg-dashboard` |
+| Docker volumes | `docker_{volume}` | `docker_redis-data` |
+| Systemd services | `{project}.service` | `pkg.service` |
 
 ---
 
@@ -343,7 +380,7 @@ ls -la ~/.claude/.credentials.json
 ### 4. Сборка образов
 
 ```bash
-cd ~/PKG/docker
+cd /opt/apps/pkg/docker
 docker compose build
 ```
 
@@ -399,6 +436,101 @@ n8n 2.0+ использует User Management вместо Basic Auth. При п
 > ```bash
 > docker compose restart n8n
 > ```
+
+---
+
+## CI/CD (GitHub Actions)
+
+Автоматический деплой при push в `master` ветку.
+
+### Как это работает
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ git push    │────►│  GitHub     │────►│   Server    │
+│ to master   │     │  Actions    │     │ (via SSH)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+                          │
+                    ┌─────▼─────┐
+                    │ 1. git pull│
+                    │ 2. build   │
+                    │ 3. restart │
+                    └───────────┘
+```
+
+### Настроенные секреты
+
+В GitHub Repository → Settings → Secrets and variables → Actions:
+
+| Secret | Описание |
+|--------|----------|
+| `SSH_PRIVATE_KEY` | Приватный ключ для SSH доступа к серверу |
+| `SERVER_HOST` | IP адрес или hostname сервера |
+| `SERVER_USER` | Пользователь SSH (обычно `root`) |
+
+### Workflow файл
+
+Расположение: `.github/workflows/deploy.yml`
+
+```yaml
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:  # Позволяет запускать вручную
+
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/apps/pkg
+            git fetch origin master
+            git reset --hard origin/master
+            cd docker
+            docker compose pull
+            docker compose up -d --build
+            docker image prune -f
+            echo "Deployment completed at $(date)"
+```
+
+### Ручной запуск деплоя
+
+1. Перейти в GitHub → Actions → Deploy to Production
+2. Нажать "Run workflow"
+3. Выбрать ветку (обычно `master`)
+4. Нажать "Run workflow"
+
+### Мониторинг деплоя
+
+- **GitHub Actions:** вкладка Actions в репозитории
+- **Логи на сервере:** `docker compose logs -f` в `/opt/apps/pkg/docker`
+
+### Откат
+
+При проблемах после деплоя:
+
+```bash
+# На сервере
+cd /opt/apps/pkg
+git log --oneline -5            # Найти предыдущий коммит
+git reset --hard <commit-hash>  # Откатить
+cd docker
+docker compose up -d --build    # Пересобрать
+```
 
 ---
 
@@ -687,7 +819,7 @@ After=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/home/deploy/PKG/docker
+WorkingDirectory=/opt/apps/pkg/docker
 ExecStart=/usr/bin/docker compose up -d
 ExecStop=/usr/bin/docker compose down
 User=deploy
@@ -714,7 +846,7 @@ sudo systemctl status pkg
 ### Просмотр логов
 
 ```bash
-cd ~/PKG/docker
+cd /opt/apps/pkg/docker
 
 # Все сервисы
 docker compose logs -f
@@ -764,7 +896,7 @@ free -h
 ### Стандартное обновление
 
 ```bash
-cd ~/PKG
+cd /opt/apps/pkg
 
 # Получить изменения
 git pull origin main
@@ -781,7 +913,7 @@ docker compose logs -f --tail=100
 ### Обновление с миграциями БД
 
 ```bash
-cd ~/PKG
+cd /opt/apps/pkg
 
 # Получить изменения
 git pull origin main
@@ -801,7 +933,7 @@ docker compose up -d
 ### Откат
 
 ```bash
-cd ~/PKG
+cd /opt/apps/pkg
 
 # Откатить код
 git checkout <previous-commit>
@@ -860,7 +992,7 @@ crontab -e
 
 ```cron
 # Ежедневно в 3:00
-0 3 * * * /home/deploy/PKG/scripts/backup.sh >> /home/deploy/logs/backup.log 2>&1
+0 3 * * * /opt/apps/pkg/scripts/backup.sh >> /home/deploy/logs/backup.log 2>&1
 ```
 
 ---
@@ -1067,7 +1199,7 @@ docker compose logs --no-color > logs-$(date +%Y%m%d).txt
 ### Docker
 - [ ] Docker и Docker Compose установлены
 - [ ] Пользователь `deploy` добавлен в группу `docker`
-- [ ] Репозиторий склонирован в `/home/deploy/PKG`
+- [ ] Репозиторий склонирован в `/opt/apps/pkg`
 
 ### Конфигурация
 - [ ] `.env` файл создан из `.env.example`
