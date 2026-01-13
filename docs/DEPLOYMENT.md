@@ -1250,3 +1250,4 @@ docker compose logs --no-color > logs-$(date +%Y%m%d).txt
 - [ ] Открыть `https://pkg.example.com/n8n/`
 - [ ] Создать owner аккаунт через UI
 - [ ] Импортировать/создать workflows
+# CI/CD test 20260114-014852
