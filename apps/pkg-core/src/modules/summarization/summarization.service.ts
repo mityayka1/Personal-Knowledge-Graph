@@ -13,8 +13,8 @@ import {
   ImportantMessageRef,
   ToneType,
 } from '@pkg/entities';
-import { ClaudeCliService } from '../claude-cli/claude-cli.service';
-import { SchemaLoaderService } from '../claude-cli/schema-loader.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SchemaLoaderService } from '../claude-agent/schema-loader.service';
 
 // Result from Claude CLI
 interface SummarizationResult {
@@ -44,7 +44,7 @@ export class SummarizationService {
     private interactionRepo: Repository<Interaction>,
     @InjectRepository(Message)
     private messageRepo: Repository<Message>,
-    private claudeCliService: ClaudeCliService,
+    private claudeAgentService: ClaudeAgentService,
     private schemaLoader: SchemaLoaderService,
     @InjectQueue('summarization')
     private summarizationQueue: Queue,
@@ -139,9 +139,9 @@ export class SummarizationService {
     // Build prompt and call Claude
     const prompt = this.buildPrompt(interaction, scoredMessages);
 
-    const { data, run } = await this.claudeCliService.call<SummarizationResult>({
+    const { data, run } = await this.claudeAgentService.call<SummarizationResult>({
+      mode: 'oneshot',
       taskType: 'summarization',
-      agentName: 'summarizer',
       prompt,
       schema: this.schema,
       model: 'sonnet',

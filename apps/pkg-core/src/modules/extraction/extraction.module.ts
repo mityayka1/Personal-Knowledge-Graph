@@ -9,6 +9,7 @@ import { ExtractionController } from './extraction.controller';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
+import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { EntityModule } from '../entity/entity.module';
     ResolutionModule,
     forwardRef(() => InteractionModule),
     forwardRef(() => EntityModule),
+    ClaudeAgentModule,
   ],
   controllers: [ExtractionController],
   providers: [

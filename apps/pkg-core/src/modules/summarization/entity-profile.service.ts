@@ -15,8 +15,8 @@ import {
   KeyDecision,
   OpenActionItem,
 } from '@pkg/entities';
-import { ClaudeCliService } from '../claude-cli/claude-cli.service';
-import { SchemaLoaderService } from '../claude-cli/schema-loader.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SchemaLoaderService } from '../claude-agent/schema-loader.service';
 
 // Result from Claude CLI profile aggregation
 interface ProfileAggregationResult {
@@ -63,7 +63,7 @@ export class EntityProfileService {
     private entityRepo: Repository<EntityRecord>,
     @InjectRepository(EntityFact)
     private factRepo: Repository<EntityFact>,
-    private claudeCliService: ClaudeCliService,
+    private claudeAgentService: ClaudeAgentService,
     private schemaLoader: SchemaLoaderService,
     @InjectQueue('entity-profile')
     private profileQueue: Queue,
@@ -160,9 +160,9 @@ export class EntityProfileService {
     const prompt = this.buildProfilePrompt(entity, facts, summaries, aggregated);
 
     // Call Claude CLI
-    const { data, run } = await this.claudeCliService.call<ProfileAggregationResult>({
+    const { data, run } = await this.claudeAgentService.call<ProfileAggregationResult>({
+      mode: 'oneshot',
       taskType: 'profile_aggregation',
-      agentName: 'profile-aggregator',
       prompt,
       schema: this.schema,
       model: 'sonnet',

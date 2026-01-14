@@ -15,7 +15,7 @@ import { SummarizationProcessor } from './summarization.processor';
 import { SummarizationController } from './summarization.controller';
 import { EntityProfileService } from './entity-profile.service';
 import { EntityProfileProcessor } from './entity-profile.processor';
-import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
+import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 
 @Module({
   imports: [
@@ -46,7 +46,7 @@ import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
       },
     }),
     ScheduleModule.forRoot(),
-    ClaudeCliModule,
+    ClaudeAgentModule,
   ],
   controllers: [SummarizationController],
   providers: [

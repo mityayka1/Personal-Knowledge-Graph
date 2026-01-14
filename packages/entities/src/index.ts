@@ -14,4 +14,7 @@ export * from './chat-category.entity';
 export * from './group-membership.entity';
 export * from './entity-event.entity';
 export * from './entity-relationship-profile.entity';
-export * from './claude-cli-run.entity';
+// ClaudeCliRun is deprecated, use ClaudeAgentRun instead
+// Keep the entity for backward compatibility with old migrations
+export { ClaudeCliRun } from './claude-cli-run.entity';
+export * from './claude-agent-run.entity';

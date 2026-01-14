@@ -9,7 +9,7 @@ import * as path from 'path';
 export type SchemaType = 'summarization' | 'profile' | 'context' | 'fact-extraction';
 
 /**
- * Service for loading JSON schemas for Claude CLI structured output.
+ * Service for loading JSON schemas for Claude structured output.
  * Provides centralized schema loading with caching and fallback support.
  */
 @Injectable()
