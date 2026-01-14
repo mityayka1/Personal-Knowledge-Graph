@@ -45,6 +45,8 @@ services:
       REDIS_PREFIX: ${REDIS_PREFIX:-pkg:bull}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       FILE_STORAGE_PATH: /data/files
+      # Telegram Adapter URL for media proxy
+      TELEGRAM_ADAPTER_URL: http://telegram-adapter:3001
       # Claude CLI
       CLAUDE_WORKSPACE_PATH: /app/claude-workspace
     volumes:
