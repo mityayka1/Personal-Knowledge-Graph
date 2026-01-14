@@ -42,11 +42,16 @@ function extractToolUses(content: unknown[]): ToolUseBlock[] {
 }
 
 /**
+ * MCP server name used for our tools
+ */
+const MCP_SERVER_NAME = 'pkg-tools';
+
+/**
  * Clean tool name from MCP format
  * mcp__pkg-tools__tool_name -> tool_name
  */
 function cleanToolName(mcpName: string): string {
-  return mcpName.replace(/^mcp__[^_]+__/, '');
+  return mcpName.replace(new RegExp(`^mcp__${MCP_SERVER_NAME}__`), '');
 }
 
 @Injectable()

@@ -15,7 +15,9 @@ import type { ToolCategory } from './claude-agent.types';
  * Aggregates tools from specialized providers and creates MCP servers.
  * Uses NestJS DI to inject tool providers, avoiding the factory anti-pattern.
  *
- * ContextToolsProvider is @Optional to break circular dependency with ContextModule.
+ * ContextToolsProvider is @Optional to handle bidirectional module imports:
+ * ContextModule ↔ ClaudeAgentModule. If ContextService is not yet available
+ * during DI resolution, context tools will be disabled.
  */
 @Injectable()
 export class ToolsRegistryService {
@@ -75,6 +77,7 @@ export class ToolsRegistryService {
     for (const category of categories) {
       switch (category) {
         case 'all': {
+          // 'all' is already cached in cachedAllTools, but also cache it in categoryCache
           const allTools = this.getAllTools();
           this.categoryCache.set(cacheKey, allTools);
           return allTools;

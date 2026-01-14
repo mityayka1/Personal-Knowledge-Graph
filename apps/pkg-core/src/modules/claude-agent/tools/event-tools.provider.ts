@@ -11,6 +11,12 @@ import { EventType, type EntityEvent } from '@pkg/entities';
 const DEFAULT_EVENT_TITLE = '(untitled)';
 
 /**
+ * Locale settings for date formatting
+ */
+const DATE_LOCALE = 'ru-RU';
+const DATE_TIMEZONE = 'Europe/Moscow';
+
+/**
  * Provider for event-related tools (reminders, meetings, deadlines)
  * Implements NestJS Injectable pattern with tool caching
  */
@@ -127,7 +133,7 @@ or note an upcoming deadline or meeting.`,
               id: event.id,
               status: event.status,
               message: `Event "${args.title}" created successfully.` +
-                (eventDate ? ` Scheduled for ${eventDate.toLocaleString()}.` : ''),
+                (eventDate ? ` Scheduled for ${eventDate.toLocaleString(DATE_LOCALE, { timeZone: DATE_TIMEZONE, dateStyle: 'long', timeStyle: 'short' })}.` : ''),
             });
           } catch (error) {
             return handleToolError(error, this.logger, 'create_reminder');

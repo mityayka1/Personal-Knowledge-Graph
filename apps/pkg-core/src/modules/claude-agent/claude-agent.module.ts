@@ -23,16 +23,22 @@ import { EntityModule } from '../entity/entity.module';
  *
  * Architecture:
  * - Tool providers are injected via DI (not factory functions)
- * - ContextToolsProvider uses @Optional injection to break circular dependency
- * - ContextModule must import ClaudeAgentModule (not the other way around)
- *   to make ContextService available for ContextToolsProvider
+ * - ContextToolsProvider uses @Optional + forwardRef to handle bidirectional module imports
+ *
+ * Module Import Graph:
+ *   ContextModule → ClaudeAgentModule (uses ClaudeAgentService for context generation)
+ *   ClaudeAgentModule → ContextModule (ContextToolsProvider needs ContextService)
+ *
+ * Resolution:
+ * - forwardRef() on ClaudeAgentModule side when importing ContextModule
+ * - @Optional() + forwardRef() in ContextToolsProvider for ContextService injection
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([ClaudeAgentRun]),
     SearchModule,
-    // forwardRef is still needed because ContextModule imports ClaudeAgentModule
-    // and we need ContextService for ContextToolsProvider
+    // Bidirectional import with ContextModule:
+    // ContextModule imports ClaudeAgentModule, so we use forwardRef here
     forwardRef(() => ContextModule),
     EntityEventModule,
     EntityModule,

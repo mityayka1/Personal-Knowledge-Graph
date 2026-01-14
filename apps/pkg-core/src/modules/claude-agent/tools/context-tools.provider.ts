@@ -6,11 +6,13 @@ import { ContextService } from '../../context/context.service';
 
 /**
  * Provider for context-related tools
- * Uses Optional injection to break circular dependency with ContextModule
  *
- * If ContextService is not available (module not imported), context tools
- * will not be registered. This allows ClaudeAgentModule to be imported
- * by ContextModule without creating a hard circular dependency.
+ * Uses @Optional + forwardRef injection to handle bidirectional module imports:
+ * - ContextModule imports ClaudeAgentModule (for ClaudeAgentService)
+ * - ClaudeAgentModule imports ContextModule (for ContextService here)
+ *
+ * If ContextService is not available during DI resolution (due to module
+ * initialization order), context tools will be disabled gracefully.
  */
 @Injectable()
 export class ContextToolsProvider {

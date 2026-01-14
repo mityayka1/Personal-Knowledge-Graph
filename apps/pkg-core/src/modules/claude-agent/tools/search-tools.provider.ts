@@ -5,6 +5,11 @@ import { toolSuccess, toolEmptyResult, handleToolError, type ToolDefinition } fr
 import { SearchService } from '../../search/search.service';
 
 /**
+ * Maximum content preview length for search results
+ */
+const MAX_CONTENT_PREVIEW_LENGTH = 500;
+
+/**
  * Provider for search-related tools
  * Implements NestJS Injectable pattern with tool caching
  */
@@ -67,7 +72,7 @@ Returns relevant messages with timestamps, senders, and relevance scores.`,
               type: r.type,
               timestamp: r.timestamp,
               entity: r.entity?.name || 'Unknown',
-              content: r.content.slice(0, 500) + (r.content.length > 500 ? '...' : ''),
+              content: r.content.slice(0, MAX_CONTENT_PREVIEW_LENGTH) + (r.content.length > MAX_CONTENT_PREVIEW_LENGTH ? '...' : ''),
               relevance: Math.round(r.score * 100) + '%',
               highlight: r.highlight,
             }));
