@@ -9,5 +9,9 @@ if [ -f /tmp/claude-credentials.json ]; then
   echo "Claude credentials copied"
 fi
 
+# Ensure PATH includes npm global bin and set HOME for nestjs
+export PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export HOME="/home/nestjs"
+
 # Switch to nestjs user and start the application
 exec su-exec nestjs node apps/pkg-core/dist/main.js
