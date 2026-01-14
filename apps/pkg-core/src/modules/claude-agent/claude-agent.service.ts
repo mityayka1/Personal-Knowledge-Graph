@@ -1,8 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { query, type SDKMessage, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type SDKMessage, type SDKResultMessage, type SDKAssistantMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAgentRun, ReferenceType } from '@pkg/entities';
 import {
   CallParams,
@@ -14,7 +14,9 @@ import {
   UsageStats,
   PeriodStats,
   DailyStatsEntry,
+  ToolCategory,
 } from './claude-agent.types';
+import { ToolsRegistryService } from './tools-registry.service';
 
 @Injectable()
 export class ClaudeAgentService {
@@ -24,6 +26,8 @@ export class ClaudeAgentService {
     private configService: ConfigService,
     @InjectRepository(ClaudeAgentRun)
     private runRepo: Repository<ClaudeAgentRun>,
+    @Inject(forwardRef(() => ToolsRegistryService))
+    private toolsRegistry: ToolsRegistryService,
   ) {}
 
   /**
@@ -106,8 +110,9 @@ export class ClaudeAgentService {
     const model = this.getModelString(params.model);
     const maxTurns = params.maxTurns || 15;
     const timeout = params.timeout || 300000; // 5 minutes default for agent
+    const toolCategories = params.toolCategories || ['all'];
 
-    this.logger.debug(`Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}`);
+    this.logger.debug(`Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}, tools=${toolCategories.join(',')}`);
 
     const usage: UsageStats = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
     const toolsUsed: string[] = [];
@@ -120,6 +125,12 @@ export class ClaudeAgentService {
     try {
       const systemPrompt = this.buildAgentSystemPrompt(params.taskType);
 
+      // Create MCP server with requested tool categories
+      const mcpServer = this.toolsRegistry.createMcpServer(toolCategories as ToolCategory[]);
+      const allowedTools = this.toolsRegistry.getToolNames(toolCategories as ToolCategory[]);
+
+      this.logger.debug(`MCP server created with tools: ${allowedTools.join(', ')}`);
+
       for await (const message of query({
         prompt: params.prompt,
         options: {
@@ -127,16 +138,38 @@ export class ClaudeAgentService {
           maxTurns,
           systemPrompt,
           abortController,
-          // Note: Tools are passed via MCP or custom implementation
-          // For now, agent mode tracks turns but tool handling is future work
+          mcpServers: {
+            'pkg-tools': mcpServer,
+          },
+          allowedTools,
         },
       })) {
-        this.processMessage(message, usage);
+        // Process usage and track tools
+        this.processAgentMessage(message, usage, toolsUsed);
 
         if (message.type === 'assistant') {
           turns++;
           if (params.hooks?.onTurn) {
             await params.hooks.onTurn(turns);
+          }
+
+          // Log tool usage for debugging
+          const assistantMsg = message as SDKAssistantMessage;
+          if (assistantMsg.message?.content) {
+            for (const block of assistantMsg.message.content) {
+              if (block.type === 'tool_use') {
+                const toolName = (block as { name?: string }).name || 'unknown';
+                this.logger.debug(`Tool used: ${toolName}`);
+
+                // Call hook if defined
+                if (params.hooks?.onToolUse) {
+                  const approval = await params.hooks.onToolUse(toolName, (block as { input?: unknown }).input);
+                  if (!approval.approve) {
+                    this.logger.warn(`Tool ${toolName} not approved: ${approval.reason}`);
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -163,6 +196,30 @@ export class ClaudeAgentService {
       turns,
       toolsUsed: [...new Set(toolsUsed)],
     };
+  }
+
+  /**
+   * Process agent message and track tools used
+   */
+  private processAgentMessage(message: SDKMessage, usage: UsageStats, toolsUsed: string[]): void {
+    this.processMessage(message, usage);
+
+    // Track tool usage from assistant messages
+    if (message.type === 'assistant') {
+      const assistantMsg = message as SDKAssistantMessage;
+      if (assistantMsg.message?.content) {
+        for (const block of assistantMsg.message.content) {
+          if (block.type === 'tool_use') {
+            const toolName = (block as { name?: string }).name;
+            if (toolName) {
+              // Extract clean tool name from MCP format (mcp__pkg-tools__tool_name -> tool_name)
+              const cleanName = toolName.replace(/^mcp__[^_]+__/, '');
+              toolsUsed.push(cleanName);
+            }
+          }
+        }
+      }
+    }
   }
 
   /**
