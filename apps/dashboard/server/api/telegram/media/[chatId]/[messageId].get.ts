@@ -46,9 +46,16 @@ export default defineEventHandler(async (event) => {
 
   const targetUrl = `${baseUrl}/media/${encodedChatId}/${encodedMessageId}?${queryParams.toString()}`;
 
+  // Get API key from config for PKG Core authentication
+  const apiKey = config.apiKey;
+
   try {
     // Use native fetch for binary streaming
-    const response = await fetch(targetUrl);
+    const response = await fetch(targetUrl, {
+      headers: {
+        ...(apiKey && { 'X-API-Key': apiKey }),
+      },
+    });
 
     if (!response.ok) {
       // Log error for debugging
