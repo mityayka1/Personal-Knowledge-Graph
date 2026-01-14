@@ -10,9 +10,12 @@ import {
   Menu,
   Download,
   Settings,
+  LogOut,
+  User,
 } from 'lucide-vue-next';
 
 const route = useRoute();
+const { user, logout } = useAuth();
 
 const navigation = [
   { name: 'Сущности', href: '/entities', icon: Users },
@@ -65,7 +68,7 @@ function isActive(href: string) {
         <ThemeToggle />
       </div>
 
-      <nav class="flex flex-col gap-1 p-4">
+      <nav class="flex flex-col gap-1 p-4 pb-20">
         <NuxtLink
           v-for="item in navigation"
           :key="item.name"
@@ -82,6 +85,31 @@ function isActive(href: string) {
           {{ item.name }}
         </NuxtLink>
       </nav>
+
+      <!-- User info & Logout -->
+      <div class="absolute bottom-0 left-0 right-0 border-t p-4">
+        <div v-if="user" class="flex items-center gap-3">
+          <div class="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+            <User class="h-5 w-5 text-primary" />
+          </div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate">
+              {{ user.displayName || user.username }}
+            </p>
+            <p class="text-xs text-muted-foreground truncate">
+              {{ user.role }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            title="Выйти"
+            @click="logout"
+          >
+            <LogOut class="h-4 w-4" />
+          </button>
+        </div>
+      </div>
     </aside>
 
     <!-- Backdrop for mobile -->
