@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -15,8 +15,39 @@ import {
   PeriodStats,
   DailyStatsEntry,
   ToolCategory,
+  AgentHooks,
 } from './claude-agent.types';
 import { ToolsRegistryService } from './tools-registry.service';
+
+/**
+ * Content block with tool use
+ */
+interface ToolUseBlock {
+  type: 'tool_use';
+  name?: string;
+  input?: unknown;
+}
+
+/**
+ * Extract tool uses from assistant message content
+ */
+function extractToolUses(content: unknown[]): ToolUseBlock[] {
+  return content.filter(
+    (block): block is ToolUseBlock =>
+      typeof block === 'object' &&
+      block !== null &&
+      'type' in block &&
+      (block as { type: unknown }).type === 'tool_use'
+  );
+}
+
+/**
+ * Clean tool name from MCP format
+ * mcp__pkg-tools__tool_name -> tool_name
+ */
+function cleanToolName(mcpName: string): string {
+  return mcpName.replace(/^mcp__[^_]+__/, '');
+}
 
 @Injectable()
 export class ClaudeAgentService {
@@ -26,7 +57,6 @@ export class ClaudeAgentService {
     private configService: ConfigService,
     @InjectRepository(ClaudeAgentRun)
     private runRepo: Repository<ClaudeAgentRun>,
-    @Inject(forwardRef(() => ToolsRegistryService))
     private toolsRegistry: ToolsRegistryService,
   ) {}
 
@@ -79,7 +109,7 @@ export class ClaudeAgentService {
           abortController,
         },
       })) {
-        this.processMessage(message, usage);
+        this.accumulateUsage(message, usage);
 
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
@@ -144,32 +174,18 @@ export class ClaudeAgentService {
           allowedTools,
         },
       })) {
-        // Process usage and track tools
-        this.processAgentMessage(message, usage, toolsUsed);
+        this.accumulateUsage(message, usage);
 
         if (message.type === 'assistant') {
           turns++;
+          await this.processAssistantMessage(
+            message as SDKAssistantMessage,
+            toolsUsed,
+            params.hooks,
+          );
+
           if (params.hooks?.onTurn) {
             await params.hooks.onTurn(turns);
-          }
-
-          // Log tool usage for debugging
-          const assistantMsg = message as SDKAssistantMessage;
-          if (assistantMsg.message?.content) {
-            for (const block of assistantMsg.message.content) {
-              if (block.type === 'tool_use') {
-                const toolName = (block as { name?: string }).name || 'unknown';
-                this.logger.debug(`Tool used: ${toolName}`);
-
-                // Call hook if defined
-                if (params.hooks?.onToolUse) {
-                  const approval = await params.hooks.onToolUse(toolName, (block as { input?: unknown }).input);
-                  if (!approval.approve) {
-                    this.logger.warn(`Tool ${toolName} not approved: ${approval.reason}`);
-                  }
-                }
-              }
-            }
           }
         }
 
@@ -199,34 +215,42 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Process agent message and track tools used
+   * Process assistant message: track tool usage and call hooks
    */
-  private processAgentMessage(message: SDKMessage, usage: UsageStats, toolsUsed: string[]): void {
-    this.processMessage(message, usage);
+  private async processAssistantMessage(
+    message: SDKAssistantMessage,
+    toolsUsed: string[],
+    hooks?: AgentHooks,
+  ): Promise<void> {
+    const content = message.message?.content;
+    if (!content || !Array.isArray(content)) {
+      return;
+    }
 
-    // Track tool usage from assistant messages
-    if (message.type === 'assistant') {
-      const assistantMsg = message as SDKAssistantMessage;
-      if (assistantMsg.message?.content) {
-        for (const block of assistantMsg.message.content) {
-          if (block.type === 'tool_use') {
-            const toolName = (block as { name?: string }).name;
-            if (toolName) {
-              // Extract clean tool name from MCP format (mcp__pkg-tools__tool_name -> tool_name)
-              const cleanName = toolName.replace(/^mcp__[^_]+__/, '');
-              toolsUsed.push(cleanName);
-            }
-          }
+    const toolUses = extractToolUses(content);
+
+    for (const toolUse of toolUses) {
+      const rawName = toolUse.name || 'unknown';
+      const cleanName = cleanToolName(rawName);
+
+      // Track tool usage
+      toolsUsed.push(cleanName);
+      this.logger.debug(`Tool used: ${cleanName}`);
+
+      // Call hook if defined
+      if (hooks?.onToolUse) {
+        const approval = await hooks.onToolUse(cleanName, toolUse.input);
+        if (!approval.approve) {
+          this.logger.warn(`Tool ${cleanName} not approved: ${approval.reason}`);
         }
       }
     }
   }
 
   /**
-   * Process SDK message and accumulate usage
+   * Accumulate usage stats from SDK message
    */
-  private processMessage(message: SDKMessage, usage: UsageStats): void {
-    // Handle usage in assistant messages
+  private accumulateUsage(message: SDKMessage, usage: UsageStats): void {
     if (message.type === 'assistant' && 'usage' in message && message.usage) {
       const u = message.usage as { inputTokens?: number; outputTokens?: number; costUSD?: number };
       usage.inputTokens += u.inputTokens || 0;

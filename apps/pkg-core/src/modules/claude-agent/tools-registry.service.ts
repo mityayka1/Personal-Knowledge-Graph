@@ -1,76 +1,100 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
-import { createSearchTools } from './tools/search.tools';
-import { createContextTools } from './tools/context.tools';
-import { createEventTools } from './tools/event.tools';
-import { createEntityTools } from './tools/entity.tools';
-import { SearchService } from '../search/search.service';
-import { ContextService } from '../context/context.service';
-import { EntityEventService } from '../entity-event/entity-event.service';
-import { EntityService } from '../entity/entity.service';
+import {
+  SearchToolsProvider,
+  EntityToolsProvider,
+  EventToolsProvider,
+  ContextToolsProvider,
+  type ToolDefinition,
+} from './tools';
 import type { ToolCategory } from './claude-agent.types';
 
 /**
- * MCP server configuration with instance
+ * Service for managing agent tools
+ *
+ * Aggregates tools from specialized providers and creates MCP servers.
+ * Uses NestJS DI to inject tool providers, avoiding the factory anti-pattern.
+ *
+ * ContextToolsProvider is @Optional to break circular dependency with ContextModule.
  */
-export interface McpServerConfig {
-  name: string;
-  version: string;
-  instance: unknown; // MCP server instance
-}
-
 @Injectable()
 export class ToolsRegistryService {
   private readonly logger = new Logger(ToolsRegistryService.name);
 
-  constructor(
-    private searchService: SearchService,
-    @Inject(forwardRef(() => ContextService))
-    private contextService: ContextService,
-    private entityEventService: EntityEventService,
-    private entityService: EntityService,
-  ) {}
+  /** Cache for all tools to avoid repeated aggregation */
+  private cachedAllTools: ToolDefinition[] | null = null;
 
-  /**
-   * Get all available tools
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getAllTools(): any[] {
-    return [
-      ...createSearchTools(this.searchService),
-      ...createContextTools(this.contextService),
-      ...createEventTools(this.entityEventService),
-      ...createEntityTools(this.entityService),
-    ];
+  /** Cache for tools by category */
+  private categoryCache = new Map<string, ToolDefinition[]>();
+
+  constructor(
+    private readonly searchToolsProvider: SearchToolsProvider,
+    private readonly entityToolsProvider: EntityToolsProvider,
+    private readonly eventToolsProvider: EventToolsProvider,
+    @Optional()
+    private readonly contextToolsProvider: ContextToolsProvider | null,
+  ) {
+    // Log availability of context tools
+    if (!this.contextToolsProvider?.hasTools()) {
+      this.logger.warn('ContextToolsProvider not available - context tools disabled');
+    }
   }
 
   /**
-   * Get tools by category
+   * Get all available tools (cached)
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getToolsByCategory(categories: ToolCategory[]): any[] {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const tools: any[] = [];
+  getAllTools(): ToolDefinition[] {
+    if (!this.cachedAllTools) {
+      this.cachedAllTools = [
+        ...this.searchToolsProvider.getTools(),
+        ...this.entityToolsProvider.getTools(),
+        ...this.eventToolsProvider.getTools(),
+        ...(this.contextToolsProvider?.getTools() ?? []),
+      ];
+      this.logger.debug(`Aggregated ${this.cachedAllTools.length} tools from all providers`);
+    }
+    return this.cachedAllTools;
+  }
+
+  /**
+   * Get tools by category (cached)
+   */
+  getToolsByCategory(categories: ToolCategory[]): ToolDefinition[] {
+    // Create sorted copy to avoid mutating input array
+    const cacheKey = [...categories].sort().join(',');
+
+    // Check cache
+    const cached = this.categoryCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Build tools list
+    const tools: ToolDefinition[] = [];
 
     for (const category of categories) {
       switch (category) {
         case 'all':
           return this.getAllTools();
         case 'search':
-          tools.push(...createSearchTools(this.searchService));
+          tools.push(...this.searchToolsProvider.getTools());
           break;
         case 'context':
-          tools.push(...createContextTools(this.contextService));
+          if (this.contextToolsProvider?.hasTools()) {
+            tools.push(...this.contextToolsProvider.getTools());
+          }
           break;
         case 'events':
-          tools.push(...createEventTools(this.entityEventService));
+          tools.push(...this.eventToolsProvider.getTools());
           break;
         case 'entities':
-          tools.push(...createEntityTools(this.entityService));
+          tools.push(...this.entityToolsProvider.getTools());
           break;
       }
     }
 
+    // Cache and return
+    this.categoryCache.set(cacheKey, tools);
     return tools;
   }
 
@@ -80,7 +104,9 @@ export class ToolsRegistryService {
   createMcpServer(categories: ToolCategory[] = ['all']): ReturnType<typeof createSdkMcpServer> {
     const tools = this.getToolsByCategory(categories);
 
-    this.logger.debug(`Creating MCP server with ${tools.length} tools: ${tools.map((t: { name: string }) => t.name).join(', ')}`);
+    this.logger.debug(
+      `Creating MCP server with ${tools.length} tools: ${tools.map(t => t.name).join(', ')}`
+    );
 
     return createSdkMcpServer({
       name: 'pkg-tools',
@@ -95,13 +121,20 @@ export class ToolsRegistryService {
    */
   getToolNames(categories: ToolCategory[] = ['all']): string[] {
     const tools = this.getToolsByCategory(categories);
-    return tools.map((t: { name: string }) => `mcp__pkg-tools__${t.name}`);
+    return tools.map(t => `mcp__pkg-tools__${t.name}`);
   }
 
   /**
    * Get available tool names (short form, for logging/display)
    */
   getAvailableToolNames(): string[] {
-    return this.getAllTools().map((t: { name: string }) => t.name);
+    return this.getAllTools().map(t => t.name);
+  }
+
+  /**
+   * Check if context tools are available
+   */
+  hasContextTools(): boolean {
+    return this.contextToolsProvider?.hasTools() ?? false;
   }
 }

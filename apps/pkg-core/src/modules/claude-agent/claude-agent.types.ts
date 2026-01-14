@@ -50,16 +50,6 @@ export interface OneshotParams<T = unknown> extends BaseParams {
 }
 
 /**
- * Tool definition for agent mode (custom tools)
- */
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: object;
-  handler: (input: unknown) => Promise<string>;
-}
-
-/**
  * Hooks for agent mode
  */
 export interface AgentHooks {
@@ -75,8 +65,6 @@ export interface AgentParams extends BaseParams {
   mode: 'agent';
   /** Tool categories to enable (default: 'all'). Determines which PKG tools are available. */
   toolCategories?: ToolCategory[];
-  /** Custom tools to add in addition to PKG tools */
-  customTools?: ToolDefinition[];
   hooks?: AgentHooks;
   maxTurns?: number;
   budgetUsd?: number;
