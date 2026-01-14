@@ -18,6 +18,7 @@ import {
   EntityEvent,
   EntityRelationshipProfile,
   ClaudeCliRun,
+  ClaudeAgentRun,
 } from '@pkg/entities';
 
 export default registerAs('database', (): TypeOrmModuleOptions => {
@@ -63,6 +64,7 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       EntityEvent,
       EntityRelationshipProfile,
       ClaudeCliRun,
+      ClaudeAgentRun,
     ],
 
     // Synchronize only for tests (creates tables automatically)
