@@ -89,6 +89,29 @@ Telegram сообщения группируются в sessions (Interactions).
 3. **Async Processing:** Тяжёлые задачи (transcription, LLM) выполняются асинхронно через Worker
 4. **Embeddings:** Генерируются асинхронно в очереди, не блокируют основной поток
 
+## Git Workflow
+
+### Merge Strategy
+**ЗАПРЕЩЕНО использовать Squash Merge при принятии PR.**
+
+Причины:
+- Squash создаёт новый коммит, отличный от оригинальных → ветки показывают "различия" даже после merge
+- Теряется история отдельных коммитов и их авторство
+- Усложняет отслеживание что было смержено, а что нет
+
+**Используй обычный Merge Commit** (`gh pr merge --merge`) или **Rebase Merge** (`gh pr merge --rebase`).
+
+```bash
+# Правильно
+gh pr merge <N> --merge --delete-branch
+
+# Неправильно
+gh pr merge <N> --squash  # ❌ ЗАПРЕЩЕНО
+```
+
+### Branch Cleanup
+После merge PR удаляй ветку (флаг `--delete-branch`). Не оставляй stale branches.
+
 ## Claude Agent SDK — Правила работы
 
 PKG использует Claude Agent SDK для AI-функций. При работе с agent tools соблюдай следующие правила:
