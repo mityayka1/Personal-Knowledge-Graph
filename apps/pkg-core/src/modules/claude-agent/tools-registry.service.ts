@@ -74,8 +74,11 @@ export class ToolsRegistryService {
 
     for (const category of categories) {
       switch (category) {
-        case 'all':
-          return this.getAllTools();
+        case 'all': {
+          const allTools = this.getAllTools();
+          this.categoryCache.set(cacheKey, allTools);
+          return allTools;
+        }
         case 'search':
           tools.push(...this.searchToolsProvider.getTools());
           break;
