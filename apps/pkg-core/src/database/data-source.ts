@@ -30,6 +30,7 @@ import {
   EntityRelationshipProfile,
   ClaudeCliRun,
   ClaudeAgentRun,
+  User,
 } from '@pkg/entities';
 
 // Database configuration for TypeORM CLI
@@ -74,6 +75,7 @@ export const dataSourceOptions: DataSourceOptions = {
     EntityRelationshipProfile,
     ClaudeCliRun,
     ClaudeAgentRun,
+    User,
   ],
 
   // Migrations
