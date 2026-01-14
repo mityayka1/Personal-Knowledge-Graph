@@ -50,6 +50,36 @@ async call<T>(params: ClaudeCliCallParams<T>): Promise<ClaudeCliResult<T>>
 - **Prepare Agent** — multi-step сбор контекста
 - **Act Agent** — действия с approval hooks
 
+### 1.3 Авторизация: Подписка vs API ключ
+
+> **Важно:** Claude Agent SDK работает с подпиской (Pro/Max/Team), API ключ НЕ требуется!
+
+Agent SDK использует Claude Code CLI под капотом, поэтому наследует все способы авторизации CLI:
+
+| Способ авторизации | Поддержка |
+|-------------------|-----------|
+| Подписка Pro/Max/Team (`claude login`) | ✅ |
+| API ключ (`ANTHROPIC_API_KEY`) | ✅ |
+
+**Проверено:**
+```bash
+# Без API ключа, только с подпиской
+unset ANTHROPIC_API_KEY
+npx ts-node test-agent.ts
+# ✅ Test passed - Agent SDK works with subscription!
+```
+
+**Преимущества работы по подписке:**
+- Фиксированная стоимость (Max $100-200/мес)
+- Нет неожиданных счетов за API
+- Общие лимиты с claude.ai и Claude Code CLI
+- Сброс лимитов каждые 5 часов
+
+**Когда нужен API ключ:**
+- CI/CD pipelines (headless)
+- Docker без mount credentials
+- Нужен 1M token context (vs 200K у подписки)
+
 ---
 
 ## 2. Решение
