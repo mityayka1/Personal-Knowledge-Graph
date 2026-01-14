@@ -30,9 +30,10 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
-# Install pnpm and Claude CLI
+# Install pnpm, Claude CLI, and su-exec for user switching
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate && \
-    npm install -g @anthropic-ai/claude-code
+    npm install -g @anthropic-ai/claude-code && \
+    apk add --no-cache su-exec
 
 # Copy package files
 COPY package.json pnpm-workspace.yaml ./
@@ -56,12 +57,11 @@ COPY docker/entrypoint-pkg-core.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Create non-root user with home directory for Claude credentials
+# Entrypoint runs as root to copy credentials, then switches to nestjs via su-exec
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001 -G nodejs -h /home/nestjs && \
     mkdir -p /home/nestjs/.claude && \
     chown -R nestjs:nodejs /home/nestjs
-
-USER nestjs
 
 # Set Claude workspace path
 ENV CLAUDE_WORKSPACE_PATH=/app/claude-workspace
