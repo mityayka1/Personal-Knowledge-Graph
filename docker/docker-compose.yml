@@ -51,8 +51,10 @@ services:
       CLAUDE_WORKSPACE_PATH: /app/claude-workspace
     volumes:
       - file-storage:/data/files
-      # Claude credentials - mount from host after `claude login`
-      - ${CLAUDE_CREDENTIALS_PATH:-~/.claude}:/home/nestjs/.claude:ro
+      # Claude runtime data (writable) - credentials copied on startup
+      - claude-data:/home/nestjs/.claude
+      # Claude credentials file (read-only) - copied to claude-data on startup
+      - ${CLAUDE_CREDENTIALS_PATH:-~/.claude}/.credentials.json:/tmp/claude-credentials.json:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -172,3 +174,4 @@ volumes:
   redis-data:
   n8n-data:
   file-storage:
+  claude-data:  # Claude CLI runtime data (writable)

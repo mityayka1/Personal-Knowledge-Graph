@@ -51,6 +51,10 @@ COPY --from=builder /app/apps/pkg-core/dist ./apps/pkg-core/dist
 # Copy claude-workspace for agents and CLAUDE.md
 COPY claude-workspace ./claude-workspace
 
+# Copy entrypoint script
+COPY docker/entrypoint-pkg-core.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Create non-root user with home directory for Claude credentials
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001 -G nodejs -h /home/nestjs && \
@@ -64,4 +68,4 @@ ENV CLAUDE_WORKSPACE_PATH=/app/claude-workspace
 
 EXPOSE 3000
 
-CMD ["node", "apps/pkg-core/dist/main.js"]
+ENTRYPOINT ["/entrypoint.sh"]
