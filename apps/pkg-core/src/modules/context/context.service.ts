@@ -13,8 +13,8 @@ import { ContextRequest, ContextResponse, SynthesizedContext, SearchResult } fro
 import { EntityService } from '../entity/entity.service';
 import { VectorService } from '../search/vector.service';
 import { EmbeddingService } from '../embedding/embedding.service';
-import { ClaudeCliService } from '../claude-cli/claude-cli.service';
-import { SchemaLoaderService } from '../claude-cli/schema-loader.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SchemaLoaderService } from '../claude-agent/schema-loader.service';
 
 @Injectable()
 export class ContextService {
@@ -39,7 +39,7 @@ export class ContextService {
     private entityService: EntityService,
     private vectorService: VectorService,
     private embeddingService: EmbeddingService,
-    private claudeCliService: ClaudeCliService,
+    private claudeAgentService: ClaudeAgentService,
     private schemaLoader: SchemaLoaderService,
     private configService: ConfigService,
   ) {
@@ -116,9 +116,9 @@ export class ContextService {
     // 8. Call Claude for synthesis
     let synthesizedContext: SynthesizedContext | undefined;
     try {
-      const { data } = await this.claudeCliService.call<SynthesizedContext>({
+      const { data } = await this.claudeAgentService.call<SynthesizedContext>({
+        mode: 'oneshot',
         taskType: 'context_synthesis',
-        agentName: 'context-synthesizer',
         prompt,
         schema: this.schema,
         model: 'sonnet',

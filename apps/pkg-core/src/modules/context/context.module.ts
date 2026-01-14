@@ -13,7 +13,7 @@ import { EntityModule } from '../entity/entity.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
-import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
+import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 
 @Module({
   imports: [
@@ -28,7 +28,7 @@ import { ClaudeCliModule } from '../claude-cli/claude-cli.module';
     forwardRef(() => InteractionModule),
     SearchModule,
     EmbeddingModule,
-    ClaudeCliModule,
+    ClaudeAgentModule,
   ],
   controllers: [ContextController],
   providers: [ContextService],
