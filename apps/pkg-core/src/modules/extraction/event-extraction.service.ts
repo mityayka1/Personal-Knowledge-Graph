@@ -2,8 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EntityEvent, EventType, EventStatus } from '@pkg/entities';
-import { spawn } from 'child_process';
-import * as path from 'path';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 
 export interface ExtractedEvent {
   eventType: EventType;
@@ -18,10 +17,11 @@ export interface ExtractedEvent {
 export interface EventExtractionResult {
   entityId: string;
   events: ExtractedEvent[];
+  tokensUsed?: number;
 }
 
 // JSON Schema for event extraction
-const EVENTS_SCHEMA = JSON.stringify({
+const EVENTS_SCHEMA = {
   type: 'object',
   properties: {
     events: {
@@ -51,7 +51,11 @@ const EVENTS_SCHEMA = JSON.stringify({
     },
   },
   required: ['events'],
-});
+};
+
+interface EventsExtractionResponse {
+  events: ExtractedEvent[];
+}
 
 /**
  * Extracts events (meetings, deadlines, commitments) from messages
@@ -59,18 +63,12 @@ const EVENTS_SCHEMA = JSON.stringify({
 @Injectable()
 export class EventExtractionService {
   private readonly logger = new Logger(EventExtractionService.name);
-  private readonly workspacePath: string;
-  private readonly claudePath: string;
-  private readonly timeoutMs = 60000;
 
   constructor(
     @InjectRepository(EntityEvent)
     private eventRepo: Repository<EntityEvent>,
-  ) {
-    const projectRoot = process.env.PKG_PROJECT_ROOT || path.resolve(process.cwd(), '../..');
-    this.workspacePath = path.join(projectRoot, 'claude-workspace');
-    this.claudePath = process.env.CLAUDE_CLI_PATH || 'claude';
-  }
+    private claudeAgentService: ClaudeAgentService,
+  ) {}
 
   /**
    * Extract events from message content
@@ -92,9 +90,19 @@ export class EventExtractionService {
     const prompt = this.buildPrompt(entityName, messageContent);
 
     try {
-      const response = await this.callClaudeCli(prompt);
-      const events = this.parseResponse(response);
-      const validEvents = events.filter((e) => e.confidence >= 0.6);
+      const { data, usage } = await this.claudeAgentService.call<EventsExtractionResponse>({
+        mode: 'oneshot',
+        taskType: 'event_extraction',
+        prompt,
+        schema: EVENTS_SCHEMA,
+        model: 'haiku',
+        referenceType: 'message',
+        referenceId: messageId,
+        timeout: 60000,
+      });
+
+      const rawEvents = data.events || [];
+      const validEvents = this.normalizeEvents(rawEvents);
 
       // Save events to database
       for (const event of validEvents) {
@@ -107,7 +115,11 @@ export class EventExtractionService {
       }
 
       this.logger.log(`Extracted ${validEvents.length} events for ${entityName}`);
-      return { entityId, events: validEvents };
+      return {
+        entityId,
+        events: validEvents,
+        tokensUsed: usage.inputTokens + usage.outputTokens,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Event extraction failed: ${message}`);
@@ -133,20 +145,51 @@ export class EventExtractionService {
     const prompt = this.buildBatchPrompt(entityName, combined);
 
     try {
-      const response = await this.callClaudeCli(prompt);
-      const events = this.parseResponse(response);
-      const validEvents = events.filter((e) => e.confidence >= 0.6);
+      const { data, usage } = await this.claudeAgentService.call<EventsExtractionResponse>({
+        mode: 'oneshot',
+        taskType: 'event_extraction',
+        prompt,
+        schema: EVENTS_SCHEMA,
+        model: 'haiku',
+        referenceType: 'interaction',
+        referenceId: messages[0]?.interactionId,
+        timeout: 60000,
+      });
+
+      const rawEvents = data.events || [];
+      const validEvents = this.normalizeEvents(rawEvents);
 
       for (const event of validEvents) {
         await this.saveEvent(entityId, event, undefined, messages[0]?.interactionId);
       }
 
-      return { entityId, events: validEvents };
+      return {
+        entityId,
+        events: validEvents,
+        tokensUsed: usage.inputTokens + usage.outputTokens,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Batch event extraction failed: ${message}`);
       return { entityId, events: [] };
     }
+  }
+
+  /**
+   * Normalize and validate extracted events
+   */
+  private normalizeEvents(rawEvents: ExtractedEvent[]): ExtractedEvent[] {
+    return rawEvents
+      .filter((e) => e.eventType && e.title && typeof e.confidence === 'number' && e.confidence >= 0.6)
+      .map((e) => ({
+        eventType: e.eventType,
+        title: String(e.title).trim(),
+        description: e.description ? String(e.description).trim() : undefined,
+        eventDate: e.eventDate || undefined,
+        relatedEntityName: e.relatedEntityName || undefined,
+        confidence: Math.min(1, Math.max(0, e.confidence)),
+        sourceQuote: String(e.sourceQuote || '').substring(0, 200),
+      }));
   }
 
   /**
@@ -196,90 +239,5 @@ export class EventExtractionService {
   private buildBatchPrompt(name: string, text: string): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 1500);
     return `Extract events from conversations with ${name}. Deduplicate. Event types: meeting, deadline, commitment, follow_up. Today is ${new Date().toISOString().split('T')[0]}. Messages: ${cleanText}`;
-  }
-
-  private callClaudeCli(prompt: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const args = [
-        '--print',
-        '--model', 'haiku',
-        '--output-format', 'json',
-        '--json-schema', EVENTS_SCHEMA,
-        '-p', prompt,
-      ];
-
-      const proc = spawn(this.claudePath, args, {
-        cwd: this.workspacePath,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: process.env,
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      const timeout = setTimeout(() => {
-        proc.kill('SIGTERM');
-        reject(new Error('Claude CLI timeout'));
-      }, this.timeoutMs);
-
-      proc.stdout.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      proc.on('close', (code: number | null) => {
-        clearTimeout(timeout);
-        if (code !== 0) {
-          reject(new Error(`Claude CLI failed (${code}): ${stderr}`));
-          return;
-        }
-        resolve(stdout.trim());
-      });
-
-      proc.on('error', (err: Error) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
-  }
-
-  private parseResponse(response: string): ExtractedEvent[] {
-    try {
-      const data = JSON.parse(response);
-      let events: ExtractedEvent[] = [];
-
-      if (data.structured_output?.events) {
-        events = data.structured_output.events;
-      } else if (Array.isArray(data)) {
-        const resultMsg = data.find((m: { type: string }) => m.type === 'result');
-        if (resultMsg?.structured_output?.events) {
-          events = resultMsg.structured_output.events;
-        } else if (resultMsg?.result) {
-          const jsonMatch = resultMsg.result.match(/```json\s*([\s\S]*?)```/);
-          if (jsonMatch?.[1]) {
-            const parsed = JSON.parse(jsonMatch[1].trim());
-            events = parsed.events || parsed;
-          }
-        }
-      }
-
-      return events
-        .filter((e) => e.eventType && e.title && typeof e.confidence === 'number')
-        .map((e) => ({
-          eventType: e.eventType,
-          title: String(e.title).trim(),
-          description: e.description ? String(e.description).trim() : undefined,
-          eventDate: e.eventDate || undefined,
-          relatedEntityName: e.relatedEntityName || undefined,
-          confidence: Math.min(1, Math.max(0, e.confidence)),
-          sourceQuote: String(e.sourceQuote || '').substring(0, 200),
-        }));
-    } catch (e) {
-      this.logger.warn(`Failed to parse event response: ${e}`);
-      return [];
-    }
   }
 }

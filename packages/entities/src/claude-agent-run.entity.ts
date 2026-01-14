@@ -11,6 +11,7 @@ export type ClaudeTaskType =
   | 'profile_aggregation'
   | 'context_synthesis'
   | 'fact_extraction'
+  | 'event_extraction'
   | 'recall'
   | 'meeting_prep'
   | 'daily_brief'
