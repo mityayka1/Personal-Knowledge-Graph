@@ -89,6 +89,86 @@ Telegram сообщения группируются в sessions (Interactions).
 3. **Async Processing:** Тяжёлые задачи (transcription, LLM) выполняются асинхронно через Worker
 4. **Embeddings:** Генерируются асинхронно в очереди, не блокируют основной поток
 
+## Claude Agent SDK — Правила работы
+
+PKG использует Claude Agent SDK для AI-функций. При работе с agent tools соблюдай следующие правила:
+
+### Создание Tools
+
+```typescript
+// ОБЯЗАТЕЛЬНО: .describe() для каждого параметра
+tool('tool_name', 'Description for Claude', {
+  param: z.string().describe('What this param does'),  // ✅
+  id: z.string().uuid().describe('Entity UUID'),       // ✅
+  limit: z.number().default(20).describe('Max items'), // ✅
+}, handler);
+
+// ЗАПРЕЩЕНО: параметры без описания
+{ query: z.string() }  // ❌ Claude не поймёт назначение
+```
+
+### Error Handling
+
+```typescript
+// Tool errors — recoverable, Claude видит и адаптируется
+return toolError('Entity not found. Try searching by name first.');
+
+// Empty results — НЕ ошибка, нормальный результат
+return toolEmptyResult('messages matching query');
+
+// Protocol errors — критические, прерывают выполнение
+throw new Error('Database connection failed');
+```
+
+**Правило:** Каждое сообщение об ошибке должно подсказывать как исправить ситуацию.
+
+### NestJS Providers
+
+```typescript
+@Injectable()
+export class MyToolsProvider {
+  private cachedTools: ToolDefinition[] | null = null;  // Кэширование обязательно
+
+  getTools(): ToolDefinition[] {
+    if (!this.cachedTools) {
+      this.cachedTools = this.createTools();
+    }
+    return this.cachedTools;
+  }
+}
+```
+
+### Circular Dependencies
+
+```typescript
+// При циклических зависимостях используй @Optional + forwardRef
+@Optional()
+@Inject(forwardRef(() => ContextService))
+private readonly contextService: ContextService | null,
+```
+
+### Tool Categories
+
+При вызове агента указывай минимально необходимые категории:
+
+| Категория | Tools | Когда использовать |
+|-----------|-------|-------------------|
+| `search` | search_messages, search_entities | Поиск информации |
+| `entities` | get_entity_details, list_entities | Работа с людьми/организациями |
+| `events` | create_reminder, list_events | Напоминания, события |
+| `context` | get_entity_context | Синтез контекста |
+| `all` | Все tools | Только если реально нужны все |
+
+### Code Review Checklist
+
+При review agent tools проверяй:
+- [ ] Все Zod поля с `.describe()`
+- [ ] `toolError()` с actionable messages
+- [ ] `toolEmptyResult()` для пустых результатов (не isError!)
+- [ ] Кэширование tools в provider
+- [ ] Нет мутации входных параметров
+- [ ] Logger с контекстом tool name
+
 ## AI Team
 
 Команда AI-субагентов для проекта PKG. Каждый агент специализируется на своей области.
@@ -106,6 +186,7 @@ Telegram сообщения группируются в sessions (Interactions).
 | **openai-expert** | Embeddings API | @./.claude/agents/openai-expert.md |
 | **claude-cli-expert** | Claude CLI программный вызов из Node.js | @./.claude/agents/claude-cli-expert.md |
 | **claude-code-expert** | Claude Code CLI: установка, авторизация, конфигурация | @./.claude/agents/claude-code-expert.md |
+| **claude-agent-sdk-expert** | Claude Agent SDK: tools, MCP, архитектура агентов | @./.claude/agents/claude-agent-sdk-expert.md |
 
 ### Использование агентов
 

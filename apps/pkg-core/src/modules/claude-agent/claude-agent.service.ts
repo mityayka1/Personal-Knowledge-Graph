@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { query, type SDKMessage, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type SDKMessage, type SDKResultMessage, type SDKAssistantMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ClaudeAgentRun, ReferenceType } from '@pkg/entities';
 import {
   CallParams,
@@ -14,7 +14,45 @@ import {
   UsageStats,
   PeriodStats,
   DailyStatsEntry,
+  ToolCategory,
+  AgentHooks,
 } from './claude-agent.types';
+import { ToolsRegistryService } from './tools-registry.service';
+
+/**
+ * Content block with tool use
+ */
+interface ToolUseBlock {
+  type: 'tool_use';
+  name?: string;
+  input?: unknown;
+}
+
+/**
+ * Extract tool uses from assistant message content
+ */
+function extractToolUses(content: unknown[]): ToolUseBlock[] {
+  return content.filter(
+    (block): block is ToolUseBlock =>
+      typeof block === 'object' &&
+      block !== null &&
+      'type' in block &&
+      (block as { type: unknown }).type === 'tool_use'
+  );
+}
+
+/**
+ * MCP server name used for our tools
+ */
+const MCP_SERVER_NAME = 'pkg-tools';
+
+/**
+ * Clean tool name from MCP format
+ * mcp__pkg-tools__tool_name -> tool_name
+ */
+function cleanToolName(mcpName: string): string {
+  return mcpName.replace(new RegExp(`^mcp__${MCP_SERVER_NAME}__`), '');
+}
 
 @Injectable()
 export class ClaudeAgentService {
@@ -24,6 +62,7 @@ export class ClaudeAgentService {
     private configService: ConfigService,
     @InjectRepository(ClaudeAgentRun)
     private runRepo: Repository<ClaudeAgentRun>,
+    private toolsRegistry: ToolsRegistryService,
   ) {}
 
   /**
@@ -75,7 +114,7 @@ export class ClaudeAgentService {
           abortController,
         },
       })) {
-        this.processMessage(message, usage);
+        this.accumulateUsage(message, usage);
 
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
@@ -106,8 +145,9 @@ export class ClaudeAgentService {
     const model = this.getModelString(params.model);
     const maxTurns = params.maxTurns || 15;
     const timeout = params.timeout || 300000; // 5 minutes default for agent
+    const toolCategories = params.toolCategories || ['all'];
 
-    this.logger.debug(`Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}`);
+    this.logger.debug(`Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}, tools=${toolCategories.join(',')}`);
 
     const usage: UsageStats = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
     const toolsUsed: string[] = [];
@@ -120,6 +160,12 @@ export class ClaudeAgentService {
     try {
       const systemPrompt = this.buildAgentSystemPrompt(params.taskType);
 
+      // Create MCP server with requested tool categories
+      const mcpServer = this.toolsRegistry.createMcpServer(toolCategories as ToolCategory[]);
+      const allowedTools = this.toolsRegistry.getToolNames(toolCategories as ToolCategory[]);
+
+      this.logger.debug(`MCP server created with tools: ${allowedTools.join(', ')}`);
+
       for await (const message of query({
         prompt: params.prompt,
         options: {
@@ -127,14 +173,22 @@ export class ClaudeAgentService {
           maxTurns,
           systemPrompt,
           abortController,
-          // Note: Tools are passed via MCP or custom implementation
-          // For now, agent mode tracks turns but tool handling is future work
+          mcpServers: {
+            'pkg-tools': mcpServer,
+          },
+          allowedTools,
         },
       })) {
-        this.processMessage(message, usage);
+        this.accumulateUsage(message, usage);
 
         if (message.type === 'assistant') {
           turns++;
+          await this.processAssistantMessage(
+            message as SDKAssistantMessage,
+            toolsUsed,
+            params.hooks,
+          );
+
           if (params.hooks?.onTurn) {
             await params.hooks.onTurn(turns);
           }
@@ -166,10 +220,42 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Process SDK message and accumulate usage
+   * Process assistant message: track tool usage and call hooks
    */
-  private processMessage(message: SDKMessage, usage: UsageStats): void {
-    // Handle usage in assistant messages
+  private async processAssistantMessage(
+    message: SDKAssistantMessage,
+    toolsUsed: string[],
+    hooks?: AgentHooks,
+  ): Promise<void> {
+    const content = message.message?.content;
+    if (!content || !Array.isArray(content)) {
+      return;
+    }
+
+    const toolUses = extractToolUses(content);
+
+    for (const toolUse of toolUses) {
+      const rawName = toolUse.name || 'unknown';
+      const cleanName = cleanToolName(rawName);
+
+      // Track tool usage
+      toolsUsed.push(cleanName);
+      this.logger.debug(`Tool used: ${cleanName}`);
+
+      // Call hook if defined
+      if (hooks?.onToolUse) {
+        const approval = await hooks.onToolUse(cleanName, toolUse.input);
+        if (!approval.approve) {
+          this.logger.warn(`Tool ${cleanName} not approved: ${approval.reason}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Accumulate usage stats from SDK message
+   */
+  private accumulateUsage(message: SDKMessage, usage: UsageStats): void {
     if (message.type === 'assistant' && 'usage' in message && message.usage) {
       const u = message.usage as { inputTokens?: number; outputTokens?: number; costUSD?: number };
       usage.inputTokens += u.inputTokens || 0;

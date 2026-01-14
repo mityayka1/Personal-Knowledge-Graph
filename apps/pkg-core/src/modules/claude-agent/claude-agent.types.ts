@@ -25,6 +25,11 @@ export type ModelType = 'sonnet' | 'haiku' | 'opus';
 export type ExecutionMode = 'oneshot' | 'agent';
 
 /**
+ * Tool categories for selective tool loading
+ */
+export type ToolCategory = 'search' | 'context' | 'events' | 'entities' | 'all';
+
+/**
  * Base parameters for all Claude calls
  */
 interface BaseParams {
@@ -45,16 +50,6 @@ export interface OneshotParams<T = unknown> extends BaseParams {
 }
 
 /**
- * Tool definition for agent mode
- */
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: object;
-  handler: (input: unknown) => Promise<string>;
-}
-
-/**
  * Hooks for agent mode
  */
 export interface AgentHooks {
@@ -68,7 +63,8 @@ export interface AgentHooks {
  */
 export interface AgentParams extends BaseParams {
   mode: 'agent';
-  tools?: ToolDefinition[];
+  /** Tool categories to enable (default: 'all'). Determines which PKG tools are available. */
+  toolCategories?: ToolCategory[];
   hooks?: AgentHooks;
   maxTurns?: number;
   budgetUsd?: number;
