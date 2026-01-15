@@ -19,29 +19,8 @@ import {
 import { EntityService } from '../entity/entity.service';
 
 /**
- * Structured output type for recall response
- */
-interface RecallStructuredOutput {
-  answer: string;
-  sources: Array<{
-    type: string;
-    id: string;
-    preview: string;
-  }>;
-}
-
-/**
- * Structured output type for prepare response
- */
-interface PrepareStructuredOutput {
-  brief: string;
-  recentInteractions: number;
-  openQuestions: string[];
-}
-
-/**
- * Schema for recall agent response
- * Note: Avoid format/maxLength/enum constraints - they may break StructuredOutput
+ * Raw JSON Schema for recall response
+ * NOTE: Use raw JSON Schema, NOT z.toJSONSchema() - SDK doesn't support Zod 4 schema format
  */
 const RECALL_RESPONSE_SCHEMA = {
   type: 'object',
@@ -52,23 +31,37 @@ const RECALL_RESPONSE_SCHEMA = {
     },
     sources: {
       type: 'array',
+      description: 'List of sources used to answer',
       items: {
         type: 'object',
         properties: {
-          type: { type: 'string', description: 'Source type: message or interaction' },
-          id: { type: 'string', description: 'UUID of the message' },
-          preview: { type: 'string', description: 'Short quote up to 200 chars' },
+          type: {
+            type: 'string',
+            description: 'Source type: message or interaction',
+          },
+          id: {
+            type: 'string',
+            description: 'UUID of the source',
+          },
+          preview: {
+            type: 'string',
+            description: 'Short quote from the source',
+          },
         },
         required: ['type', 'id', 'preview'],
       },
-      description: 'List of sources used to answer',
     },
   },
   required: ['answer', 'sources'],
 };
 
+type RecallStructuredOutput = {
+  answer: string;
+  sources: Array<{ type: string; id: string; preview: string }>;
+};
+
 /**
- * Schema for prepare/meeting brief response
+ * Raw JSON Schema for prepare response (without Zod)
  */
 const PREPARE_RESPONSE_SCHEMA = {
   type: 'object',
@@ -78,7 +71,7 @@ const PREPARE_RESPONSE_SCHEMA = {
       description: 'Structured markdown brief about the entity',
     },
     recentInteractions: {
-      type: 'number',
+      type: 'integer',
       description: 'Count of recent interactions',
     },
     openQuestions: {
@@ -88,6 +81,12 @@ const PREPARE_RESPONSE_SCHEMA = {
     },
   },
   required: ['brief', 'recentInteractions', 'openQuestions'],
+};
+
+type PrepareStructuredOutput = {
+  brief: string;
+  recentInteractions: number;
+  openQuestions: string[];
 };
 
 /**

@@ -198,21 +198,32 @@ private readonly contextService: ContextService | null,
 
 При использовании `outputFormat` с `json_schema` для получения структурированного ответа от агента:
 
-**Важные ограничения JSON Schema:**
-```typescript
-// ❌ НЕ используй эти constraints - ломают StructuredOutput:
-{
-  type: 'string',
-  format: 'uuid',      // ❌ format не поддерживается
-  maxLength: 200,      // ❌ maxLength не поддерживается
-  enum: ['a', 'b'],    // ❌ enum не поддерживается
-}
+**ВАЖНО: Используй raw JSON Schema, НЕ z.toJSONSchema()**
 
-// ✅ Используй только базовые типы с description:
-{
-  type: 'string',
-  description: 'UUID of the message',  // Описывай constraints в description
-}
+```typescript
+// ❌ НЕ используй Zod 4 z.toJSONSchema() - SDK не поддерживает формат:
+const schema = z.toJSONSchema(z.object({ answer: z.string() }));
+// Генерирует $schema, additionalProperties и другие поля, ломающие SDK
+
+// ✅ Используй raw JSON Schema:
+const SCHEMA = {
+  type: 'object',
+  properties: {
+    answer: { type: 'string', description: 'Answer text' },
+    sources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'UUID' },
+          preview: { type: 'string', description: 'Quote' },
+        },
+        required: ['id', 'preview'],
+      },
+    },
+  },
+  required: ['answer', 'sources'],
+};
 ```
 
 **Структура prompt для StructuredOutput:**
@@ -224,10 +235,7 @@ private readonly contextService: ContextService | null,
 
 Заполни поля ответа:
 - answer: текст на русском
-- sources: массив ID`
-
-// ❌ Не работает - нет явного завершения через "Заполни поля"
-`Найди информацию и верни JSON...`
+- sources: массив источников`
 ```
 
 **Отладка:**
