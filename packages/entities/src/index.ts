@@ -18,3 +18,4 @@ export * from './entity-relationship-profile.entity';
 // Keep the entity for backward compatibility with old migrations
 export { ClaudeCliRun } from './claude-cli-run.entity';
 export * from './claude-agent-run.entity';
+export * from './user.entity';

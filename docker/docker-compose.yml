@@ -44,6 +44,10 @@ services:
       REDIS_PORT: 6379
       REDIS_PREFIX: ${REDIS_PREFIX:-pkg:bull}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # JWT Authentication
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
       FILE_STORAGE_PATH: /data/files
       # Telegram Adapter URL for media proxy
       TELEGRAM_ADAPTER_URL: http://telegram-adapter:3001

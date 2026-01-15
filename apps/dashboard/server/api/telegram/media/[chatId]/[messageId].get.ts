@@ -76,8 +76,7 @@ export default defineEventHandler(async (event) => {
     setResponseHeader(event, 'content-type', contentType);
 
     if (contentLength !== null) {
-      // Parse content-length as number for proper header type
-      const length = parseInt(contentLength, 10);
+      const length = Number(contentLength);
       if (!isNaN(length)) {
         setResponseHeader(event, 'content-length', length);
       }

@@ -28,7 +28,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => InteractionModule),
     SearchModule,
     EmbeddingModule,
-    ClaudeAgentModule,
+    forwardRef(() => ClaudeAgentModule),
   ],
   controllers: [ContextController],
   providers: [ContextService],

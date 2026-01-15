@@ -19,6 +19,7 @@ import {
   EntityRelationshipProfile,
   ClaudeCliRun,
   ClaudeAgentRun,
+  User,
 } from '@pkg/entities';
 
 export default registerAs('database', (): TypeOrmModuleOptions => {
@@ -65,6 +66,7 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       EntityRelationshipProfile,
       ClaudeCliRun,
       ClaudeAgentRun,
+      User,
     ],
 
     // Synchronize only for tests (creates tables automatically)

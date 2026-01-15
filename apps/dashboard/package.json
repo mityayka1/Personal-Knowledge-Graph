@@ -13,6 +13,7 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
+    "@pkg/shared": "workspace:*",
     "@tanstack/vue-query": "^5.62.0",
     "@vueuse/core": "^11.3.0",
     "class-variance-authority": "^0.7.1",
@@ -23,8 +24,7 @@
     "radix-vue": "^1.9.0",
     "tailwind-merge": "^2.6.0",
     "vue": "^3.5.0",
-    "vue-router": "^4.5.0",
-    "@pkg/shared": "workspace:*"
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@nuxt/devtools": "^1.7.0",

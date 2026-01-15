@@ -3,9 +3,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { RedisModule } from '@nestjs-modules/ioredis';
 
 import { databaseConfig, redisConfig, appConfig } from './common/config';
-import { ApiKeyGuard } from './common/guards';
+import authConfig from './common/config/auth.config';
+import { CombinedAuthGuard } from './common/guards/combined-auth.guard';
 
 // Domain modules
 import { EntityModule } from './modules/entity/entity.module';
@@ -25,13 +28,14 @@ import { EntityEventModule } from './modules/entity-event/entity-event.module';
 import { ClaudeAgentModule } from './modules/claude-agent/claude-agent.module';
 import { SummarizationModule } from './modules/summarization/summarization.module';
 import { MediaModule } from './modules/media/media.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
     // Configuration
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [databaseConfig, redisConfig, appConfig],
+      load: [databaseConfig, redisConfig, appConfig, authConfig],
       envFilePath: ['.env.local', '.env'],
     }),
 
@@ -59,6 +63,29 @@ import { MediaModule } from './modules/media/media.module';
       },
     }),
 
+    // Redis for session/token storage
+    RedisModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const redisConf = configService.get('redis');
+        return {
+          type: 'single',
+          url: `redis://${redisConf?.connection?.host || 'localhost'}:${redisConf?.connection?.port || 6379}`,
+        };
+      },
+    }),
+
+    // Rate limiting
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000, // 1 minute
+        limit: 100, // 100 requests per minute
+      },
+    ]),
+
+    // Auth module
+    AuthModule,
+
     // Domain modules
     EntityModule,
     InteractionModule,
@@ -79,11 +106,16 @@ import { MediaModule } from './modules/media/media.module';
     MediaModule,
   ],
   providers: [
-    // Global API Key Guard - all routes require X-API-Key header
-    // Use @Public() decorator to exclude specific routes (e.g., health checks)
+    // Global Combined Auth Guard - supports JWT and API Key
+    // Use @Public() decorator to exclude specific routes (e.g., health checks, auth endpoints)
     {
       provide: APP_GUARD,
-      useClass: ApiKeyGuard,
+      useClass: CombinedAuthGuard,
+    },
+    // Global Throttler Guard for rate limiting
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
     },
   ],
 })

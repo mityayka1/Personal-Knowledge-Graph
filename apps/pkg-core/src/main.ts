@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, ConsoleLogger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -29,13 +30,19 @@ async function bootstrap() {
     }),
   );
 
+  // Cookie parser for refresh tokens
+  app.use(cookieParser());
+
   // API prefix
   app.setGlobalPrefix(apiPrefix);
 
-  // CORS for development
-  if (process.env.NODE_ENV !== 'production') {
-    app.enableCors();
-  }
+  // CORS configuration
+  app.enableCors({
+    origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3003'],
+    credentials: true, // Allow cookies
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
+  });
 
   await app.listen(port);
 

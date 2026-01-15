@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository, IsNull } from 'typeorm';
@@ -39,6 +39,7 @@ export class ContextService {
     private entityService: EntityService,
     private vectorService: VectorService,
     private embeddingService: EmbeddingService,
+    @Inject(forwardRef(() => ClaudeAgentService))
     private claudeAgentService: ClaudeAgentService,
     private schemaLoader: SchemaLoaderService,
     private configService: ConfigService,
