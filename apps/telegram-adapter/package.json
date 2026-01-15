@@ -20,6 +20,7 @@
     "axios": "^1.7.0",
     "big-integer": "^1.6.52",
     "dotenv": "^17.2.3",
+    "input": "^1.0.1",
     "prompts": "^2.4.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
