@@ -83,10 +83,20 @@ export const useAuth = () => {
 
   /**
    * Fetch current user info
+   * Note: During SSR, we need to explicitly forward cookies from the incoming request
    */
   async function fetchUser(): Promise<void> {
     try {
-      const userData = await $fetch<User>('/api/auth/me');
+      // During SSR, forward cookies from the incoming browser request
+      const headers: Record<string, string> = {};
+      if (import.meta.server) {
+        const requestHeaders = useRequestHeaders(['cookie']);
+        if (requestHeaders.cookie) {
+          headers['Cookie'] = requestHeaders.cookie;
+        }
+      }
+
+      const userData = await $fetch<User>('/api/auth/me', { headers });
       user.value = userData;
       error.value = null;
     } catch {

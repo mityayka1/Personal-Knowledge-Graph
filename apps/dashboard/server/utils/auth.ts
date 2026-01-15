@@ -82,7 +82,7 @@ async function performRefresh(event: H3Event, refreshToken: string): Promise<str
     });
 
     return response.accessToken;
-  } catch (error) {
+  } catch {
     // Refresh failed - clear tokens
     clearAuthCookies(event);
     return null;

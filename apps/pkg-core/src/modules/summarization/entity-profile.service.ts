@@ -354,7 +354,8 @@ ${factsSection}
 ${summariesSection}
 
 ## Задача
-Создай агрегированный профиль отношений согласно JSON схеме.`;
+Создай агрегированный профиль отношений согласно JSON схеме.
+ВАЖНО: Все тексты (relationshipSummary, relationshipTimeline, описания milestones, keyDecisions, openActionItems) должны быть на РУССКОМ языке.`;
   }
 
   /**

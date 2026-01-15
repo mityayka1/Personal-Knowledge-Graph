@@ -47,6 +47,8 @@ interface BaseParams {
 export interface OneshotParams<T = unknown> extends BaseParams {
   mode: 'oneshot';
   schema: object;
+  /** Max turns for completion (default: 1, increase for complex extractions) */
+  maxTurns?: number;
 }
 
 /**

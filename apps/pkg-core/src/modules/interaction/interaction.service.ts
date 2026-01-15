@@ -31,7 +31,7 @@ export class InteractionService {
   async findOne(id: string) {
     const interaction = await this.interactionRepo.findOne({
       where: { id },
-      relations: ['participants', 'messages', 'summary'],
+      relations: ['participants', 'participants.entity', 'messages', 'summary'],
     });
 
     if (!interaction) {

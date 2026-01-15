@@ -24,10 +24,17 @@ interface Message {
   senderIdentifierValue?: string;
 }
 
+interface Entity {
+  id: string;
+  name: string;
+  type: string;
+}
+
 interface Participant {
   id: string;
   role: string;
   entityId?: string;
+  entity?: Entity;
   displayName?: string;
   identifierType?: string;
   identifierValue?: string;
@@ -65,7 +72,9 @@ function getSenderName(message: Message): string {
   if (message.isOutgoing) return 'Вы';
   if (message.senderIdentifierValue) {
     const participant = participantMap.value.get(message.senderIdentifierValue);
+    // Priority: displayName -> entity.name -> ID
     if (participant?.displayName) return participant.displayName;
+    if (participant?.entity?.name) return participant.entity.name;
     return `ID: ${message.senderIdentifierValue}`;
   }
   return 'Неизвестный';
@@ -86,12 +95,14 @@ const chatInfo = computed(() => {
 
   if (type === 'user') {
     displayName = `Личный чат (${id})`;
-    // Find participant to get display name
+    // Find participant to get display name or entity name
     const participant = interaction.value?.participants?.find(p =>
       p.identifierValue === id && p.role !== 'self'
     );
-    if (participant?.displayName) {
-      displayName = `Личный чат с ${participant.displayName}`;
+    // Priority: displayName -> entity.name -> just ID
+    const name = participant?.displayName || participant?.entity?.name;
+    if (name) {
+      displayName = `Личный чат с ${name}`;
     }
   } else if (type === 'chat') {
     displayName = `Группа (${id})`;

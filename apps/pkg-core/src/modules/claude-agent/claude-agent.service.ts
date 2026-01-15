@@ -108,7 +108,7 @@ export class ClaudeAgentService {
         prompt: params.prompt,
         options: {
           model,
-          maxTurns: 1,
+          maxTurns: params.maxTurns || 1,
           systemPrompt,
           allowedTools: [], // No tools in oneshot mode
           abortController,
@@ -270,7 +270,7 @@ export class ClaudeAgentService {
   private getModelString(model?: ModelType): string {
     const map: Record<string, string> = {
       'haiku': 'claude-haiku-4-5-20251001',
-      'sonnet': 'claude-sonnet-4-5-20250514',
+      'sonnet': 'claude-sonnet-4-5-20250929',
       'opus': 'claude-opus-4-5-20251101',
     };
     return map[model || 'sonnet'];

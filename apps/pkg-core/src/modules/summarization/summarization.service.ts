@@ -238,7 +238,8 @@ export class SummarizationService {
 ${formattedMessages}
 
 ## Задача
-Создай структурированное резюме переписки согласно JSON схеме.`;
+Создай структурированное резюме переписки согласно JSON схеме.
+ВАЖНО: Весь текст (summary, keyPoints, описания decisions и actionItems) должен быть на РУССКОМ языке.`;
   }
 
   /**

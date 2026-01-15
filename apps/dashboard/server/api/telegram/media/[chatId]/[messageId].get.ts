@@ -1,3 +1,5 @@
+import { getValidAccessToken } from '../../../../utils/auth';
+
 /**
  * Media proxy endpoint for Dashboard
  *
@@ -6,6 +8,9 @@
  * This endpoint proxies media requests through PKG Core to maintain
  * the Source-Agnostic architecture principle. Dashboard should never
  * directly access Telegram Adapter.
+ *
+ * Authentication: Uses JWT token from cookies (same as main API proxy).
+ * Falls back to API key if no JWT token available.
  */
 export default defineEventHandler(async (event) => {
   const chatId = getRouterParam(event, 'chatId');
@@ -46,16 +51,23 @@ export default defineEventHandler(async (event) => {
 
   const targetUrl = `${baseUrl}/media/${encodedChatId}/${encodedMessageId}?${queryParams.toString()}`;
 
-  // Get API key from config for PKG Core authentication
+  // Get JWT token for authenticated requests (same as main API proxy)
+  const accessToken = await getValidAccessToken(event);
+
+  // Get API key from config as fallback
   const apiKey = config.apiKey;
+
+  // Build headers - prefer JWT, fallback to API key
+  const headers: Record<string, string> = {};
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+  } else if (apiKey) {
+    headers['X-API-Key'] = apiKey;
+  }
 
   try {
     // Use native fetch for binary streaming
-    const response = await fetch(targetUrl, {
-      headers: {
-        ...(apiKey && { 'X-API-Key': apiKey }),
-      },
-    });
+    const response = await fetch(targetUrl, { headers });
 
     if (!response.ok) {
       // Log error for debugging

@@ -233,11 +233,19 @@ export class EventExtractionService {
 
   private buildPrompt(name: string, text: string): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 800);
-    return `Extract events from conversation with ${name}. Event types: meeting (scheduled calls/meetings), deadline (due dates), commitment (promises to do something), follow_up (reminders). Today is ${new Date().toISOString().split('T')[0]}. Text: ${cleanText}`;
+    return `Извлеки события из переписки с ${name}. Типы событий: meeting (запланированные звонки/встречи), deadline (сроки), commitment (обещания что-то сделать), follow_up (напоминания).
+Сегодня: ${new Date().toISOString().split('T')[0]}.
+ВАЖНО: Все названия и описания событий должны быть на русском языке.
+
+Текст: ${cleanText}`;
   }
 
   private buildBatchPrompt(name: string, text: string): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 1500);
-    return `Extract events from conversations with ${name}. Deduplicate. Event types: meeting, deadline, commitment, follow_up. Today is ${new Date().toISOString().split('T')[0]}. Messages: ${cleanText}`;
+    return `Извлеки события из переписки с ${name}. Удали дубликаты. Типы событий: meeting, deadline, commitment, follow_up.
+Сегодня: ${new Date().toISOString().split('T')[0]}.
+ВАЖНО: Все названия и описания событий должны быть на русском языке.
+
+Сообщения: ${cleanText}`;
   }
 }

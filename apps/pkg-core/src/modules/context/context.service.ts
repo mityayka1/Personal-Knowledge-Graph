@@ -347,7 +347,8 @@ ${chunksSection}`);
 
     // Task
     sections.push(`\n## Задача
-Создай компактный контекст для подготовки к общению согласно JSON схеме.`);
+Создай компактный контекст для подготовки к общению согласно JSON схеме.
+ВАЖНО: Весь текст (currentStatus, recentContext, keyFacts, recommendations) должен быть на РУССКОМ языке.`);
 
     return sections.join('\n');
   }

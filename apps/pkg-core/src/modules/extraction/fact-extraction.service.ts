@@ -79,7 +79,8 @@ export class FactExtractionService {
         taskType: 'fact_extraction',
         prompt,
         schema: FACTS_SCHEMA,
-        model: 'haiku', // Use haiku for cost efficiency
+        model: 'haiku',
+        maxTurns: 5,
         referenceType: 'message',
         referenceId: messageId,
         timeout: 60000,
@@ -153,6 +154,7 @@ export class FactExtractionService {
         prompt,
         schema: FACTS_SCHEMA,
         model: 'haiku',
+        maxTurns: 5,
         timeout: 90000,
       });
 
@@ -196,9 +198,10 @@ export class FactExtractionService {
    */
   private buildCompactPrompt(name: string, text: string): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 500);
-    return `Extract facts about ${name}. Fact types: position, company, department, phone, email, telegram.
+    return `Извлеки факты о ${name}. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram.
+ВАЖНО: Все значения фактов должны быть на русском языке.
 
-Text: ${cleanText}`;
+Текст: ${cleanText}`;
   }
 
   /**
@@ -206,8 +209,9 @@ Text: ${cleanText}`;
    */
   private buildBatchPrompt(name: string, text: string): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 1000);
-    return `Extract facts about ${name}. Deduplicate. Fact types: position, company, department, phone, email, telegram.
+    return `Извлеки факты о ${name}. Удали дубликаты. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram.
+ВАЖНО: Все значения фактов должны быть на русском языке.
 
-Messages: ${cleanText}`;
+Сообщения: ${cleanText}`;
   }
 }

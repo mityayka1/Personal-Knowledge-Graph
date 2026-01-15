@@ -19,6 +19,9 @@ import { MediaService } from './media.service';
  * directly accessing Telegram Adapter.
  *
  * Flow: Dashboard -> PKG Core (this) -> Telegram Adapter -> Telegram
+ *
+ * Authentication: JWT Bearer token or API Key via combined auth guard.
+ * Media requests go through Nuxt server proxy which adds the auth header.
  */
 @Controller('media')
 export class MediaController {
