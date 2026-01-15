@@ -126,3 +126,70 @@ export interface DailyStatsEntry {
   runs: number;
   costUsd: number;
 }
+
+// ============================================
+// Second Brain API DTOs
+// ============================================
+
+/**
+ * Source reference in recall response
+ */
+export interface RecallSource {
+  type: 'message' | 'interaction';
+  id: string;
+  preview: string;
+}
+
+/**
+ * Request for recall endpoint
+ */
+export interface RecallRequestDto {
+  /** Natural language query, e.g., "что обсуждали с Иваном на прошлой неделе?" */
+  query: string;
+  /** Owner user ID (optional, for multi-user scenarios) */
+  userId?: string;
+}
+
+/**
+ * Response data for recall endpoint
+ */
+export interface RecallResponseData {
+  /** Agent's answer in natural language */
+  answer: string;
+  /** Sources used to generate the answer */
+  sources: RecallSource[];
+  /** Tools that were used during the agent loop */
+  toolsUsed: string[];
+}
+
+/**
+ * Full response for recall endpoint
+ */
+export interface RecallResponse {
+  success: boolean;
+  data: RecallResponseData;
+}
+
+/**
+ * Response data for prepare endpoint
+ */
+export interface PrepareResponseData {
+  /** Entity UUID */
+  entityId: string;
+  /** Entity display name */
+  entityName: string;
+  /** Structured brief about the entity */
+  brief: string;
+  /** Number of recent interactions */
+  recentInteractions: number;
+  /** List of open questions or pending items */
+  openQuestions: string[];
+}
+
+/**
+ * Full response for prepare endpoint
+ */
+export interface PrepareResponse {
+  success: boolean;
+  data: PrepareResponseData;
+}
