@@ -61,6 +61,15 @@ export interface AgentHooks {
 }
 
 /**
+ * Structured output format configuration
+ */
+export interface OutputFormat {
+  type: 'json_schema';
+  schema: object;
+  strict?: boolean;
+}
+
+/**
  * Parameters for agent (multi-turn with tools) calls
  */
 export interface AgentParams extends BaseParams {
@@ -70,6 +79,8 @@ export interface AgentParams extends BaseParams {
   hooks?: AgentHooks;
   maxTurns?: number;
   budgetUsd?: number;
+  /** JSON Schema for structured output. When provided, agent returns structured JSON */
+  outputFormat?: OutputFormat;
 }
 
 /**

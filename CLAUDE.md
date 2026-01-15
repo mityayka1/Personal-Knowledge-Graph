@@ -194,6 +194,48 @@ private readonly contextService: ContextService | null,
 - [ ] Нет мутации входных параметров
 - [ ] Logger с контекстом tool name
 
+### Structured Output (outputFormat)
+
+При использовании `outputFormat` с `json_schema` для получения структурированного ответа от агента:
+
+**Важные ограничения JSON Schema:**
+```typescript
+// ❌ НЕ используй эти constraints - ломают StructuredOutput:
+{
+  type: 'string',
+  format: 'uuid',      // ❌ format не поддерживается
+  maxLength: 200,      // ❌ maxLength не поддерживается
+  enum: ['a', 'b'],    // ❌ enum не поддерживается
+}
+
+// ✅ Используй только базовые типы с description:
+{
+  type: 'string',
+  description: 'UUID of the message',  // Описывай constraints в description
+}
+```
+
+**Структура prompt для StructuredOutput:**
+```typescript
+// ✅ Работает - явно перечислены инструменты + "Заполни поля ответа"
+`Используй инструменты:
+1. search_messages — поиск по сообщениям
+2. list_entities — поиск контактов
+
+Заполни поля ответа:
+- answer: текст на русском
+- sources: массив ID`
+
+// ❌ Не работает - нет явного завершения через "Заполни поля"
+`Найди информацию и верни JSON...`
+```
+
+**Отладка:**
+```bash
+# Запустить с debug логами
+LOG_LEVEL=debug pnpm dev
+```
+
 ## AI Team
 
 Команда AI-субагентов для проекта PKG. Каждый агент специализируется на своей области.

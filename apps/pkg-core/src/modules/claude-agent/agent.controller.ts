@@ -14,31 +14,54 @@ import {
   RecallResponse,
   PrepareResponse,
   RecallSource,
+  OutputFormat,
 } from './claude-agent.types';
 import { EntityService } from '../entity/entity.service';
 
 /**
+ * Structured output type for recall response
+ */
+interface RecallStructuredOutput {
+  answer: string;
+  sources: Array<{
+    type: string;
+    id: string;
+    preview: string;
+  }>;
+}
+
+/**
+ * Structured output type for prepare response
+ */
+interface PrepareStructuredOutput {
+  brief: string;
+  recentInteractions: number;
+  openQuestions: string[];
+}
+
+/**
  * Schema for recall agent response
+ * Note: Avoid format/maxLength/enum constraints - they may break StructuredOutput
  */
 const RECALL_RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
     answer: {
       type: 'string',
-      description: 'Natural language answer to the user query',
+      description: 'Natural language answer to the user query in Russian',
     },
     sources: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: ['message', 'interaction'] },
-          id: { type: 'string' },
-          preview: { type: 'string', maxLength: 200 },
+          type: { type: 'string', description: 'Source type: message or interaction' },
+          id: { type: 'string', description: 'UUID of the message' },
+          preview: { type: 'string', description: 'Short quote up to 200 chars' },
         },
         required: ['type', 'id', 'preview'],
       },
-      description: 'References to messages/interactions used in the answer',
+      description: 'List of sources used to answer',
     },
   },
   required: ['answer', 'sources'],
@@ -104,23 +127,35 @@ export class AgentController {
     }
 
     try {
-      const result = await this.claudeAgentService.call<{
-        answer: string;
-        sources: RecallSource[];
-      }>({
+      // Agent with structured output for guaranteed response format
+      const result = await this.claudeAgentService.call<RecallStructuredOutput>({
         mode: 'agent',
         taskType: 'recall',
         prompt: this.buildRecallPrompt(dto.query),
-        toolCategories: ['search', 'entities'],
+        toolCategories: ['search', 'context', 'entities', 'events'],
         model: 'sonnet',
-        maxTurns: 10,
+        maxTurns: 15,
+        outputFormat: {
+          type: 'json_schema',
+          schema: RECALL_RESPONSE_SCHEMA,
+          strict: true,
+        },
       });
+
+      const structuredData = result.data as RecallStructuredOutput;
+
+      // Map sources to response format
+      const sources: RecallSource[] = (structuredData?.sources || []).map(s => ({
+        type: (s.type === 'interaction' ? 'interaction' : 'message') as 'message' | 'interaction',
+        id: s.id,
+        preview: s.preview || '',
+      }));
 
       return {
         success: true,
         data: {
-          answer: result.data?.answer || 'Не удалось найти релевантную информацию.',
-          sources: result.data?.sources || [],
+          answer: structuredData?.answer || 'Не удалось найти информацию.',
+          sources,
           toolsUsed: result.toolsUsed || [],
         },
       };
@@ -166,11 +201,8 @@ export class AgentController {
     }
 
     try {
-      const result = await this.claudeAgentService.call<{
-        brief: string;
-        recentInteractions: number;
-        openQuestions: string[];
-      }>({
+      // Agent with structured output for guaranteed response format
+      const result = await this.claudeAgentService.call<PrepareStructuredOutput>({
         mode: 'agent',
         taskType: 'meeting_prep',
         prompt: this.buildPreparePrompt(entity.name || entity.id, entityId),
@@ -179,16 +211,23 @@ export class AgentController {
         maxTurns: 15,
         referenceType: 'entity',
         referenceId: entityId,
+        outputFormat: {
+          type: 'json_schema',
+          schema: PREPARE_RESPONSE_SCHEMA,
+          strict: true,
+        },
       });
+
+      const structuredData = result.data as PrepareStructuredOutput;
 
       return {
         success: true,
         data: {
           entityId,
           entityName: entity.name || 'Unknown',
-          brief: result.data?.brief || 'Нет достаточной информации для брифа.',
-          recentInteractions: result.data?.recentInteractions || 0,
-          openQuestions: result.data?.openQuestions || [],
+          brief: structuredData?.brief || 'Нет достаточной информации для брифа.',
+          recentInteractions: structuredData?.recentInteractions || 0,
+          openQuestions: structuredData?.openQuestions || [],
         },
       };
     } catch (error) {
@@ -202,20 +241,21 @@ export class AgentController {
 
   /**
    * Build prompt for recall task
+   * Following prepare's structure which successfully triggers StructuredOutput
    */
   private buildRecallPrompt(query: string): string {
-    return `Пользователь спрашивает: "${query}"
+    return `Найди информацию по запросу: "${query}"
 
-Твоя задача:
-1. Используй инструменты поиска чтобы найти релевантные сообщения и взаимодействия
-2. Проанализируй найденные данные
-3. Сформулируй ответ на естественном языке
+Используй инструменты:
+1. search_messages — найди релевантные сообщения по запросу
+2. list_entities — найди упомянутых людей
+3. get_entity_details — получи детали по найденным контактам
 
-Ответь в формате:
-- answer: краткий ответ на вопрос пользователя на русском языке
-- sources: массив ссылок на использованные сообщения/взаимодействия
+Заполни поля ответа:
+- answer: найденная информация на русском языке
+- sources: массив источников [{type:"message", id:"UUID сообщения", preview:"цитата до 200 символов"}]
 
-Если ничего не найдено, так и скажи. Не выдумывай информацию.`;
+Если данных мало — так и скажи в answer, sources будет пустым массивом.`;
   }
 
   /**
@@ -224,20 +264,17 @@ export class AgentController {
   private buildPreparePrompt(entityName: string, entityId: string): string {
     return `Подготовь бриф для встречи с "${entityName}" (ID: ${entityId})
 
-Твоя задача:
-1. Получи информацию о контакте через get_entity_details
-2. Найди последние взаимодействия через search_messages
-3. Проверь открытые напоминания и события через list_events
-4. Сформируй структурированный бриф
+Используй инструменты:
+1. get_entity_details — информация о контакте
+2. search_messages — последние сообщения с этим контактом
+3. list_events — напоминания и события
 
-Ответь в формате:
-- brief: markdown-текст с секциями:
-  * О контакте (должность, компания, как познакомились)
-  * Последние темы обсуждений
-  * Договорённости и открытые вопросы
-- recentInteractions: количество взаимодействий за последний месяц
-- openQuestions: список открытых вопросов или action items
+Заполни поля ответа:
+- brief: структурированный markdown бриф (кто это, о чём общались, важные факты)
+- recentInteractions: количество найденных сообщений/взаимодействий
+- openQuestions: список открытых вопросов, обещаний, задач (пустой массив если нет)
 
-Пиши на русском языке. Если данных мало — отрази это в брифе.`;
+Если данных мало — так и скажи в brief.`;
   }
+
 }
