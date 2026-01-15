@@ -1,10 +1,18 @@
 import { useQuery } from '@tanstack/vue-query';
 import type { Ref } from 'vue';
 
+export interface ParticipantEntity {
+  id: string;
+  name: string;
+  type: string;
+  profilePhoto?: string | null;
+}
+
 export interface InteractionParticipant {
   id: string;
   entityId?: string;
-  role: 'initiator' | 'recipient' | 'participant';
+  entity?: ParticipantEntity | null;
+  role: 'initiator' | 'recipient' | 'participant' | 'self';
   identifierType: string;
   identifierValue: string;
   displayName?: string;

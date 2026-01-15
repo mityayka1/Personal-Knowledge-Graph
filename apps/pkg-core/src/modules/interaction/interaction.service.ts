@@ -19,7 +19,7 @@ export class InteractionService {
     const offset = params.offset || 0;
 
     const [items, total] = await this.interactionRepo.findAndCount({
-      relations: ['participants'],
+      relations: ['participants', 'participants.entity'],
       order: { startedAt: 'DESC' },
       take: limit,
       skip: offset,

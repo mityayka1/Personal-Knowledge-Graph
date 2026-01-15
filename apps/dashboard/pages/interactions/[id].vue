@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, MessageSquare, User, ExternalLink, Sparkles, Loader2, FileText } from 'lucide-vue-next';
+import { ArrowLeft, MessageSquare, ExternalLink, Sparkles, Loader2, FileText } from 'lucide-vue-next';
 import { formatDateTime } from '~/lib/utils';
 import {
   useSummarizationStatus,
@@ -28,6 +28,7 @@ interface Entity {
   id: string;
   name: string;
   type: string;
+  profilePhoto?: string | null;
 }
 
 interface Participant {
@@ -67,18 +68,36 @@ const participantMap = computed(() => {
   return map;
 });
 
+// Get participant display name (displayName -> entity.name -> identifierValue)
+function getParticipantName(participant: Participant): string {
+  return participant.displayName || participant.entity?.name || participant.identifierValue || 'Неизвестный';
+}
+
 // Get sender display name for a message
 function getSenderName(message: Message): string {
   if (message.isOutgoing) return 'Вы';
   if (message.senderIdentifierValue) {
     const participant = participantMap.value.get(message.senderIdentifierValue);
-    // Priority: displayName -> entity.name -> ID
-    if (participant?.displayName) return participant.displayName;
-    if (participant?.entity?.name) return participant.entity.name;
+    if (participant) return getParticipantName(participant);
     return `ID: ${message.senderIdentifierValue}`;
   }
   return 'Неизвестный';
 }
+
+// Get sender avatar for a message
+function getSenderAvatar(message: Message): string | null {
+  if (message.isOutgoing) return null;
+  if (message.senderIdentifierValue) {
+    const participant = participantMap.value.get(message.senderIdentifierValue);
+    return participant?.entity?.profilePhoto || null;
+  }
+  return null;
+}
+
+// Get non-self participants
+const otherParticipants = computed(() => {
+  return interaction.value?.participants?.filter(p => p.role !== 'self') || [];
+});
 
 // Get chat display name and link
 const chatInfo = computed(() => {
@@ -263,18 +282,28 @@ async function handleSummarize() {
             </div>
           </div>
 
-          <!-- Participants list -->
-          <div v-if="interaction.participants?.length" class="mt-4 pt-4 border-t">
-            <div class="text-sm text-muted-foreground mb-2">Участники:</div>
-            <div class="flex flex-wrap gap-2">
-              <Badge
-                v-for="participant in interaction.participants"
+          <!-- Participants list with avatars -->
+          <div v-if="otherParticipants.length" class="mt-4 pt-4 border-t">
+            <div class="text-sm text-muted-foreground mb-3">Участники:</div>
+            <div class="flex flex-wrap gap-3">
+              <div
+                v-for="participant in otherParticipants"
                 :key="participant.id"
-                variant="secondary"
-                class="text-xs"
+                class="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50"
               >
-                {{ participant.displayName || participant.identifierValue || 'Неизвестный' }}
-              </Badge>
+                <div class="w-8 h-8 rounded-full overflow-hidden bg-muted flex items-center justify-center shrink-0">
+                  <img
+                    v-if="participant.entity?.profilePhoto"
+                    :src="participant.entity.profilePhoto"
+                    :alt="getParticipantName(participant)"
+                    class="w-full h-full object-cover"
+                  />
+                  <span v-else class="text-xs font-medium text-muted-foreground">
+                    {{ getParticipantName(participant).charAt(0).toUpperCase() }}
+                  </span>
+                </div>
+                <span class="text-sm">{{ getParticipantName(participant) }}</span>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -298,8 +327,16 @@ async function handleSummarize() {
                 message.isOutgoing ? 'flex-row-reverse' : '',
               ]"
             >
-              <div class="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                <User class="h-4 w-4 text-muted-foreground" />
+              <div class="h-8 w-8 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden">
+                <img
+                  v-if="getSenderAvatar(message)"
+                  :src="getSenderAvatar(message)!"
+                  :alt="getSenderName(message)"
+                  class="w-full h-full object-cover"
+                />
+                <span v-else class="text-xs font-medium text-muted-foreground">
+                  {{ getSenderName(message).charAt(0).toUpperCase() }}
+                </span>
               </div>
               <div
                 :class="[

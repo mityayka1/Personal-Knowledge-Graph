@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { MessageSquare, Calendar, Users, Clock, ChevronLeft, ChevronRight } from 'lucide-vue-next';
-import { useInteractions, type Interaction } from '~/composables/useInteractions';
+import { MessageSquare, Calendar, Clock, ChevronLeft, ChevronRight } from 'lucide-vue-next';
+import { useInteractions, type Interaction, type InteractionParticipant } from '~/composables/useInteractions';
 
 definePageMeta({
   title: 'Взаимодействия',
@@ -70,12 +70,23 @@ function getStatusColor(status: string): string {
   return colors[status] || 'bg-gray-500/20 text-gray-400';
 }
 
+// Get display name for a participant (displayName -> entity.name -> identifierValue)
+function getParticipantName(p: InteractionParticipant): string {
+  return p.displayName || p.entity?.name || p.identifierValue;
+}
+
+// Get non-self participants for display
+function getOtherParticipants(interaction: Interaction): InteractionParticipant[] {
+  return interaction.participants.filter(p => p.role !== 'self');
+}
+
 function getParticipantNames(interaction: Interaction): string {
-  if (!interaction.participants.length) return 'Нет участников';
-  return interaction.participants
-    .map(p => p.displayName || p.identifierValue)
+  const others = getOtherParticipants(interaction);
+  if (!others.length) return 'Нет участников';
+  return others
+    .map(p => getParticipantName(p))
     .slice(0, 3)
-    .join(', ') + (interaction.participants.length > 3 ? ` и ещё ${interaction.participants.length - 3}` : '');
+    .join(', ') + (others.length > 3 ? ` и ещё ${others.length - 3}` : '');
 }
 </script>
 
@@ -127,11 +138,33 @@ function getParticipantNames(interaction: Interaction): string {
               </span>
             </div>
 
-            <div class="flex items-center gap-4 text-sm text-muted-foreground">
-              <span class="flex items-center gap-1">
-                <Users class="h-4 w-4" />
-                {{ getParticipantNames(interaction) }}
-              </span>
+            <div class="flex items-center gap-3 text-sm text-muted-foreground">
+              <!-- Participant avatars -->
+              <div class="flex -space-x-2">
+                <template v-for="(participant, idx) in getOtherParticipants(interaction).slice(0, 3)" :key="participant.id">
+                  <div
+                    class="w-8 h-8 rounded-full border-2 border-background overflow-hidden bg-muted flex items-center justify-center"
+                    :title="getParticipantName(participant)"
+                  >
+                    <img
+                      v-if="participant.entity?.profilePhoto"
+                      :src="participant.entity.profilePhoto"
+                      :alt="getParticipantName(participant)"
+                      class="w-full h-full object-cover"
+                    />
+                    <span v-else class="text-xs font-medium text-muted-foreground">
+                      {{ getParticipantName(participant).charAt(0).toUpperCase() }}
+                    </span>
+                  </div>
+                </template>
+                <div
+                  v-if="getOtherParticipants(interaction).length > 3"
+                  class="w-8 h-8 rounded-full border-2 border-background bg-muted flex items-center justify-center text-xs font-medium"
+                >
+                  +{{ getOtherParticipants(interaction).length - 3 }}
+                </div>
+              </div>
+              <span>{{ getParticipantNames(interaction) }}</span>
             </div>
           </div>
 
