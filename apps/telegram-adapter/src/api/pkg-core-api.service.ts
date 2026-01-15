@@ -60,6 +60,57 @@ export interface ChatStatsResponse {
   chats: ChatStats[];
 }
 
+// ============================================
+// Second Brain Agent API Types
+// ============================================
+
+export interface RecallSource {
+  type: 'message' | 'interaction';
+  id: string;
+  preview: string;
+}
+
+export interface RecallResponseData {
+  answer: string;
+  sources: RecallSource[];
+  toolsUsed: string[];
+}
+
+export interface RecallResponse {
+  success: boolean;
+  data: RecallResponseData;
+}
+
+export interface RecallRequestDto {
+  query: string;
+  userId?: string;
+}
+
+export interface PrepareResponseData {
+  entityId: string;
+  entityName: string;
+  brief: string;
+  recentInteractions: number;
+  openQuestions: string[];
+}
+
+export interface PrepareResponse {
+  success: boolean;
+  data: PrepareResponseData;
+}
+
+export interface EntitySearchResult {
+  id: string;
+  name: string;
+  type: string;
+  createdAt: string;
+}
+
+export interface EntitiesResponse {
+  items: EntitySearchResult[];
+  total: number;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -120,6 +171,55 @@ export class PkgCoreApiService {
   async getChatStats(): Promise<ChatStatsResponse> {
     const response = await this.client.get<ChatStatsResponse>('/interactions/chat-stats');
     return response.data;
+  }
+
+  // ============================================
+  // Second Brain Agent API Methods
+  // ============================================
+
+  /**
+   * Recall - natural language search through past conversations
+   * @param query Natural language query
+   * @param timeout Optional timeout in ms (default: 120000 for agent operations)
+   */
+  async recall(query: string, timeout = 120000): Promise<RecallResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<RecallResponse>(
+        '/agent/recall',
+        { query } as RecallRequestDto,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Prepare - get briefing before meeting with a person/organization
+   * @param entityId UUID of the entity
+   * @param timeout Optional timeout in ms (default: 120000 for agent operations)
+   */
+  async prepare(entityId: string, timeout = 120000): Promise<PrepareResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<PrepareResponse>(
+        `/agent/prepare/${entityId}`,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Search entities by name
+   * @param search Search query
+   * @param limit Max results (default: 5)
+   */
+  async searchEntities(search: string, limit = 5): Promise<EntitiesResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<EntitiesResponse>('/entities', {
+        params: { search, limit },
+      });
+      return response.data;
+    });
   }
 
   private async withRetry<T>(operation: () => Promise<T>): Promise<T> {

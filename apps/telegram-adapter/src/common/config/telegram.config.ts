@@ -13,4 +13,7 @@ export default registerAs('telegram', () => ({
 
   // Phone number for authentication (if session string is not provided)
   phoneNumber: process.env.TELEGRAM_PHONE_NUMBER || '',
+
+  // Bot token for Telegraf bot (Second Brain commands)
+  botToken: process.env.TELEGRAM_BOT_TOKEN || '',
 }));

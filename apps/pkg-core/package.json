@@ -27,7 +27,7 @@
     "cli:extract": "ts-node -r tsconfig-paths/register src/cli/extract-historical.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.7",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.8",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "@nestjs-modules/ioredis": "^2.0.2",
     "@nestjs/axios": "^4.0.1",

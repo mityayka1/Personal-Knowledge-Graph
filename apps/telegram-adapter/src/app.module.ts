@@ -5,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { telegramConfig, apiConfig } from './common/config';
 import { TelegramModule } from './telegram/telegram.module';
 import { ApiModule } from './api/api.module';
+import { BotModule } from './bot/bot.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ApiModule } from './api/api.module';
 
     TelegramModule,
     ApiModule,
+    BotModule,
   ],
 })
 export class AppModule {}

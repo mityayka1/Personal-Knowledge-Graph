@@ -1,9 +1,30 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, ConsoleLogger } from '@nestjs/common';
+import { ValidationPipe, ConsoleLogger, LogLevel } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+
+/**
+ * Get log levels based on LOG_LEVEL environment variable
+ * LOG_LEVEL=debug includes: debug, log, warn, error
+ * LOG_LEVEL=verbose includes: verbose, debug, log, warn, error
+ */
+function getLogLevels(): LogLevel[] {
+  const level = process.env.LOG_LEVEL?.toLowerCase();
+  switch (level) {
+    case 'verbose':
+      return ['verbose', 'debug', 'log', 'warn', 'error'];
+    case 'debug':
+      return ['debug', 'log', 'warn', 'error'];
+    case 'warn':
+      return ['warn', 'error'];
+    case 'error':
+      return ['error'];
+    default:
+      return ['log', 'warn', 'error'];
+  }
+}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -11,6 +32,7 @@ async function bootstrap() {
     logger: new ConsoleLogger({
       json: process.env.NODE_ENV === 'production',
       colors: process.env.NODE_ENV !== 'production',
+      logLevels: getLogLevels(),
     }),
   });
 

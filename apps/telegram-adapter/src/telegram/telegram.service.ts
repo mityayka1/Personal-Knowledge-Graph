@@ -5,6 +5,7 @@ import { StringSession } from 'telegram/sessions';
 import { NewMessage, NewMessageEvent, Raw } from 'telegram/events';
 import { Api } from 'telegram';
 import { MessageHandlerService } from './message-handler.service';
+import { AgentHandlerService } from './agent-handler.service';
 import { PkgCoreApiService } from '../api/pkg-core-api.service';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private configService: ConfigService,
     private messageHandler: MessageHandlerService,
+    private agentHandler: AgentHandlerService,
     private pkgCoreApi: PkgCoreApiService,
   ) {}
 
