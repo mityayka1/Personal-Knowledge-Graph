@@ -164,20 +164,31 @@ export class ClaudeAgentService {
       const mcpServer = this.toolsRegistry.createMcpServer(toolCategories as ToolCategory[]);
       const allowedTools = this.toolsRegistry.getToolNames(toolCategories as ToolCategory[]);
 
-      this.logger.debug(`MCP server created with tools: ${allowedTools.join(', ')}`);
+      this.logger.log(`MCP server created with tools: ${allowedTools.join(', ')}`);
+
+      // Build query options
+      // Note: SDK automatically adds StructuredOutput tool when outputFormat is specified
+      // allowedTools just auto-approves our MCP tools (avoids permission prompts)
+      const queryOptions: Record<string, unknown> = {
+        model,
+        maxTurns,
+        systemPrompt,
+        abortController,
+        mcpServers: {
+          'pkg-tools': mcpServer,
+        },
+        allowedTools,
+      };
+
+      // Add structured output format if specified
+      if (params.outputFormat) {
+        queryOptions.outputFormat = params.outputFormat;
+        this.logger.debug('Using structured output with JSON schema');
+      }
 
       for await (const message of query({
         prompt: params.prompt,
-        options: {
-          model,
-          maxTurns,
-          systemPrompt,
-          abortController,
-          mcpServers: {
-            'pkg-tools': mcpServer,
-          },
-          allowedTools,
-        },
+        options: queryOptions as Parameters<typeof query>[0]['options'],
       })) {
         this.accumulateUsage(message, usage);
 
@@ -196,8 +207,35 @@ export class ClaudeAgentService {
 
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
-          if (resultMessage.subtype === 'success' && 'result' in resultMessage) {
-            result = (resultMessage as { result?: unknown }).result as T;
+          // Debug logging for structured output (run with LOG_LEVEL=debug to see)
+          const msgAny = resultMessage as Record<string, unknown>;
+          this.logger.debug(`Result keys: ${Object.keys(msgAny).join(', ')}`);
+          this.logger.debug(`Has structured_output: ${'structured_output' in msgAny}, value: ${JSON.stringify(msgAny.structured_output)?.slice(0, 200)}`);
+          this.logger.debug(`Result subtype: ${resultMessage.subtype}, toolsUsed so far: ${toolsUsed.join(', ')}`);
+          if ('result' in msgAny) {
+            this.logger.debug(`Text result: ${String(msgAny.result).slice(0, 300)}`);
+          }
+
+          if (resultMessage.subtype === 'success') {
+            // When outputFormat is specified, ONLY use structured_output field
+            // No text parsing fallback - it's unreliable (anti-pattern)
+            if (params.outputFormat) {
+              if (msgAny.structured_output !== undefined && msgAny.structured_output !== null) {
+                result = msgAny.structured_output as T;
+                this.logger.debug('Got structured output from agent');
+              } else {
+                // Log tools used for debugging
+                this.logger.warn(`StructuredOutput not returned. Tools used: ${toolsUsed.join(', ')}`);
+                throw new Error(
+                  'Agent did not return structured_output. ' +
+                  'Ensure prompt instructs Claude to use StructuredOutput tool.'
+                );
+              }
+            } else if ('result' in resultMessage) {
+              // No outputFormat specified - use text result as-is
+              result = msgAny.result as T;
+              this.logger.debug('Using text result (no outputFormat specified)');
+            }
           } else if (resultMessage.subtype.startsWith('error')) {
             throw new Error(`Agent error: ${resultMessage.subtype}`);
           }
@@ -291,8 +329,8 @@ ${JSON.stringify(schema, null, 2)}`;
    */
   private buildAgentSystemPrompt(taskType: ClaudeTaskType): string {
     const prompts: Record<string, string> = {
-      recall: 'You help find information from past conversations. Use search tools to find relevant messages. Try different search terms if initial queries return no results.',
-      meeting_prep: 'You prepare briefings for upcoming meetings. Gather context about the person, recent interactions, and any open action items.',
+      recall: 'You help find information from past conversations. Use search tools to find relevant messages. After finding results, you MUST call StructuredOutput tool to return the final answer. Never respond with plain text.',
+      meeting_prep: 'You prepare briefings for upcoming meetings. Gather context about the person, recent interactions, and any open action items. Always use StructuredOutput to return the final brief.',
       daily_brief: 'You create daily summaries. Check scheduled meetings, pending reminders, and open action items for the day.',
       action: 'You help take actions like sending messages or creating reminders. Always confirm the details with the user before executing any action.',
       summarization: 'You summarize conversations, extracting key points, decisions, and action items.',

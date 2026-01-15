@@ -194,6 +194,56 @@ private readonly contextService: ContextService | null,
 - [ ] Нет мутации входных параметров
 - [ ] Logger с контекстом tool name
 
+### Structured Output (outputFormat)
+
+При использовании `outputFormat` с `json_schema` для получения структурированного ответа от агента:
+
+**ВАЖНО: Используй raw JSON Schema, НЕ z.toJSONSchema()**
+
+```typescript
+// ❌ НЕ используй Zod 4 z.toJSONSchema() - SDK не поддерживает формат:
+const schema = z.toJSONSchema(z.object({ answer: z.string() }));
+// Генерирует $schema, additionalProperties и другие поля, ломающие SDK
+
+// ✅ Используй raw JSON Schema:
+const SCHEMA = {
+  type: 'object',
+  properties: {
+    answer: { type: 'string', description: 'Answer text' },
+    sources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'UUID' },
+          preview: { type: 'string', description: 'Quote' },
+        },
+        required: ['id', 'preview'],
+      },
+    },
+  },
+  required: ['answer', 'sources'],
+};
+```
+
+**Структура prompt для StructuredOutput:**
+```typescript
+// ✅ Работает - явно перечислены инструменты + "Заполни поля ответа"
+`Используй инструменты:
+1. search_messages — поиск по сообщениям
+2. list_entities — поиск контактов
+
+Заполни поля ответа:
+- answer: текст на русском
+- sources: массив источников`
+```
+
+**Отладка:**
+```bash
+# Запустить с debug логами
+LOG_LEVEL=debug pnpm dev
+```
+
 ## AI Team
 
 Команда AI-субагентов для проекта PKG. Каждый агент специализируется на своей области.

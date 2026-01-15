@@ -69,6 +69,7 @@ Returns relevant messages with timestamps, senders, and relevance scores.`,
 
             // Format results for readability
             const formattedResults = results.results.map(r => ({
+              id: r.id,  // UUID of the message - required for sources
               type: r.type,
               timestamp: r.timestamp,
               entity: r.entity?.name || 'Unknown',

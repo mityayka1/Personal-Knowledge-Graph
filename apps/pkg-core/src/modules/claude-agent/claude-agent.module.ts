@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClaudeAgentRun } from '@pkg/entities';
 import { ClaudeAgentService } from './claude-agent.service';
 import { ClaudeAgentController } from './claude-agent.controller';
+import { AgentController } from './agent.controller';
 import { SchemaLoaderService } from './schema-loader.service';
 import { ToolsRegistryService } from './tools-registry.service';
 import {
@@ -43,7 +44,7 @@ import { EntityModule } from '../entity/entity.module';
     EntityEventModule,
     EntityModule,
   ],
-  controllers: [ClaudeAgentController],
+  controllers: [ClaudeAgentController, AgentController],
   providers: [
     // Core services
     ClaudeAgentService,

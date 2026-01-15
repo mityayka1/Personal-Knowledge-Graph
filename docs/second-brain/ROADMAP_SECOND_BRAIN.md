@@ -67,10 +67,10 @@ cd apps/pkg-core && pnpm test
 ```
 
 Acceptance Criteria:
-- [ ] Директория `claude-cli/` не существует
-- [ ] Нет импортов ClaudeCliService в коде
-- [ ] Все unit тесты проходят
-- [ ] Приложение запускается без ошибок
+- [x] Директория `claude-cli/` не существует
+- [x] Нет импортов ClaudeCliService в коде
+- [x] Все unit тесты проходят
+- [x] Приложение запускается без ошибок
 
 **Задача B1.2: Создание AgentController**
 
@@ -102,8 +102,8 @@ export class ClaudeAgentController {
 ```
 
 Acceptance Criteria:
-- [ ] Контроллер создан и зарегистрирован в модуле
-- [ ] DTO классы определены с валидацией
+- [x] Контроллер создан и зарегистрирован в модуле
+- [x] DTO классы определены с валидацией
 - [ ] Swagger документация генерируется
 
 #### День 2-3: Recall Endpoint
@@ -182,11 +182,11 @@ private buildRecallPrompt(query: string, entityId?: string): string {
 ```
 
 Acceptance Criteria:
-- [ ] POST /agent/recall принимает запросы
-- [ ] Агент выполняет итеративный поиск (видно в логах tool calls)
-- [ ] Ответ содержит текст и источники
+- [x] POST /agent/recall принимает запросы
+- [x] Агент выполняет итеративный поиск (видно в логах tool calls)
+- [x] Ответ содержит текст и источники
 - [ ] Работает фильтрация по entityId
-- [ ] Timeout корректно обрабатывается
+- [x] Timeout корректно обрабатывается
 
 **Задача B1.4: Integration Test для Recall**
 
@@ -307,9 +307,9 @@ private buildPreparePrompt(entityId: string, context?: string): string {
 ```
 
 Acceptance Criteria:
-- [ ] POST /agent/prepare/:entityId работает
-- [ ] Brief содержит все секции (summary, facts, topics, etc.)
-- [ ] Агент использует несколько tools для сбора информации
+- [x] POST /agent/prepare/:entityId работает
+- [x] Brief содержит все секции (summary, facts, topics, etc.)
+- [x] Агент использует несколько tools для сбора информации
 - [ ] Context влияет на suggestedTopics
 
 ### Неделя 2: Telegram интеграция
@@ -446,11 +446,11 @@ bot.hears(/^(найди|вспомни|кто|что|когда|где)/i, async
 ```
 
 Acceptance Criteria:
-- [ ] /recall команда работает
-- [ ] /prepare команда работает
+- [x] /recall команда работает
+- [x] /prepare команда работает
 - [ ] Естественные запросы распознаются
-- [ ] Форматирование Markdown корректное
-- [ ] Ошибки обрабатываются gracefully
+- [x] Форматирование Markdown корректное
+- [x] Ошибки обрабатываются gracefully
 
 #### День 8-10: Тестирование и полировка
 
