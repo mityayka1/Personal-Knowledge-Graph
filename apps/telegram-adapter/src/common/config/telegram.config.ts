@@ -16,4 +16,11 @@ export default registerAs('telegram', () => ({
 
   // Bot token for Telegraf bot (Second Brain commands)
   botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+
+  // Allowed user IDs for bot access (comma-separated)
+  // Security: only these users can use /recall and /prepare commands
+  allowedUsers: (process.env.TELEGRAM_BOT_ALLOWED_USERS || '')
+    .split(',')
+    .map((id) => parseInt(id.trim(), 10))
+    .filter((id) => !isNaN(id) && id > 0),
 }));

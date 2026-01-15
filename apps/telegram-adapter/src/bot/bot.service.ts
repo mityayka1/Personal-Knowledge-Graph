@@ -8,6 +8,7 @@ import { PrepareHandler } from './handlers/prepare.handler';
 export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private bot: Telegraf | null = null;
+  private allowedUsers: number[] = [];
 
   constructor(
     private readonly configService: ConfigService,
@@ -23,7 +24,43 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // Load allowed users from config
+    this.allowedUsers =
+      this.configService.get<number[]>('telegram.allowedUsers') || [];
+
+    if (this.allowedUsers.length === 0) {
+      this.logger.warn(
+        'TELEGRAM_BOT_ALLOWED_USERS not configured. Bot will reject all users!',
+      );
+    } else {
+      this.logger.log(
+        `Bot access restricted to ${this.allowedUsers.length} user(s): ${this.allowedUsers.join(', ')}`,
+      );
+    }
+
     this.bot = new Telegraf(botToken);
+
+    // Security middleware: check if user is allowed
+    this.bot.use(async (ctx, next) => {
+      const userId = ctx.from?.id;
+
+      if (!userId) {
+        this.logger.warn('Received update without user ID');
+        return;
+      }
+
+      if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(userId)) {
+        this.logger.warn(
+          `Unauthorized access attempt from user ${userId} (${ctx.from?.username || 'no username'})`,
+        );
+        await ctx.reply(
+          '⛔ Доступ запрещён.\n\nЭтот бот предназначен для личного использования.',
+        );
+        return;
+      }
+
+      return next();
+    });
 
     // Register commands with Telegram for hints
     await this.bot.telegram.setMyCommands([
