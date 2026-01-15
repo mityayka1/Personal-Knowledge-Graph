@@ -23,6 +23,7 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly REFRESH_TOKEN_PREFIX = 'auth:refresh:';
   private readonly authConfig: AuthConfig;
+  private dummyHash: string;
 
   constructor(
     @InjectRepository(User)
@@ -37,6 +38,16 @@ export class AuthService {
       throw new Error('Auth configuration not found');
     }
     this.authConfig = config;
+
+    // Generate a valid dummy hash for timing-safe comparison
+    // This is async but we store the promise result synchronously via IIFE
+    this.dummyHash = '';
+    this.initDummyHash();
+  }
+
+  private async initDummyHash(): Promise<void> {
+    // Generate a valid bcrypt hash for timing-safe password comparison
+    this.dummyHash = await bcrypt.hash('dummy-password-for-timing-safety', 12);
   }
 
   async login(loginDto: LoginDto): Promise<TokenResponse & { refreshToken: string }> {
@@ -50,7 +61,9 @@ export class AuthService {
     // Check user exists (timing-safe: don't reveal if user exists)
     if (!user) {
       // Perform dummy hash comparison to prevent timing attacks
-      await bcrypt.compare(password, '$2b$12$dummy.hash.for.timing.safety');
+      // Use pre-generated valid bcrypt hash (falls back to inline generation if not ready)
+      const hashToCompare = this.dummyHash || await bcrypt.hash('fallback', 12);
+      await bcrypt.compare(password, hashToCompare);
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -167,13 +180,32 @@ export class AuthService {
 
   async revokeAllUserTokens(userId: string): Promise<void> {
     const pattern = `${this.REFRESH_TOKEN_PREFIX}${userId}:*`;
-    const keys = await this.redis.keys(pattern);
+    const keys: string[] = [];
+
+    // Use scanStream instead of keys() to avoid blocking Redis
+    const stream = this.redis.scanStream({
+      match: pattern,
+      count: 100,
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      stream.on('data', (resultKeys: string[]) => {
+        keys.push(...resultKeys);
+      });
+      stream.on('end', () => resolve());
+      stream.on('error', (err) => reject(err));
+    });
 
     if (keys.length > 0) {
-      await this.redis.del(...keys);
+      // Delete in batches to avoid memory issues with large key sets
+      const batchSize = 100;
+      for (let i = 0; i < keys.length; i += batchSize) {
+        const batch = keys.slice(i, i + batchSize);
+        await this.redis.del(...batch);
+      }
     }
 
-    this.logger.log(`Revoked all tokens for user ${userId}`);
+    this.logger.log(`Revoked all tokens for user ${userId} (${keys.length} tokens)`);
   }
 
   async validateUser(userId: string): Promise<User | null> {

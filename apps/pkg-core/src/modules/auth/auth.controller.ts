@@ -8,6 +8,8 @@ import {
   Res,
   HttpCode,
   HttpStatus,
+  BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
@@ -69,7 +71,7 @@ export class AuthController {
     const refreshToken = req.cookies?.refreshToken || refreshTokenDto.refreshToken;
 
     if (!refreshToken) {
-      throw new Error('Refresh token not provided');
+      throw new BadRequestException('Refresh token not provided');
     }
 
     const { accessToken, refreshToken: newRefreshToken, expiresIn } =
@@ -105,7 +107,7 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async getMe(@Req() req: AuthenticatedRequest): Promise<UserResponseDto> {
     if (!req.user) {
-      throw new Error('User not authenticated');
+      throw new UnauthorizedException('User not authenticated');
     }
     const user = await this.authService.getMe(req.user.id);
 
@@ -126,7 +128,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     if (!req.user) {
-      throw new Error('User not authenticated');
+      throw new UnauthorizedException('User not authenticated');
     }
     await this.authService.revokeAllUserTokens(req.user.id);
     this.clearRefreshTokenCookie(res);

@@ -13,9 +13,16 @@ export interface AuthConfig {
 export default registerAs('auth', (): AuthConfig => {
   const accessExpiration = process.env.JWT_ACCESS_EXPIRATION || '15m';
   const refreshExpiration = process.env.JWT_REFRESH_EXPIRATION || '7d';
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // JWT_SECRET is required in production
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret && isProduction) {
+    throw new Error('JWT_SECRET environment variable is required in production');
+  }
 
   return {
-    jwtSecret: process.env.JWT_SECRET || 'development-secret-change-in-production',
+    jwtSecret: jwtSecret || 'development-secret-change-in-production',
     jwtAccessExpiration: accessExpiration,
     jwtRefreshExpiration: refreshExpiration,
     accessTokenTtlSeconds: parseExpiration(accessExpiration),

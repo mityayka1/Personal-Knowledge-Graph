@@ -26,6 +26,10 @@ export interface LoginResponse {
  * - User data cached in useState (SSR-safe)
  * - All auth operations go through Nuxt server routes
  */
+
+// Singleton promise to prevent race conditions during initialization
+let initPromise: Promise<void> | null = null;
+
 export const useAuth = () => {
   // State persisted across navigation (SSR-safe)
   const user = useState<User | null>('auth:user', () => null);
@@ -91,6 +95,7 @@ export const useAuth = () => {
 
   /**
    * Initialize auth state (call in plugin or layout)
+   * Uses singleton promise to prevent race conditions
    */
   async function init(): Promise<void> {
     // Skip if already initialized with user
@@ -98,12 +103,23 @@ export const useAuth = () => {
       return;
     }
 
-    isLoading.value = true;
-    try {
-      await fetchUser();
-    } finally {
-      isLoading.value = false;
+    // If initialization is in progress, wait for it
+    if (initPromise) {
+      return initPromise;
     }
+
+    // Start initialization
+    isLoading.value = true;
+    initPromise = (async () => {
+      try {
+        await fetchUser();
+      } finally {
+        isLoading.value = false;
+        initPromise = null;
+      }
+    })();
+
+    return initPromise;
   }
 
   /**

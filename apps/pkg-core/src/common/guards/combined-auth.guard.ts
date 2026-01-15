@@ -3,6 +3,7 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
@@ -22,11 +23,16 @@ import { JwtPayload, AuthenticatedUser } from '../../modules/auth/interfaces/jwt
  */
 @Injectable()
 export class CombinedAuthGuard implements CanActivate {
+  private readonly logger = new Logger(CombinedAuthGuard.name);
+  private readonly isProduction: boolean;
+
   constructor(
     private readonly configService: ConfigService,
     private readonly reflector: Reflector,
     private readonly jwtService: JwtService,
-  ) {}
+  ) {
+    this.isProduction = process.env.NODE_ENV === 'production';
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Check if route is marked as public
@@ -139,7 +145,12 @@ export class CombinedAuthGuard implements CanActivate {
     const validApiKey = this.configService.get<string>('API_KEY');
 
     if (!validApiKey) {
-      // If API_KEY is not configured, allow all API key requests (dev mode)
+      if (this.isProduction) {
+        this.logger.error('API_KEY not configured in production - rejecting request');
+        throw new UnauthorizedException('API key authentication not configured');
+      }
+      // Development mode: warn but allow
+      this.logger.warn('API_KEY not configured - allowing request in development mode');
       return true;
     }
 
