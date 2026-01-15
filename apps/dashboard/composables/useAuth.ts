@@ -33,7 +33,8 @@ let initPromise: Promise<void> | null = null;
 export const useAuth = () => {
   // State persisted across navigation (SSR-safe)
   const user = useState<User | null>('auth:user', () => null);
-  const isLoading = useState<boolean>('auth:loading', () => true);
+  const isLoading = useState<boolean>('auth:loading', () => false);
+  const isInitialized = useState<boolean>('auth:initialized', () => false);
   const error = useState<string | null>('auth:error', () => null);
 
   const isAuthenticated = computed(() => !!user.value);
@@ -98,8 +99,8 @@ export const useAuth = () => {
    * Uses singleton promise to prevent race conditions
    */
   async function init(): Promise<void> {
-    // Skip if already initialized with user
-    if (user.value !== null && !isLoading.value) {
+    // Skip if already initialized
+    if (isInitialized.value) {
       return;
     }
 
@@ -115,6 +116,7 @@ export const useAuth = () => {
         await fetchUser();
       } finally {
         isLoading.value = false;
+        isInitialized.value = true;
         initPromise = null;
       }
     })();
@@ -139,6 +141,7 @@ export const useAuth = () => {
     user: readonly(user),
     isAuthenticated,
     isLoading: readonly(isLoading),
+    isInitialized: readonly(isInitialized),
     error: readonly(error),
     isAdmin,
 

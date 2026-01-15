@@ -10,10 +10,10 @@ export default defineNuxtRouteMiddleware(async (to) => {
     return;
   }
 
-  const { isAuthenticated, isLoading, init } = useAuth();
+  const { isAuthenticated, isInitialized, init } = useAuth();
 
-  // Initialize auth if not done
-  if (isLoading.value) {
+  // Initialize auth if not done yet
+  if (!isInitialized.value) {
     await init();
   }
 
