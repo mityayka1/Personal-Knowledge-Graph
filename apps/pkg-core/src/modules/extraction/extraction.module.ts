@@ -13,6 +13,7 @@ import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
 import { EntityEventModule } from '../entity-event/entity-event.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => EntityModule),
     EntityEventModule,
     ClaudeAgentModule,
+    SettingsModule,
   ],
   controllers: [ExtractionController, ExtractedEventController],
   providers: [
