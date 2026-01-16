@@ -1,9 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { PendingResolutionService } from './pending-resolution.service';
 import { PendingEntityResolution, ResolutionStatus } from '@pkg/entities';
+import { EntityIdentifierService } from '../entity/entity-identifier/entity-identifier.service';
 
 describe('PendingResolutionService', () => {
   let service: PendingResolutionService;
@@ -29,6 +30,44 @@ describe('PendingResolutionService', () => {
     save: jest.fn(),
   };
 
+  const mockEntityIdentifierService = {
+    findByValue: jest.fn(),
+    create: jest.fn(),
+  };
+
+  const mockDataSource = {
+    createQueryRunner: jest.fn().mockReturnValue({
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        save: jest.fn(),
+        findOne: jest.fn(),
+      },
+    }),
+    transaction: jest.fn().mockImplementation(async (callback) => {
+      const mockManager = {
+        save: jest.fn().mockImplementation((entity) => Promise.resolve(entity)),
+        findOne: jest.fn(),
+        getRepository: jest.fn().mockReturnValue({
+          create: jest.fn().mockImplementation((data) => data),
+          save: jest.fn().mockImplementation((entity) => Promise.resolve(entity)),
+          findOne: jest.fn(),
+          createQueryBuilder: jest.fn().mockReturnValue({
+            update: jest.fn().mockReturnThis(),
+            set: jest.fn().mockReturnThis(),
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            execute: jest.fn().mockResolvedValue({ affected: 0 }),
+          }),
+        }),
+      };
+      return callback(mockManager);
+    }),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -36,6 +75,14 @@ describe('PendingResolutionService', () => {
         {
           provide: getRepositoryToken(PendingEntityResolution),
           useValue: mockResolutionRepository,
+        },
+        {
+          provide: EntityIdentifierService,
+          useValue: mockEntityIdentifierService,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
         },
       ],
     }).compile();
@@ -191,6 +238,8 @@ describe('PendingResolutionService', () => {
         entity_id: 'entity-uuid',
         resolved_at: expect.any(Date),
         auto_resolved: false,
+        identifier_created: true,
+        messages_linked: 0,
       });
     });
   });

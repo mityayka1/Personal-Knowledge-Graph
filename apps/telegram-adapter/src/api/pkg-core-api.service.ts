@@ -111,6 +111,28 @@ export interface EntitiesResponse {
   total: number;
 }
 
+// ============================================
+// Extracted Events API Types
+// ============================================
+
+export interface ExtractedEventActionResponse {
+  success: boolean;
+  createdEntityId?: string;
+  error?: string;
+}
+
+export interface RemindResponse {
+  success: boolean;
+  createdEntityId?: string;
+  reminderDate?: string;
+}
+
+export interface RescheduleResponse {
+  success: boolean;
+  newDate?: string;
+  updatedEntityEventId?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -256,5 +278,76 @@ export class PkgCoreApiService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // ============================================
+  // Extracted Events API Methods
+  // ============================================
+
+  /**
+   * Confirm an extracted event and create corresponding entity/reminder
+   */
+  async confirmExtractedEvent(eventId: string): Promise<ExtractedEventActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractedEventActionResponse>(
+        `/extracted-events/${eventId}/confirm`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject an extracted event (mark as ignored)
+   */
+  async rejectExtractedEvent(eventId: string): Promise<ExtractedEventActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractedEventActionResponse>(
+        `/extracted-events/${eventId}/reject`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Create a reminder for an extracted event (+7 days)
+   */
+  async remindExtractedEvent(eventId: string): Promise<RemindResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<RemindResponse>(
+        `/extracted-events/${eventId}/remind`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reschedule an extracted event by specified number of days
+   */
+  async rescheduleExtractedEvent(eventId: string, days: number): Promise<RescheduleResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<RescheduleResponse>(
+        `/extracted-events/${eventId}/reschedule`,
+        { days },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Get event IDs from Redis by digest short ID.
+   * Used for batch actions on digest notifications.
+   */
+  async getDigestEventIds(shortId: string): Promise<string[] | null> {
+    try {
+      const response = await this.client.get<{ eventIds: string[] | null }>(
+        `/digest-actions/${shortId}`,
+      );
+      return response.data.eventIds;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null; // Short ID not found or expired
+      }
+      throw error;
+    }
   }
 }

@@ -4,11 +4,11 @@
 
 ## Pre-requisites
 
-- [ ] Верификация миграции Agent SDK
-  - [ ] Директория `claude-cli/` удалена
-  - [ ] Нет импортов ClaudeCliService
-  - [ ] Все тесты проходят
-  - [ ] Приложение запускается
+- [x] Верификация миграции Agent SDK
+  - [x] Директория `claude-cli/` удалена
+  - [x] Нет импортов ClaudeCliService
+  - [x] Все тесты проходят
+  - [x] Приложение запускается
 
 ---
 
@@ -17,47 +17,47 @@
 ### Week 1: API
 
 #### B1.1 Верификация (Day 1)
-- [ ] Проверить отсутствие claude-cli
-- [ ] Grep по ClaudeCliService = 0 результатов
-- [ ] `pnpm test` проходит
+- [x] Проверить отсутствие claude-cli
+- [x] Grep по ClaudeCliService = 0 результатов
+- [x] `pnpm test` проходит
 
 #### B1.2 AgentController (Day 1)
-- [ ] Controller создан
-- [ ] DTOs с валидацией
-- [ ] Swagger документация
+- [x] Controller создан
+- [x] DTOs с валидацией
+- [x] Swagger документация
 
 #### B1.3 Recall Endpoint (Day 2-3)
-- [ ] POST /agent/recall работает
-- [ ] Итеративный поиск (видно tool calls в логах)
-- [ ] Ответ содержит sources
-- [ ] Фильтрация по entityId
-- [ ] Timeout обработка
+- [x] POST /agent/recall работает
+- [x] Итеративный поиск (видно tool calls в логах)
+- [x] Ответ содержит sources
+- [x] Фильтрация по entityId
+- [x] Timeout обработка
 
 #### B1.4 Recall Tests (Day 3)
-- [ ] E2E тест: успешный поиск
-- [ ] E2E тест: maxTurns limit
-- [ ] E2E тест: пустой результат
+- [x] E2E тест: успешный поиск
+- [x] E2E тест: maxTurns limit
+- [x] E2E тест: пустой результат
 
 #### B1.5 Prepare Endpoint (Day 4-5)
-- [ ] POST /agent/prepare/:entityId работает
-- [ ] Brief содержит все секции
+- [x] POST /agent/prepare/:entityId работает
+- [x] Brief содержит все секции
 - [ ] Context влияет на suggestedTopics
 
 ### Week 2: Telegram
 
 #### B2.1 Telegram Handler (Day 6-7)
-- [ ] /recall команда
-- [ ] /prepare команда
+- [x] /recall команда
+- [x] /prepare команда
 - [ ] Natural language detection
 
 #### B2.2 Bot Commands (Day 7)
-- [ ] Команды зарегистрированы
-- [ ] Help message
+- [x] Команды зарегистрированы
+- [ ] Help message для agent commands
 
 #### B2.3 E2E Testing (Day 8-10)
 - [ ] Тест на реальных данных
 - [ ] Performance < 30 сек
-- [ ] Error handling
+- [x] Error handling
 
 #### B2.4 Metrics (Day 10)
 - [ ] Логирование запросов
@@ -70,63 +70,87 @@
 ### Week 3: Entities
 
 #### C1.1 ExtractedEvent Entity (Day 11-12)
-- [ ] Entity создана
-- [ ] Миграция применена
-- [ ] CRUD работает
+- [x] Entity создана
+- [x] Миграция применена
+- [x] CRUD работает
 
 #### C1.2 Миграция БД (Day 12)
-- [ ] Таблица extracted_events
-- [ ] Индексы созданы
-- [ ] Enum types
+- [x] Таблица extracted_events
+- [x] Индексы созданы
+- [x] Enum types
 
 #### C1.3 EventExtractionService (Day 13-15)
-- [ ] extractFromMessage работает
-- [ ] Confidence scoring
-- [ ] Batch processing
-- [ ] JSON Schema для extraction
+- [x] extractFromMessage работает
+- [x] Confidence scoring
+- [x] Batch processing
+- [x] JSON Schema для extraction
 
 ### Week 4: Notifications
 
 #### C2.1 Message Processing Queue (Day 16-17)
-- [ ] BullMQ queue настроена
-- [ ] Event extraction в pipeline
-- [ ] Worker processor
+- [x] BullMQ queue настроена
+- [x] Event extraction в pipeline
+- [x] Worker processor
 
 #### C2.2 BullMQ Worker (Day 17)
-- [ ] Processor создан
-- [ ] Retry logic
-- [ ] Error handling
+- [x] Processor создан
+- [x] Retry logic
+- [x] Error handling
 
 #### C2.3 NotificationService (Day 18-19)
-- [ ] notifyAboutEvent работает
-- [ ] Priority calculation
-- [ ] Digest aggregation
+- [x] notifyAboutEvent работает
+- [x] Priority calculation
+- [x] Digest aggregation
 
 #### C2.4 Callback Handlers (Day 20-21)
-- [ ] event_confirm handler
-- [ ] event_reject handler
-- [ ] event_reschedule handler
-- [ ] event_remind handler
+- [x] event_confirm handler
+- [x] event_reject handler
+- [x] event_reschedule handler
+- [x] event_remind handler
 
 #### C2.5 API Endpoints (Day 21)
-- [ ] GET /extracted-events
-- [ ] POST /:id/confirm
-- [ ] POST /:id/reject
+- [x] GET /extracted-events
+- [x] POST /:id/confirm
+- [x] POST /:id/reject
+- [x] POST /:id/remind
+- [x] POST /:id/reschedule
 
 ### Week 5: Scheduled Jobs
 
 #### C3.1 Cron Jobs (Day 22-24)
-- [ ] High-priority processing (*/5 * * * *)
-- [ ] Hourly digest (0 * * * *)
-- [ ] Daily digest (0 21 * * *)
-- [ ] Morning brief (0 8 * * *)
-- [ ] Expire old events (0 3 * * *)
+- [x] High-priority processing (*/5 * * * *)
+- [x] Hourly digest (0 * * * *)
+- [x] Daily digest (0 21 * * *)
+- [x] Morning brief (0 8 * * *)
+- [x] Expire old events (0 3 * * *)
 
 #### C3.2 DigestService (Day 24)
-- [ ] sendMorningBrief
-- [ ] sendHourlyDigest
-- [ ] sendDailyDigest
-- [ ] formatMorningBrief
+- [x] sendMorningBrief
+- [x] sendHourlyDigest
+- [x] sendDailyDigest
+- [x] formatMorningBrief
+
+---
+
+## Phase C+: UX Improvements (Post-MVP)
+
+> См. [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md#улучшения-phase-c-post-mvp)
+
+#### Issue #61: Carousel UX
+- [ ] Carousel state в Redis
+- [ ] editMessageText при навигации
+- [ ] Пропуск обработанных событий
+- [ ] Исправить дублирование уведомлений
+
+#### Issue #62: Context-Aware Extraction
+- [ ] Поле `linkedEventId` в ExtractedEvent
+- [ ] Поле `needsContext` в ExtractedEvent
+- [ ] ContextEnrichmentService
+- [ ] Extraction prompt для абстрактных событий
+- [ ] Связывание событий (follow-up, reminder)
+- [ ] `tg://user?id=X` ссылки
+- [ ] Deep link на исходное сообщение
+- [ ] UX для событий с needsContext
 
 ---
 
@@ -185,7 +209,7 @@
 
 ## Documentation
 
-- [ ] API Swagger docs
+- [x] API Swagger docs (available at /api/v1/docs)
 - [ ] User guide
 - [ ] Troubleshooting guide
 - [ ] Architecture diagram update

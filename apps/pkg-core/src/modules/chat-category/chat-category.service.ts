@@ -35,6 +35,7 @@ export interface CategorizeResult {
 export class ChatCategoryService {
   private readonly logger = new Logger(ChatCategoryService.name);
   private readonly telegramAdapterUrl: string;
+  private readonly apiKey: string | undefined;
 
   constructor(
     @InjectRepository(ChatCategoryRecord)
@@ -44,6 +45,18 @@ export class ChatCategoryService {
     private configService: ConfigService,
   ) {
     this.telegramAdapterUrl = this.configService.get<string>('TELEGRAM_ADAPTER_URL') || 'http://localhost:3001';
+    this.apiKey = this.configService.get<string>('PKG_CORE_API_KEY');
+  }
+
+  /**
+   * Get headers with optional API key.
+   */
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
+    }
+    return headers;
   }
 
   /**
@@ -322,6 +335,7 @@ export class ChatCategoryService {
       const response = await firstValueFrom(
         this.httpService.get<TelegramChatInfo>(
           `${this.telegramAdapterUrl}/api/v1/chats/${telegramChatId}/info`,
+          { headers: this.getHeaders() },
         ),
       );
       return response.data;

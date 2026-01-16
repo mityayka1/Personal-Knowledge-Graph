@@ -690,9 +690,9 @@ export class CreateExtractedEvents implements MigrationInterface {
 ```
 
 Acceptance Criteria:
-- [ ] Entity создана и экспортирована из @pkg/entities
-- [ ] Миграция применена без ошибок
-- [ ] CRUD операции работают
+- [x] Entity создана и экспортирована из @pkg/entities
+- [x] Миграция применена без ошибок
+- [x] CRUD операции работают
 
 #### День 13-15: Event Extraction Service
 
@@ -823,10 +823,10 @@ const EVENT_EXTRACTION_SCHEMA = {
 ```
 
 Acceptance Criteria:
-- [ ] Сервис извлекает события из сообщений
-- [ ] Confidence scoring работает
-- [ ] События сохраняются в БД
-- [ ] Batch processing работает
+- [x] Сервис извлекает события из сообщений
+- [x] Confidence scoring работает
+- [x] События сохраняются в БД
+- [x] Batch processing работает
 
 ### Неделя 4: Processing Pipeline и уведомления
 
@@ -1337,28 +1337,130 @@ export class DigestService {
 ### Deliverables фазы C
 
 1. **Database:**
-   - ExtractedEvent entity и миграция
+   - [x] ExtractedEvent entity и миграция
 
 2. **Services:**
-   - EventExtractionService — извлечение событий из сообщений
-   - NotificationService — отправка уведомлений
-   - DigestService — morning brief, hourly/daily digests
+   - [x] SecondBrainExtractionService — извлечение событий из сообщений
+   - [x] NotificationService — отправка уведомлений
+   - [x] DigestService — morning brief, hourly/daily digests
+   - [x] DigestActionStoreService — хранение batch actions в Redis
 
 3. **API:**
-   - GET /extracted-events
-   - POST /extracted-events/:id/confirm
-   - POST /extracted-events/:id/reject
+   - [x] GET /extracted-events
+   - [x] GET /extracted-events/:id
+   - [x] POST /extracted-events/:id/confirm
+   - [x] POST /extracted-events/:id/reject
+   - [x] GET /digest-actions/:shortId
 
 4. **Telegram:**
-   - Callback handlers для кнопок
-   - Morning brief
-   - Hourly/daily digests
+   - [x] Callback handlers для кнопок (d_c:/d_r: format)
+   - [x] Morning brief
+   - [x] Hourly/daily digests
+   - [x] Batch confirm/reject через Redis short IDs
 
 5. **Scheduled Jobs:**
-   - High-priority event processing (every 5 min)
-   - Hourly digest
-   - Daily digest (21:00)
-   - Morning brief (08:00)
+   - [x] High-priority event processing (every 5 min)
+   - [x] Hourly digest
+   - [x] Daily digest (21:00 MSK)
+   - [x] Morning brief (08:00 MSK)
+   - [x] Expire old events (03:00)
+
+---
+
+### Улучшения Phase C (Post-MVP)
+
+После базовой реализации Phase C выявлены улучшения для повышения качества извлечения и UX.
+
+#### Issue #61: Carousel UX для событий
+
+**Проблема:** Текущий digest показывает список событий с кнопками "Подтвердить все / Игнорировать все". Нельзя обработать события по одному.
+
+**Решение:** Carousel интерфейс с пошаговой навигацией:
+
+```
+📋 События (1/10)
+─────────────────
+📋 Задача • 🎯 Высокий приоритет
+👤 От: Иван Петров
+📝 подготовить отчёт
+─────────────────
+[◀️ Назад] [✅ Да] [❌ Нет] [▶️ Далее]
+```
+
+**Tasks:**
+- [ ] Реализовать Carousel state в Redis (текущий индекс, список eventIds)
+- [ ] Обновлять сообщение через `editMessageText` при навигации
+- [ ] Пропускать обработанные события при навигации
+- [ ] Исправить дублирование уведомлений
+
+#### Issue #62: Context-Aware Extraction
+
+**Проблема:** Извлечённые события бесполезны без контекста. "приступить к задаче" — к КАКОЙ задаче?
+
+**Решение:** Двухфазная архитектура с обогащением контекста:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Initial LLM Extraction (Haiku)                  │
+│  - Извлекает события                                        │
+│  - Помечает абстрактные как "needs_enrichment"              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+     ┌────────────────┐             ┌────────────────┐
+     │ Конкретное     │             │ Абстрактное    │
+     │ событие        │             │ (триггер)      │
+     │ → сохранить    │             │ → обогатить    │
+     └────────────────┘             └────────────────┘
+                                              │
+                                              ▼
+                              ┌─────────────────────────────┐
+                              │   Context Enrichment        │
+                              │   1. Search history         │
+                              │   2. Find linked events     │
+                              │   3. LLM synthesis (Sonnet) │
+                              └─────────────────────────────┘
+                                              │
+                              ┌───────────────┴───────────────┐
+                              ▼                               ▼
+                     ┌────────────────┐             ┌────────────────┐
+                     │ Контекст найден│             │ Контекст не    │
+                     │ → обогатить    │             │ найден         │
+                     │ → связать      │             │ → needs_context│
+                     └────────────────┘             └────────────────┘
+```
+
+**Ключевые концепции:**
+
+1. **Абстрактное = триггер:** "приступить к задаче" → поиск в истории → обогащение
+2. **Связывание событий:** `linkedEventId` — "Подготовь отчёт" → "Приступи к отчёту"
+3. **Флаг needsContext:** Если контекст не найден — показать с предупреждением
+
+**Новые поля ExtractedEvent:**
+```typescript
+@Column({ name: 'linked_event_id', type: 'uuid', nullable: true })
+linkedEventId: string | null;  // Связь с предыдущим событием
+
+@Column({ name: 'needs_context', type: 'boolean', default: false })
+needsContext: boolean;  // Требует уточнения от пользователя
+```
+
+**UX улучшения:**
+- Кликабельное имя контакта: `<a href="tg://user?id=123">Иван Петров</a>`
+- Ссылка на исходное сообщение: `https://t.me/c/CHAT_ID/MSG_ID`
+- Показ цитаты из сообщения
+- Название чата и время
+
+**Tasks:**
+- [ ] Добавить поле `linkedEventId` в ExtractedEvent entity
+- [ ] Добавить поле `needsContext` в ExtractedEvent entity
+- [ ] Реализовать ContextEnrichmentService
+- [ ] Обновить extraction prompt — помечать абстрактные события
+- [ ] Реализовать связывание событий (follow-up, reminder)
+- [ ] Добавить `tg://user?id=X` ссылки для имён контактов
+- [ ] Добавить deep link на исходное сообщение
+- [ ] UX для событий с `needsContext=true`
 
 ---
 

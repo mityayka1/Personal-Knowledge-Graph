@@ -6,9 +6,14 @@
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
+  "transformIgnorePatterns": [
+    "node_modules/(?!(uuid)/)"
+  ],
   "moduleNameMapper": {
     "^@pkg/entities$": "<rootDir>/../../../packages/entities/src",
-    "^@pkg/shared$": "<rootDir>/../../../packages/shared/src"
+    "^@pkg/shared$": "<rootDir>/../../../packages/shared/src",
+    "^@anthropic-ai/claude-agent-sdk$": "<rootDir>/../__mocks__/@anthropic-ai/claude-agent-sdk.js",
+    "^uuid$": "<rootDir>/../__mocks__/uuid.js"
   },
   "setupFilesAfterEnv": ["<rootDir>/setup.ts"],
   "testTimeout": 60000

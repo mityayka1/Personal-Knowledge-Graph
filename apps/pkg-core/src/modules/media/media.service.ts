@@ -26,12 +26,14 @@ export interface ChatInfoResponse {
 export class MediaService {
   private readonly logger = new Logger(MediaService.name);
   private readonly telegramAdapterUrl: string;
+  private readonly apiKey: string | undefined;
 
   constructor(
     private httpService: HttpService,
     private configService: ConfigService,
   ) {
     this.telegramAdapterUrl = this.configService.get<string>('TELEGRAM_ADAPTER_URL') || '';
+    this.apiKey = this.configService.get<string>('PKG_CORE_API_KEY');
 
     if (!this.telegramAdapterUrl) {
       this.logger.warn(
@@ -40,6 +42,17 @@ export class MediaService {
       );
       this.telegramAdapterUrl = 'http://localhost:3001';
     }
+  }
+
+  /**
+   * Get headers with optional API key.
+   */
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
+    }
+    return headers;
   }
 
   /**
@@ -67,6 +80,7 @@ export class MediaService {
         this.httpService.get(targetUrl, {
           responseType: 'stream',
           validateStatus: (status) => status < 500, // Handle 4xx ourselves
+          headers: this.getHeaders(),
         }),
       );
 
@@ -158,7 +172,9 @@ export class MediaService {
 
     try {
       const response = await firstValueFrom(
-        this.httpService.get<ChatInfoResponse>(targetUrl),
+        this.httpService.get<ChatInfoResponse>(targetUrl, {
+          headers: this.getHeaders(),
+        }),
       );
       return response.data;
     } catch (error) {

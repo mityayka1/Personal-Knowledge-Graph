@@ -14,6 +14,7 @@ export interface ExtractionJobData {
     id: string;
     content: string;
     timestamp: string;
+    isOutgoing: boolean;
   }>;
 }
 
@@ -76,8 +77,9 @@ export class JobService {
     entityId: string;
     messageId: string;
     messageContent: string;
+    isOutgoing?: boolean;
   }): Promise<void> {
-    const { interactionId, entityId, messageId, messageContent } = params;
+    const { interactionId, entityId, messageId, messageContent, isOutgoing = false } = params;
     // BullMQ doesn't allow colons in custom job IDs, use underscore instead
     const jobId = `extraction_${interactionId}`;
 
@@ -100,6 +102,7 @@ export class JobService {
             id: messageId,
             content: messageContent,
             timestamp: new Date().toISOString(),
+            isOutgoing,
           }],
         });
         await existingJob.changeDelay(delayMs); // Reset delay
@@ -119,6 +122,7 @@ export class JobService {
             id: messageId,
             content: messageContent,
             timestamp: new Date().toISOString(),
+            isOutgoing,
           }],
         } as ExtractionJobData, {
           jobId,
@@ -138,6 +142,7 @@ export class JobService {
           id: messageId,
           content: messageContent,
           timestamp: new Date().toISOString(),
+          isOutgoing,
         }],
       } as ExtractionJobData, {
         jobId: uniqueJobId,
@@ -156,6 +161,7 @@ export class JobService {
         id: messageId,
         content: messageContent,
         timestamp: new Date().toISOString(),
+        isOutgoing,
       }],
     } as ExtractionJobData, {
       jobId,

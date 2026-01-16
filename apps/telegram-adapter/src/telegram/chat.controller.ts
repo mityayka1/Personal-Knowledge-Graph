@@ -1,7 +1,8 @@
-import { Controller, Get, Param, Query, Logger, NotFoundException, ServiceUnavailableException, Res } from '@nestjs/common';
+import { Controller, Get, Param, Query, Logger, NotFoundException, ServiceUnavailableException, Res, UseGuards } from '@nestjs/common';
 import { Response } from 'express';
 import { TelegramService } from './telegram.service';
 import { MessageHandlerService } from './message-handler.service';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 import { Api } from 'telegram';
 import { TelegramClient } from 'telegram';
 import bigInt from 'big-integer';
@@ -48,6 +49,7 @@ function isUserWithAccess(entity: Api.TypeUser | Api.TypeChat): entity is Api.Us
 }
 
 @Controller('chats')
+@UseGuards(ApiKeyGuard)
 export class ChatController {
   private readonly logger = new Logger(ChatController.name);
 

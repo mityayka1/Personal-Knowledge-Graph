@@ -160,7 +160,7 @@ describe('JobService', () => {
           entityId,
           messageIds: [existingMessageId],
           messages: [
-            { id: existingMessageId, content: 'Existing', timestamp: '2026-01-10T10:00:00Z' },
+            { id: existingMessageId, content: 'Existing', timestamp: '2026-01-10T10:00:00Z', isOutgoing: false },
           ],
         };
 
@@ -196,8 +196,8 @@ describe('JobService', () => {
 
       it('should append messages in order', async () => {
         const existingMessages = [
-          { id: 'msg-1', content: 'First', timestamp: '2026-01-10T10:00:00Z' },
-          { id: 'msg-2', content: 'Second', timestamp: '2026-01-10T10:01:00Z' },
+          { id: 'msg-1', content: 'First', timestamp: '2026-01-10T10:00:00Z', isOutgoing: false },
+          { id: 'msg-2', content: 'Second', timestamp: '2026-01-10T10:01:00Z', isOutgoing: true },
         ];
         const existingData: ExtractionJobData = {
           interactionId,
@@ -236,45 +236,84 @@ describe('JobService', () => {
     });
 
     describe('when existing job is NOT in delayed state', () => {
-      const nonDelayedStates = ['active', 'waiting', 'completed', 'failed'];
+      describe('for completed or failed jobs', () => {
+        const completedStates = ['completed', 'failed'];
 
-      nonDelayedStates.forEach((state) => {
-        it(`should create new job with timestamp suffix when existing job is ${state}`, async () => {
-          const mockJob = {
-            data: { interactionId, entityId, messageIds: [], messages: [] },
-            getState: jest.fn().mockResolvedValue(state),
-          };
+        completedStates.forEach((state) => {
+          it(`should remove and replace job when existing job is ${state}`, async () => {
+            const mockJob = {
+              data: { interactionId, entityId, messageIds: [], messages: [] },
+              getState: jest.fn().mockResolvedValue(state),
+              remove: jest.fn().mockResolvedValue(undefined),
+            };
 
-          mockExtractionQueue.getJob.mockResolvedValue(mockJob as unknown as Job);
+            mockExtractionQueue.getJob.mockResolvedValue(mockJob as unknown as Job);
 
-          const beforeTimestamp = Date.now();
-          await service.scheduleExtraction({
-            interactionId,
-            entityId,
-            messageId,
-            messageContent,
-          });
-          const afterTimestamp = Date.now();
-
-          expect(mockExtractionQueue.add).toHaveBeenCalledWith(
-            'extract',
-            expect.objectContaining({
+            await service.scheduleExtraction({
               interactionId,
               entityId,
-              messageIds: [messageId],
-            }),
-            expect.objectContaining({
-              jobId: expect.stringMatching(new RegExp(`extraction_${interactionId}_\\d+`)),
-              delay: defaultDelay,
-            }),
-          );
+              messageId,
+              messageContent,
+            });
 
-          // Verify timestamp is within expected range
-          const addCall = mockExtractionQueue.add.mock.calls[0];
-          const actualJobId = addCall[2].jobId;
-          const timestampPart = parseInt(actualJobId.split('_').pop()!, 10);
-          expect(timestampPart).toBeGreaterThanOrEqual(beforeTimestamp);
-          expect(timestampPart).toBeLessThanOrEqual(afterTimestamp);
+            expect(mockJob.remove).toHaveBeenCalled();
+            expect(mockExtractionQueue.add).toHaveBeenCalledWith(
+              'extract',
+              expect.objectContaining({
+                interactionId,
+                entityId,
+                messageIds: [messageId],
+              }),
+              expect.objectContaining({
+                jobId: `extraction_${interactionId}`,
+                delay: defaultDelay,
+              }),
+            );
+          });
+        });
+      });
+
+      describe('for active or waiting jobs', () => {
+        const activeStates = ['active', 'waiting'];
+
+        activeStates.forEach((state) => {
+          it(`should create new job with timestamp suffix when existing job is ${state}`, async () => {
+            const mockJob = {
+              data: { interactionId, entityId, messageIds: [], messages: [] },
+              getState: jest.fn().mockResolvedValue(state),
+            };
+
+            mockExtractionQueue.getJob.mockResolvedValue(mockJob as unknown as Job);
+
+            const beforeTimestamp = Date.now();
+            await service.scheduleExtraction({
+              interactionId,
+              entityId,
+              messageId,
+              messageContent,
+            });
+            const afterTimestamp = Date.now();
+
+            expect(mockExtractionQueue.add).toHaveBeenCalledWith(
+              'extract',
+              expect.objectContaining({
+                interactionId,
+                entityId,
+                messageIds: [messageId],
+              }),
+              expect.objectContaining({
+                jobId: expect.stringMatching(new RegExp(`extraction_${interactionId}_\\d+`)),
+                delay: defaultDelay,
+              }),
+            );
+
+            // Verify timestamp is within expected range
+            const addCall = mockExtractionQueue.add.mock.calls[0];
+            const actualJobId = addCall[2].jobId;
+            const timestampPart = parseInt(actualJobId.split('_').pop()!, 10);
+            expect(timestampPart).toBeGreaterThanOrEqual(beforeTimestamp);
+            expect(timestampPart).toBeLessThanOrEqual(afterTimestamp);
+          });
         });
       });
     });

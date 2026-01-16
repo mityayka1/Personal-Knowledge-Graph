@@ -13,6 +13,7 @@ export * from './setting.entity';
 export * from './chat-category.entity';
 export * from './group-membership.entity';
 export * from './entity-event.entity';
+export * from './extracted-event.entity';
 export * from './entity-relationship-profile.entity';
 // ClaudeCliRun is deprecated, use ClaudeAgentRun instead
 // Keep the entity for backward compatibility with old migrations

@@ -1,19 +1,30 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Telegraf, Context } from 'telegraf';
+import { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
+import { EventCallbackHandler } from './handlers/event-callback.handler';
+
+export interface SendNotificationOptions {
+  chatId: number | string;
+  message: string;
+  parseMode?: 'Markdown' | 'HTML';
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+}
 
 @Injectable()
 export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private bot: Telegraf | null = null;
   private allowedUsers: number[] = [];
+  private ownerChatId: number | null = null;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly recallHandler: RecallHandler,
     private readonly prepareHandler: PrepareHandler,
+    private readonly eventCallbackHandler: EventCallbackHandler,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -36,6 +47,18 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Bot access restricted to ${this.allowedUsers.length} user(s): ${this.allowedUsers.join(', ')}`,
       );
+    }
+
+    // Load owner chat ID (first allowed user is the owner by default)
+    this.ownerChatId =
+      this.configService.get<number>('telegram.ownerChatId') ||
+      this.allowedUsers[0] ||
+      null;
+
+    if (this.ownerChatId) {
+      this.logger.log(`Owner chat ID configured: ${this.ownerChatId}`);
+    } else {
+      this.logger.warn('Owner chat ID not configured. Notifications will not be sent.');
     }
 
     this.bot = new Telegraf(botToken);
@@ -72,11 +95,15 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Bot commands registered with Telegram');
 
     this.setupCommands();
+    this.setupCallbackHandlers();
     this.setupErrorHandling();
 
-    // Launch bot in polling mode
-    await this.bot.launch();
-    this.logger.log('Telegraf bot started successfully');
+    // Launch bot in polling mode (don't await - it blocks forever)
+    this.bot.launch().then(() => {
+      this.logger.log('Telegraf bot started successfully');
+    }).catch((error) => {
+      this.logger.error('Failed to launch Telegraf bot', error);
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -130,6 +157,30 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Bot commands registered: /start, /help, /recall, /prepare');
   }
 
+  private setupCallbackHandlers(): void {
+    if (!this.bot) return;
+
+    // Handle callback queries from inline buttons
+    this.bot.on('callback_query', async (ctx) => {
+      const callbackQuery = ctx.callbackQuery;
+      if (!callbackQuery || !('data' in callbackQuery)) {
+        return;
+      }
+
+      const callbackData = callbackQuery.data;
+
+      // Route to appropriate handler based on callback data prefix
+      if (this.eventCallbackHandler.canHandle(callbackData)) {
+        await this.eventCallbackHandler.handle(ctx);
+      } else {
+        this.logger.warn(`Unknown callback data: ${callbackData}`);
+        await ctx.answerCbQuery('Unknown action');
+      }
+    });
+
+    this.logger.log('Callback handlers registered');
+  }
+
   private setupErrorHandling(): void {
     if (!this.bot) return;
 
@@ -137,5 +188,77 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Bot error for ${ctx.updateType}:`, message);
     });
+  }
+
+  /**
+   * Send notification to a specific chat
+   */
+  async sendNotification(options: SendNotificationOptions): Promise<boolean> {
+    if (!this.bot) {
+      this.logger.warn('Cannot send notification: bot not initialized');
+      return false;
+    }
+
+    try {
+      const replyMarkup: InlineKeyboardMarkup | undefined = options.buttons
+        ? {
+            inline_keyboard: options.buttons.map((row) =>
+              row.map((btn) => ({
+                text: btn.text,
+                callback_data: btn.callback_data,
+              })),
+            ),
+          }
+        : undefined;
+
+      await this.bot.telegram.sendMessage(options.chatId, options.message, {
+        parse_mode: options.parseMode || 'Markdown',
+        reply_markup: replyMarkup,
+      });
+
+      this.logger.log(`Notification sent to chat ${options.chatId}`);
+      return true;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to send notification to ${options.chatId}: ${errorMsg}`);
+      return false;
+    }
+  }
+
+  /**
+   * Send notification to the owner (primary user)
+   */
+  async sendNotificationToOwner(
+    message: string,
+    options?: {
+      parseMode?: 'Markdown' | 'HTML';
+      buttons?: Array<Array<{ text: string; callback_data: string }>>;
+    },
+  ): Promise<boolean> {
+    if (!this.ownerChatId) {
+      this.logger.warn('Cannot send notification: owner chat ID not configured');
+      return false;
+    }
+
+    return this.sendNotification({
+      chatId: this.ownerChatId,
+      message,
+      parseMode: options?.parseMode,
+      buttons: options?.buttons,
+    });
+  }
+
+  /**
+   * Get owner chat ID
+   */
+  getOwnerChatId(): number | null {
+    return this.ownerChatId;
+  }
+
+  /**
+   * Check if bot is ready for notifications
+   */
+  isReady(): boolean {
+    return this.bot !== null && this.ownerChatId !== null;
   }
 }

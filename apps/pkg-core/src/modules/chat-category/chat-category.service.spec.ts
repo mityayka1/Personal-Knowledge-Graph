@@ -443,6 +443,7 @@ describe('ChatCategoryService', () => {
       const mockQueryBuilder = {
         select: jest.fn().mockReturnThis(),
         addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
         groupBy: jest.fn().mockReturnThis(),
         getRawMany: jest.fn().mockResolvedValue([
           { category: ChatCategory.PERSONAL, count: '10' },
@@ -464,6 +465,7 @@ describe('ChatCategoryService', () => {
       const mockQueryBuilder = {
         select: jest.fn().mockReturnThis(),
         addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
         groupBy: jest.fn().mockReturnThis(),
         getRawMany: jest.fn().mockResolvedValue([]),
       };

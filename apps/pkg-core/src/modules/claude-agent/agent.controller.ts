@@ -7,14 +7,22 @@ import {
   Logger,
   HttpException,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+} from '@nestjs/swagger';
 import { ClaudeAgentService } from './claude-agent.service';
 import {
   RecallRequestDto,
-  RecallResponse,
-  PrepareResponse,
+  RecallResponseDto,
+  PrepareResponseDto,
+} from './dto';
+import {
   RecallSource,
-  OutputFormat,
 } from './claude-agent.types';
 import { EntityService } from '../entity/entity.service';
 
@@ -96,6 +104,7 @@ type PrepareStructuredOutput = {
  * - Recall: search through past conversations
  * - Prepare: get briefing before a meeting
  */
+@ApiTags('agent')
 @Controller('agent')
 export class AgentController {
   private readonly logger = new Logger(AgentController.name);
@@ -115,9 +124,24 @@ export class AgentController {
    * { "query": "что обсуждали с Иваном на прошлой неделе?" }
    */
   @Post('recall')
-  async recall(@Body() dto: RecallRequestDto): Promise<RecallResponse> {
-    this.logger.log(`Recall request: "${dto.query.slice(0, 100)}..."`);
+  @ApiOperation({
+    summary: 'Search through past conversations',
+    description:
+      'Natural language search with optional entity filter and configurable turns',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Search completed successfully',
+    type: RecallResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid query or parameters' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async recall(@Body() dto: RecallRequestDto): Promise<RecallResponseDto> {
+    this.logger.log(
+      `Recall request: "${dto.query.slice(0, 100)}..." entityId=${dto.entityId || 'none'} maxTurns=${dto.maxTurns || 15}`,
+    );
 
+    // Validation handled by class-validator decorators in DTO, but keep defensive check
     if (!dto.query || dto.query.trim().length < 3) {
       throw new HttpException(
         'Query must be at least 3 characters',
@@ -130,10 +154,10 @@ export class AgentController {
       const result = await this.claudeAgentService.call<RecallStructuredOutput>({
         mode: 'agent',
         taskType: 'recall',
-        prompt: this.buildRecallPrompt(dto.query),
+        prompt: this.buildRecallPrompt(dto.query, dto.entityId),
         toolCategories: ['search', 'context', 'entities', 'events'],
         model: 'sonnet',
-        maxTurns: 15,
+        maxTurns: dto.maxTurns || 15,
         outputFormat: {
           type: 'json_schema',
           schema: RECALL_RESPONSE_SCHEMA,
@@ -144,11 +168,15 @@ export class AgentController {
       const structuredData = result.data as RecallStructuredOutput;
 
       // Map sources to response format
-      const sources: RecallSource[] = (structuredData?.sources || []).map(s => ({
-        type: (s.type === 'interaction' ? 'interaction' : 'message') as 'message' | 'interaction',
-        id: s.id,
-        preview: s.preview || '',
-      }));
+      const sources: RecallSource[] = (structuredData?.sources || []).map(
+        (s) => ({
+          type: (s.type === 'interaction' ? 'interaction' : 'message') as
+            | 'message'
+            | 'interaction',
+          id: s.id,
+          preview: s.preview || '',
+        }),
+      );
 
       return {
         success: true,
@@ -176,17 +204,28 @@ export class AgentController {
    * GET /agent/prepare/123e4567-e89b-12d3-a456-426614174000
    */
   @Get('prepare/:entityId')
-  async prepare(@Param('entityId') entityId: string): Promise<PrepareResponse> {
+  @ApiOperation({
+    summary: 'Get meeting briefing',
+    description:
+      'Prepare context brief before meeting with a person or organization',
+  })
+  @ApiParam({
+    name: 'entityId',
+    description: 'Entity UUID',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Brief generated successfully',
+    type: PrepareResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid UUID format' })
+  @ApiResponse({ status: 404, description: 'Entity not found' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async prepare(
+    @Param('entityId', ParseUUIDPipe) entityId: string,
+  ): Promise<PrepareResponseDto> {
     this.logger.log(`Prepare request for entity: ${entityId}`);
-
-    // Validate UUID format
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(entityId)) {
-      throw new HttpException(
-        'Invalid entity ID format (expected UUID)',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
 
     // Check if entity exists
     let entity;
@@ -201,21 +240,22 @@ export class AgentController {
 
     try {
       // Agent with structured output for guaranteed response format
-      const result = await this.claudeAgentService.call<PrepareStructuredOutput>({
-        mode: 'agent',
-        taskType: 'meeting_prep',
-        prompt: this.buildPreparePrompt(entity.name || entity.id, entityId),
-        toolCategories: ['search', 'context', 'entities', 'events'],
-        model: 'sonnet',
-        maxTurns: 15,
-        referenceType: 'entity',
-        referenceId: entityId,
-        outputFormat: {
-          type: 'json_schema',
-          schema: PREPARE_RESPONSE_SCHEMA,
-          strict: true,
-        },
-      });
+      const result =
+        await this.claudeAgentService.call<PrepareStructuredOutput>({
+          mode: 'agent',
+          taskType: 'meeting_prep',
+          prompt: this.buildPreparePrompt(entity.name || entity.id, entityId),
+          toolCategories: ['search', 'context', 'entities', 'events'],
+          model: 'sonnet',
+          maxTurns: 15,
+          referenceType: 'entity',
+          referenceId: entityId,
+          outputFormat: {
+            type: 'json_schema',
+            schema: PREPARE_RESPONSE_SCHEMA,
+            strict: true,
+          },
+        });
 
       const structuredData = result.data as PrepareStructuredOutput;
 
@@ -224,7 +264,8 @@ export class AgentController {
         data: {
           entityId,
           entityName: entity.name || 'Unknown',
-          brief: structuredData?.brief || 'Нет достаточной информации для брифа.',
+          brief:
+            structuredData?.brief || 'Нет достаточной информации для брифа.',
           recentInteractions: structuredData?.recentInteractions || 0,
           openQuestions: structuredData?.openQuestions || [],
         },
@@ -241,9 +282,10 @@ export class AgentController {
   /**
    * Build prompt for recall task
    * Following prepare's structure which successfully triggers StructuredOutput
+   * Supports optional entityId filter
    */
-  private buildRecallPrompt(query: string): string {
-    return `Найди информацию по запросу: "${query}"
+  private buildRecallPrompt(query: string, entityId?: string): string {
+    let prompt = `Найди информацию по запросу: "${query}"
 
 Используй инструменты:
 1. search_messages — найди релевантные сообщения по запросу
@@ -255,6 +297,15 @@ export class AgentController {
 - sources: массив источников [{type:"message", id:"UUID сообщения", preview:"цитата до 200 символов"}]
 
 Если данных мало — так и скажи в answer, sources будет пустым массивом.`;
+
+    if (entityId) {
+      prompt += `
+
+ВАЖНО: Фокусируйся ТОЛЬКО на информации, связанной с контактом ID: ${entityId}
+При вызове search_messages обязательно передавай параметр entityId для фильтрации результатов.`;
+    }
+
+    return prompt;
   }
 
   /**
