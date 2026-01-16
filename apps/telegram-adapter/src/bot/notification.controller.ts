@@ -1,5 +1,6 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Logger } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Logger, UseGuards } from '@nestjs/common';
 import { BotService, SendNotificationOptions } from './bot.service';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 export class SendNotificationDto {
   chatId?: number | string;
@@ -14,6 +15,7 @@ export interface NotificationResponse {
 }
 
 @Controller('notifications')
+@UseGuards(ApiKeyGuard)
 export class NotificationController {
   private readonly logger = new Logger(NotificationController.name);
 

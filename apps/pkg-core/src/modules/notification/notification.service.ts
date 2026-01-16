@@ -1,12 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, In } from 'typeorm';
 import {
   ExtractedEvent,
   ExtractedEventType,
   ExtractedEventStatus,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
+import { SettingsService } from '../settings/settings.service';
+import { DigestActionStoreService } from './digest-action-store.service';
 
 type EventPriority = 'high' | 'medium' | 'low';
 
@@ -47,6 +49,8 @@ export class NotificationService {
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
     private telegramNotifier: TelegramNotifierService,
+    private settingsService: SettingsService,
+    private digestActionStore: DigestActionStoreService,
   ) {}
 
   /**
@@ -69,9 +73,9 @@ export class NotificationService {
   }
 
   /**
-   * Process pending events and send notifications based on priority
-   * High priority events are sent immediately
-   * Medium/low priority events are batched for digest
+   * Process pending events and send notifications based on priority.
+   * High priority events are sent immediately.
+   * Medium/low priority events are batched for digest.
    */
   async processHighPriorityEvents(): Promise<number> {
     const pending = await this.extractedEventRepo.find({
@@ -83,10 +87,12 @@ export class NotificationService {
       take: 10,
     });
 
+    // Get settings once for batch processing
+    const settings = await this.settingsService.getNotificationSettings();
     let notifiedCount = 0;
 
     for (const event of pending) {
-      const priority = this.calculatePriority(event);
+      const priority = await this.calculatePriority(event, settings);
 
       if (priority === 'high') {
         const success = await this.notifyAboutEvent(event);
@@ -105,7 +111,7 @@ export class NotificationService {
   }
 
   /**
-   * Get pending events for digest
+   * Get pending events for digest by priority.
    */
   async getPendingEventsForDigest(
     priority: EventPriority,
@@ -120,7 +126,20 @@ export class NotificationService {
       take: limit * 3, // Get more to filter by priority
     });
 
-    return all.filter((e) => this.calculatePriority(e) === priority).slice(0, limit);
+    // Get settings once for batch filtering
+    const settings = await this.settingsService.getNotificationSettings();
+
+    // Filter by priority (async)
+    const filtered: ExtractedEvent[] = [];
+    for (const event of all) {
+      if (filtered.length >= limit) break;
+      const eventPriority = await this.calculatePriority(event, settings);
+      if (eventPriority === priority) {
+        filtered.push(event);
+      }
+    }
+
+    return filtered;
   }
 
   /**
@@ -157,21 +176,164 @@ export class NotificationService {
   }
 
   /**
-   * Calculate event priority based on type and timing
+   * Send notification for a specific event by ID.
+   * Called by notification processor.
    */
-  calculatePriority(event: ExtractedEvent): EventPriority {
-    // High priority: cancellations, high confidence meetings within 24h
+  async sendNotificationForEvent(eventId: string): Promise<void> {
+    const event = await this.extractedEventRepo.findOne({
+      where: { id: eventId },
+    });
+
+    if (!event) {
+      this.logger.warn(`Event ${eventId} not found for notification`);
+      return;
+    }
+
+    await this.notifyAboutEvent(event);
+  }
+
+  /**
+   * Send digest notification for specific events.
+   * Called by notification processor for queued digest jobs.
+   */
+  async sendDigestForEvents(
+    eventIds: string[],
+    digestType: 'hourly' | 'daily',
+  ): Promise<void> {
+    if (eventIds.length === 0) {
+      this.logger.debug(`No events for ${digestType} digest`);
+      return;
+    }
+
+    const events = await this.extractedEventRepo.find({
+      where: { id: In(eventIds) },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (events.length === 0) {
+      this.logger.warn(`No events found for digest: ${eventIds.join(', ')}`);
+      return;
+    }
+
+    const message = this.formatDigestMessage(events, digestType);
+    const buttons = await this.getDigestButtons(events);
+
+    const success = await this.telegramNotifier.sendWithButtons(message, buttons);
+
+    if (success) {
+      await this.markEventsAsNotified(events.map((e) => e.id));
+      this.logger.log(`${digestType} digest sent for ${events.length} events`);
+    }
+  }
+
+  /**
+   * Format digest message for multiple events.
+   */
+  private formatDigestMessage(
+    events: ExtractedEvent[],
+    digestType: 'hourly' | 'daily',
+  ): string {
+    const header =
+      digestType === 'hourly' ? '*Новые события:*' : '*Дайджест за день*';
+    const lines: string[] = [header, ''];
+
+    events.forEach((event, index) => {
+      const emoji = this.getEventEmoji(event.eventType);
+      const summary = this.getEventSummary(event);
+      lines.push(`${index + 1}. ${emoji} ${summary}`);
+    });
+
+    if (digestType === 'daily') {
+      lines.push('');
+      lines.push(`_Всего: ${events.length} событий_`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Get emoji for event type.
+   */
+  private getEventEmoji(type: ExtractedEventType): string {
+    const emojis: Record<ExtractedEventType, string> = {
+      [ExtractedEventType.MEETING]: '',
+      [ExtractedEventType.PROMISE_BY_ME]: '',
+      [ExtractedEventType.PROMISE_BY_THEM]: '',
+      [ExtractedEventType.TASK]: '',
+      [ExtractedEventType.FACT]: '',
+      [ExtractedEventType.CANCELLATION]: '',
+    };
+    return emojis[type] || '';
+  }
+
+  /**
+   * Get short summary for event.
+   */
+  private getEventSummary(event: ExtractedEvent): string {
+    const data = event.extractedData as Record<string, unknown>;
+
+    if (data.topic) return String(data.topic);
+    if (data.what) return String(data.what);
+    if (data.value) return `${data.factType}: ${data.value}`;
+
+    return 'Событие без описания';
+  }
+
+  /**
+   * Get buttons for digest notification.
+   * Single event: use UUID directly (fits in 64 bytes).
+   * Multiple events: store IDs in Redis and use short ID.
+   */
+  private async getDigestButtons(
+    events: ExtractedEvent[],
+  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
+    if (events.length === 1) {
+      // Single event - UUID fits in callback_data (ev_c:UUID = ~41 chars)
+      return [
+        [
+          { text: 'Подтвердить', callback_data: `ev_c:${events[0].id}` },
+          { text: 'Игнорировать', callback_data: `ev_r:${events[0].id}` },
+        ],
+      ];
+    }
+
+    // Multiple events - store IDs in Redis and use short ID
+    const eventIds = events.map((e) => e.id);
+    const shortId = await this.digestActionStore.store(eventIds);
+
+    // d_c:d_<12hex> = ~18 chars (well under 64 byte limit)
+    return [
+      [
+        { text: 'Подтвердить все', callback_data: `d_c:${shortId}` },
+        { text: 'Игнорировать все', callback_data: `d_r:${shortId}` },
+      ],
+    ];
+  }
+
+  /**
+   * Calculate event priority based on type and timing.
+   * Uses settings for thresholds.
+   */
+  async calculatePriority(
+    event: ExtractedEvent,
+    settings?: { highConfidenceThreshold: number; urgentMeetingHoursWindow: number },
+  ): Promise<EventPriority> {
+    // Get settings if not provided
+    const { highConfidenceThreshold, urgentMeetingHoursWindow } =
+      settings ?? (await this.settingsService.getNotificationSettings());
+
+    // High priority: cancellations, high confidence meetings within window
     if (event.eventType === ExtractedEventType.CANCELLATION) {
       return 'high';
     }
 
-    if (event.confidence > 0.9) {
+    if (event.confidence >= highConfidenceThreshold) {
       if (event.eventType === ExtractedEventType.MEETING) {
         const data = event.extractedData as MeetingData;
         if (data.datetime) {
           const meetingDate = new Date(data.datetime);
           const hoursUntil = (meetingDate.getTime() - Date.now()) / (1000 * 60 * 60);
-          if (hoursUntil > 0 && hoursUntil < 24) {
+          if (hoursUntil > 0 && hoursUntil < urgentMeetingHoursWindow) {
             return 'high';
           }
         }

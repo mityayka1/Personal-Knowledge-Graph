@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, MoreThanOrEqual } from 'typeorm';
 import {
   ExtractedEvent,
   ExtractedEventType,
@@ -13,6 +13,7 @@ import {
   CancellationEventData,
 } from '@pkg/entities';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SettingsService } from '../settings/settings.service';
 
 /**
  * Raw event extracted by LLM
@@ -90,6 +91,7 @@ export class SecondBrainExtractionService {
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
     private claudeAgentService: ClaudeAgentService,
+    private settingsService: SettingsService,
   ) {}
 
   /**
@@ -105,12 +107,15 @@ export class SecondBrainExtractionService {
   }): Promise<SecondBrainExtractionResult> {
     const { messageId, messageContent, interactionId, entityId, entityName, isOutgoing } = params;
 
+    // Get settings for extraction
+    const settings = await this.settingsService.getExtractionSettings();
+
     // Skip very short messages
-    if (messageContent.length < 20) {
+    if (messageContent.length < settings.minMessageLength) {
       return { sourceMessageId: messageId, extractedEvents: [], tokensUsed: 0 };
     }
 
-    const prompt = this.buildPrompt(entityName, messageContent, isOutgoing);
+    const prompt = this.buildPrompt(entityName, messageContent, isOutgoing, settings.maxContentLength);
 
     try {
       const { data, usage } = await this.claudeAgentService.call<ExtractionResponse>({
@@ -129,7 +134,7 @@ export class SecondBrainExtractionService {
 
       for (const rawEvent of rawEvents) {
         // Skip low confidence
-        if (rawEvent.confidence < 0.5) {
+        if (rawEvent.confidence < settings.minConfidence) {
           continue;
         }
 
@@ -148,7 +153,7 @@ export class SecondBrainExtractionService {
             entityId: entityId || null,
             eventType,
             extractedData,
-            sourceQuote: rawEvent.sourceQuote?.substring(0, 500) || null,
+            sourceQuote: rawEvent.sourceQuote?.substring(0, settings.maxQuoteLength) || null,
             confidence: Math.min(1, Math.max(0, rawEvent.confidence)),
             status: ExtractedEventStatus.PENDING,
           });
@@ -268,12 +273,16 @@ export class SecondBrainExtractionService {
 
   /**
    * Auto-process high confidence events
+   * @param threshold - Override threshold (default from settings: extraction.autoSaveThreshold)
    */
-  async autoProcessHighConfidence(threshold = 0.95): Promise<number> {
+  async autoProcessHighConfidence(threshold?: number): Promise<number> {
+    const settings = await this.settingsService.getExtractionSettings();
+    const effectiveThreshold = threshold ?? settings.autoSaveThreshold;
+
     const result = await this.extractedEventRepo.update(
       {
         status: ExtractedEventStatus.PENDING,
-        confidence: threshold,
+        confidence: MoreThanOrEqual(effectiveThreshold),
       },
       {
         status: ExtractedEventStatus.AUTO_PROCESSED,
@@ -285,10 +294,13 @@ export class SecondBrainExtractionService {
 
   /**
    * Expire old pending events
+   * @param olderThanDays - Override days (default from settings: notification.expirationDays)
    */
-  async expireOldEvents(olderThanDays = 7): Promise<number> {
+  async expireOldEvents(olderThanDays?: number): Promise<number> {
+    const notificationSettings = await this.settingsService.getNotificationSettings();
+    const days = olderThanDays ?? notificationSettings.expirationDays;
     const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
+    cutoffDate.setDate(cutoffDate.getDate() - days);
 
     const result = await this.extractedEventRepo
       .createQueryBuilder()
@@ -380,9 +392,14 @@ export class SecondBrainExtractionService {
   /**
    * Build extraction prompt
    */
-  private buildPrompt(entityName: string, content: string, isOutgoing: boolean): string {
+  private buildPrompt(
+    entityName: string,
+    content: string,
+    isOutgoing: boolean,
+    maxContentLength: number = 1000,
+  ): string {
     const sender = isOutgoing ? 'я (пользователь)' : entityName;
-    const cleanContent = content.replace(/\n/g, ' ').substring(0, 1000);
+    const cleanContent = content.replace(/\n/g, ' ').substring(0, maxContentLength);
     const today = new Date().toISOString().split('T')[0];
 
     return `Проанализируй сообщение и извлеки события для "второй памяти".

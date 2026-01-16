@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS: Array<{
   description: string;
   category: string;
 }> = [
+  // Extraction settings
   {
     key: 'extraction.autoSaveThreshold',
     value: 0.95,
@@ -30,10 +31,48 @@ const DEFAULT_SETTINGS: Array<{
     category: 'extraction',
   },
   {
+    key: 'extraction.minMessageLength',
+    value: 20,
+    description: 'Минимальная длина сообщения для извлечения событий (символов)',
+    category: 'extraction',
+  },
+  {
+    key: 'extraction.maxQuoteLength',
+    value: 500,
+    description: 'Максимальная длина цитаты из источника (символов)',
+    category: 'extraction',
+  },
+  {
+    key: 'extraction.maxContentLength',
+    value: 1000,
+    description: 'Максимальная длина контента для LLM обработки (символов)',
+    category: 'extraction',
+  },
+  // Session settings
+  {
     key: 'session.gapThresholdMinutes',
     value: DEFAULT_SESSION_GAP_MINUTES,
     description: 'Порог разделения сессий в минутах. Если между сообщениями прошло больше этого времени, создаётся новая сессия.',
     category: 'session',
+  },
+  // Notification settings
+  {
+    key: 'notification.highConfidenceThreshold',
+    value: 0.9,
+    description: 'Порог уверенности для высокоприоритетных уведомлений (0.0-1.0)',
+    category: 'notification',
+  },
+  {
+    key: 'notification.urgentMeetingHoursWindow',
+    value: 24,
+    description: 'Часов до встречи для определения высокого приоритета уведомления',
+    category: 'notification',
+  },
+  {
+    key: 'notification.expirationDays',
+    value: 7,
+    description: 'Дней до истечения неподтверждённых извлечённых событий',
+    category: 'notification',
   },
 ];
 
@@ -117,17 +156,52 @@ export class SettingsService implements OnModuleInit {
     autoSaveThreshold: number;
     minConfidence: number;
     model: string;
+    minMessageLength: number;
+    maxQuoteLength: number;
+    maxContentLength: number;
   }> {
-    const [autoSaveThreshold, minConfidence, model] = await Promise.all([
+    const [
+      autoSaveThreshold,
+      minConfidence,
+      model,
+      minMessageLength,
+      maxQuoteLength,
+      maxContentLength,
+    ] = await Promise.all([
       this.getValue<number>('extraction.autoSaveThreshold'),
       this.getValue<number>('extraction.minConfidence'),
       this.getValue<string>('extraction.model'),
+      this.getValue<number>('extraction.minMessageLength'),
+      this.getValue<number>('extraction.maxQuoteLength'),
+      this.getValue<number>('extraction.maxContentLength'),
     ]);
 
     return {
       autoSaveThreshold: autoSaveThreshold ?? 0.95,
       minConfidence: minConfidence ?? 0.6,
       model: model ?? 'haiku',
+      minMessageLength: minMessageLength ?? 20,
+      maxQuoteLength: maxQuoteLength ?? 500,
+      maxContentLength: maxContentLength ?? 1000,
+    };
+  }
+
+  // Helper to get notification settings
+  async getNotificationSettings(): Promise<{
+    highConfidenceThreshold: number;
+    urgentMeetingHoursWindow: number;
+    expirationDays: number;
+  }> {
+    const [highConfidenceThreshold, urgentMeetingHoursWindow, expirationDays] = await Promise.all([
+      this.getValue<number>('notification.highConfidenceThreshold'),
+      this.getValue<number>('notification.urgentMeetingHoursWindow'),
+      this.getValue<number>('notification.expirationDays'),
+    ]);
+
+    return {
+      highConfidenceThreshold: highConfidenceThreshold ?? 0.9,
+      urgentMeetingHoursWindow: urgentMeetingHoursWindow ?? 24,
+      expirationDays: expirationDays ?? 7,
     };
   }
 

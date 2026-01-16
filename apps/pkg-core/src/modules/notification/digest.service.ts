@@ -12,6 +12,7 @@ import {
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
+import { DigestActionStoreService } from './digest-action-store.service';
 
 interface MorningBriefData {
   meetings: EntityEvent[];
@@ -34,6 +35,7 @@ export class DigestService {
     private entityRepo: Repository<EntityRecord>,
     private telegramNotifier: TelegramNotifierService,
     private notificationService: NotificationService,
+    private digestActionStore: DigestActionStoreService,
   ) {}
 
   /**
@@ -41,8 +43,10 @@ export class DigestService {
    */
   async sendMorningBrief(): Promise<void> {
     const today = new Date();
-    const startOfDay = new Date(today.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+    const startOfDay = new Date(today);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(today);
+    endOfDay.setHours(23, 59, 59, 999);
 
     try {
       const [meetings, deadlines, birthdays, overdueCommitments, pendingFollowups] =
@@ -81,7 +85,7 @@ export class DigestService {
     }
 
     const message = this.formatHourlyDigest(events);
-    const buttons = this.getDigestButtons(events);
+    const buttons = await this.getDigestButtons(events);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
 
@@ -112,7 +116,7 @@ export class DigestService {
     }
 
     const message = this.formatDailyDigest(allEvents);
-    const buttons = this.getBatchDigestButtons(allEvents);
+    const buttons = await this.getBatchDigestButtons(allEvents);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
 
@@ -252,37 +256,53 @@ export class DigestService {
     return lines.join('\n');
   }
 
-  private getDigestButtons(
+  /**
+   * Get buttons for digest notification.
+   * Single event: use UUID directly (fits in 64 bytes)
+   * Multiple events: store IDs in Redis and use short ID
+   */
+  private async getDigestButtons(
     events: ExtractedEvent[],
-  ): Array<Array<{ text: string; callback_data: string }>> {
+  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
     if (events.length === 1) {
+      // Single event - UUID fits in callback_data (ev_c:UUID = ~41 chars)
       return [
         [
-          { text: 'Подтвердить', callback_data: `event_confirm:${events[0].id}` },
-          { text: 'Игнорировать', callback_data: `event_reject:${events[0].id}` },
+          { text: 'Подтвердить', callback_data: `ev_c:${events[0].id}` },
+          { text: 'Игнорировать', callback_data: `ev_r:${events[0].id}` },
         ],
       ];
     }
 
-    // For multiple events, provide batch actions
+    // Multiple events - store IDs in Redis and use short ID
+    const eventIds = events.map((e) => e.id);
+    const shortId = await this.digestActionStore.store(eventIds);
+
+    // d_c:d_<12hex> = ~18 chars (well under 64 byte limit)
     return [
       [
-        { text: 'Подтвердить все', callback_data: `digest_confirm_all:${events.map((e) => e.id).join(',')}` },
-        { text: 'Игнорировать все', callback_data: `digest_reject_all:${events.map((e) => e.id).join(',')}` },
+        { text: 'Подтвердить все', callback_data: `d_c:${shortId}` },
+        { text: 'Игнорировать все', callback_data: `d_r:${shortId}` },
       ],
     ];
   }
 
-  private getBatchDigestButtons(
+  /**
+   * Get batch action buttons for daily digest.
+   * Always uses Redis storage for short IDs.
+   */
+  private async getBatchDigestButtons(
     events: ExtractedEvent[],
-  ): Array<Array<{ text: string; callback_data: string }>> {
-    const ids = events.map((e) => e.id).join(',');
+  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
+    const eventIds = events.map((e) => e.id);
+    const shortId = await this.digestActionStore.store(eventIds);
+
     return [
       [
-        { text: 'Подтвердить все', callback_data: `digest_confirm_all:${ids}` },
+        { text: 'Подтвердить все', callback_data: `d_c:${shortId}` },
       ],
       [
-        { text: 'Игнорировать все', callback_data: `digest_reject_all:${ids}` },
+        { text: 'Игнорировать все', callback_data: `d_r:${shortId}` },
       ],
     ];
   }

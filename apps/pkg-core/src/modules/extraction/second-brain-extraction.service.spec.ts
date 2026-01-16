@@ -19,6 +19,7 @@ jest.mock('../claude-agent/claude-agent.service', () => ({
 
 // Import after mock
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SettingsService } from '../settings/settings.service';
 
 describe('SecondBrainExtractionService', () => {
   let service: SecondBrainExtractionService;
@@ -57,6 +58,24 @@ describe('SecondBrainExtractionService', () => {
         {
           provide: ClaudeAgentService,
           useValue: mockClaudeAgentService,
+        },
+        {
+          provide: SettingsService,
+          useValue: {
+            getExtractionSettings: jest.fn().mockResolvedValue({
+              autoSaveThreshold: 0.95,
+              minConfidence: 0.6,
+              model: 'haiku',
+              minMessageLength: 20,
+              maxQuoteLength: 500,
+              maxContentLength: 1000,
+            }),
+            getNotificationSettings: jest.fn().mockResolvedValue({
+              highConfidenceThreshold: 0.9,
+              urgentMeetingHoursWindow: 24,
+              expirationDays: 7,
+            }),
+          },
         },
       ],
     }).compile();

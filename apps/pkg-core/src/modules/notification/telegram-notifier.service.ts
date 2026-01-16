@@ -19,6 +19,7 @@ export interface NotificationResponse {
 export class TelegramNotifierService {
   private readonly logger = new Logger(TelegramNotifierService.name);
   private readonly telegramAdapterUrl: string;
+  private readonly apiKey: string | undefined;
 
   constructor(
     private httpService: HttpService,
@@ -26,23 +27,43 @@ export class TelegramNotifierService {
   ) {
     this.telegramAdapterUrl =
       this.configService.get<string>('TELEGRAM_ADAPTER_URL') || 'http://localhost:3001';
+    this.apiKey = this.configService.get<string>('PKG_CORE_API_KEY');
   }
 
   /**
-   * Send notification via Telegram bot
-   * If chatId is not provided, sends to the owner
+   * Get headers with optional API key.
+   */
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
+    }
+
+    return headers;
+  }
+
+  /**
+   * Send notification via Telegram bot.
+   * If chatId is not provided, sends to the owner.
    */
   async send(options: SendNotificationOptions): Promise<boolean> {
     const targetUrl = `${this.telegramAdapterUrl}/notifications/send`;
 
     try {
       const response = await firstValueFrom(
-        this.httpService.post<NotificationResponse>(targetUrl, {
-          chatId: options.chatId,
-          message: options.message,
-          parseMode: options.parseMode,
-          buttons: options.buttons,
-        }),
+        this.httpService.post<NotificationResponse>(
+          targetUrl,
+          {
+            chatId: options.chatId,
+            message: options.message,
+            parseMode: options.parseMode,
+            buttons: options.buttons,
+          },
+          { headers: this.getHeaders() },
+        ),
       );
 
       if (!response.data.success) {
@@ -72,14 +93,18 @@ export class TelegramNotifierService {
   }
 
   /**
-   * Check if notification service is available
+   * Check if notification service is available.
    */
   async checkStatus(): Promise<{ ready: boolean; ownerChatId: number | null }> {
     const targetUrl = `${this.telegramAdapterUrl}/notifications/status`;
 
     try {
       const response = await firstValueFrom(
-        this.httpService.post<{ ready: boolean; ownerChatId: number | null }>(targetUrl),
+        this.httpService.post<{ ready: boolean; ownerChatId: number | null }>(
+          targetUrl,
+          {},
+          { headers: this.getHeaders() },
+        ),
       );
       return response.data;
     } catch (error) {

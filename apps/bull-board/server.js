@@ -26,6 +26,7 @@ const embeddingQueue = new Queue('embedding', queueOptions);
 const factExtractionQueue = new Queue('fact-extraction', queueOptions);
 const summarizationQueue = new Queue('summarization', queueOptions);
 const entityProfileQueue = new Queue('entity-profile', queueOptions);
+const notificationQueue = new Queue('notification', queueOptions);
 
 // Setup Bull Board
 const serverAdapter = new ExpressAdapter();
@@ -37,6 +38,7 @@ createBullBoard({
     new BullMQAdapter(factExtractionQueue),
     new BullMQAdapter(summarizationQueue),
     new BullMQAdapter(entityProfileQueue),
+    new BullMQAdapter(notificationQueue),
   ],
   serverAdapter,
 });
