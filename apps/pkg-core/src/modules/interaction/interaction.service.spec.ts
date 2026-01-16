@@ -88,7 +88,7 @@ describe('InteractionService', () => {
         offset: 0,
       });
       expect(interactionRepo.findAndCount).toHaveBeenCalledWith({
-        relations: ['participants'],
+        relations: ['participants', 'participants.entity'],
         order: { startedAt: 'DESC' },
         take: 20,
         skip: 0,
@@ -101,7 +101,7 @@ describe('InteractionService', () => {
       await service.findAll();
 
       expect(interactionRepo.findAndCount).toHaveBeenCalledWith({
-        relations: ['participants'],
+        relations: ['participants', 'participants.entity'],
         order: { startedAt: 'DESC' },
         take: 20,
         skip: 0,
@@ -118,7 +118,7 @@ describe('InteractionService', () => {
       expect(result).toEqual(mockInteraction);
       expect(interactionRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'test-uuid-1' },
-        relations: ['participants', 'messages', 'summary'],
+        relations: ['participants', 'participants.entity', 'messages', 'summary'],
       });
     });
 

@@ -2,12 +2,21 @@ import {
   Controller,
   Post,
   Get,
+  Body,
   Param,
   Query,
   ParseUUIDPipe,
   NotFoundException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiBody,
+} from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -36,6 +45,23 @@ interface RejectResponse {
   success: boolean;
 }
 
+interface RemindResponse {
+  success: boolean;
+  createdEntityId?: string;
+  reminderDate?: string;
+}
+
+interface RescheduleRequestDto {
+  days: number;
+}
+
+interface RescheduleResponse {
+  success: boolean;
+  newDate?: string;
+  updatedEntityEventId?: string;
+}
+
+@ApiTags('extracted-events')
 @Controller('extracted-events')
 export class ExtractedEventController {
   private readonly logger = new Logger(ExtractedEventController.name);
@@ -167,6 +193,10 @@ export class ExtractedEventController {
    * POST /extracted-events/:id/reject
    */
   @Post(':id/reject')
+  @ApiOperation({ summary: 'Reject extracted event' })
+  @ApiParam({ name: 'id', description: 'ExtractedEvent UUID' })
+  @ApiResponse({ status: 200, description: 'Event rejected successfully' })
+  @ApiResponse({ status: 404, description: 'Event not found' })
   async reject(@Param('id', ParseUUIDPipe) id: string): Promise<RejectResponse> {
     const event = await this.extractedEventRepo.findOne({ where: { id } });
 
@@ -182,6 +212,189 @@ export class ExtractedEventController {
     this.logger.log(`Rejected event ${id}`);
 
     return { success: true };
+  }
+
+  /**
+   * Create a reminder for an extracted event (+7 days)
+   * POST /extracted-events/:id/remind
+   *
+   * Creates a FOLLOW_UP EntityEvent 7 days from now and marks
+   * the extracted event as CONFIRMED.
+   */
+  @Post(':id/remind')
+  @ApiOperation({
+    summary: 'Create reminder for extracted event',
+    description: 'Creates a follow-up reminder 7 days from now',
+  })
+  @ApiParam({ name: 'id', description: 'ExtractedEvent UUID' })
+  @ApiResponse({ status: 200, description: 'Reminder created successfully' })
+  @ApiResponse({ status: 404, description: 'Event not found' })
+  async remind(@Param('id', ParseUUIDPipe) id: string): Promise<RemindResponse> {
+    const event = await this.extractedEventRepo.findOne({
+      where: { id },
+      relations: [
+        'sourceMessage',
+        'sourceMessage.interaction',
+        'sourceMessage.interaction.participants',
+      ],
+    });
+
+    if (!event) {
+      throw new NotFoundException(`ExtractedEvent ${id} not found`);
+    }
+
+    try {
+      // Get entity ID from source message's interaction participants
+      const interaction = event.sourceMessage?.interaction;
+      let entityId: string | null = null;
+
+      if (interaction?.participants) {
+        const nonSelfParticipant = interaction.participants.find(
+          (p) => p.role !== ParticipantRole.SELF && p.entityId,
+        );
+        entityId = nonSelfParticipant?.entityId || null;
+      }
+
+      if (!entityId) {
+        this.logger.warn(`No entity ID found for remind event ${id}`);
+        // Still mark as confirmed but without creating reminder
+        await this.extractedEventRepo.update(id, {
+          status: ExtractedEventStatus.CONFIRMED,
+          userResponseAt: new Date(),
+        });
+        return { success: true };
+      }
+
+      // Create reminder +7 days from now
+      const reminderDate = new Date();
+      reminderDate.setDate(reminderDate.getDate() + 7);
+
+      const title = this.extractTitle(event);
+      const entityEvent = await this.entityEventService.create({
+        entityId,
+        eventType: EventType.FOLLOW_UP,
+        title: `Напоминание: ${title}`,
+        eventDate: reminderDate,
+        description: JSON.stringify(event.extractedData),
+      });
+
+      // Update extracted event status
+      await this.extractedEventRepo.update(id, {
+        status: ExtractedEventStatus.CONFIRMED,
+        userResponseAt: new Date(),
+        resultEntityType: 'EntityEvent',
+        resultEntityId: entityEvent.id,
+      });
+
+      this.logger.log(
+        `Created reminder for event ${id}, EntityEvent: ${entityEvent.id}`,
+      );
+
+      return {
+        success: true,
+        createdEntityId: entityEvent.id,
+        reminderDate: reminderDate.toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(`Failed to create reminder for event ${id}:`, error);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Reschedule an extracted event
+   * POST /extracted-events/:id/reschedule
+   *
+   * Updates the datetime in extractedData and, if an EntityEvent
+   * was already created, updates its eventDate as well.
+   */
+  @Post(':id/reschedule')
+  @ApiOperation({
+    summary: 'Reschedule extracted event',
+    description: 'Move event date by specified number of days',
+  })
+  @ApiParam({ name: 'id', description: 'ExtractedEvent UUID' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'Number of days to reschedule (1=tomorrow, 2, 7, etc.)',
+          example: 1,
+        },
+      },
+      required: ['days'],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Event rescheduled successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid days parameter' })
+  @ApiResponse({ status: 404, description: 'Event not found' })
+  async reschedule(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: RescheduleRequestDto,
+  ): Promise<RescheduleResponse> {
+    const { days } = body;
+
+    if (!days || days < 1 || days > 365) {
+      throw new BadRequestException('days must be between 1 and 365');
+    }
+
+    const event = await this.extractedEventRepo.findOne({
+      where: { id },
+    });
+
+    if (!event) {
+      throw new NotFoundException(`ExtractedEvent ${id} not found`);
+    }
+
+    try {
+      // Calculate new date
+      const newDate = new Date();
+      newDate.setDate(newDate.getDate() + days);
+
+      // Update extractedData with new datetime
+      const updatedData = {
+        ...event.extractedData,
+        datetime: newDate.toISOString(),
+        dateText: this.formatDateText(days),
+      };
+
+      await this.extractedEventRepo.update(id, {
+        extractedData: updatedData,
+        userResponseAt: new Date(),
+      });
+
+      // If EntityEvent was already created, update it too
+      let updatedEntityEventId: string | undefined;
+      if (event.resultEntityId && event.resultEntityType === 'EntityEvent') {
+        await this.entityEventService.update(event.resultEntityId, {
+          eventDate: newDate,
+        });
+        updatedEntityEventId = event.resultEntityId;
+        this.logger.log(
+          `Updated EntityEvent ${event.resultEntityId} date to ${newDate.toISOString()}`,
+        );
+      }
+
+      this.logger.log(`Rescheduled event ${id} to ${newDate.toISOString()}`);
+
+      return {
+        success: true,
+        newDate: newDate.toISOString(),
+        updatedEntityEventId,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to reschedule event ${id}:`, error);
+      return { success: false };
+    }
+  }
+
+  private formatDateText(days: number): string {
+    if (days === 1) return 'завтра';
+    if (days === 2) return 'послезавтра';
+    if (days === 7) return 'через неделю';
+    return `через ${days} дней`;
   }
 
   private shouldCreateEntityEvent(eventType: ExtractedEventType): boolean {

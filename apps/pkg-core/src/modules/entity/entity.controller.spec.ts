@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EntityController } from './entity.controller';
 import { EntityService } from './entity.service';
+import { EntityFactService } from './entity-fact/entity-fact.service';
 import { EntityType } from '@pkg/entities';
 
 describe('EntityController', () => {
@@ -28,6 +29,13 @@ describe('EntityController', () => {
     merge: jest.fn(),
   };
 
+  const mockEntityFactService = {
+    findByEntity: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [EntityController],
@@ -35,6 +43,10 @@ describe('EntityController', () => {
         {
           provide: EntityService,
           useValue: mockEntityService,
+        },
+        {
+          provide: EntityFactService,
+          useValue: mockEntityFactService,
         },
       ],
     }).compile();

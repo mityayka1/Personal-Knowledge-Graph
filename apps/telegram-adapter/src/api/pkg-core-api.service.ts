@@ -121,6 +121,18 @@ export interface ExtractedEventActionResponse {
   error?: string;
 }
 
+export interface RemindResponse {
+  success: boolean;
+  createdEntityId?: string;
+  reminderDate?: string;
+}
+
+export interface RescheduleResponse {
+  success: boolean;
+  newDate?: string;
+  updatedEntityEventId?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -291,6 +303,31 @@ export class PkgCoreApiService {
     return this.withRetry(async () => {
       const response = await this.client.post<ExtractedEventActionResponse>(
         `/extracted-events/${eventId}/reject`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Create a reminder for an extracted event (+7 days)
+   */
+  async remindExtractedEvent(eventId: string): Promise<RemindResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<RemindResponse>(
+        `/extracted-events/${eventId}/remind`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reschedule an extracted event by specified number of days
+   */
+  async rescheduleExtractedEvent(eventId: string, days: number): Promise<RescheduleResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<RescheduleResponse>(
+        `/extracted-events/${eventId}/reschedule`,
+        { days },
       );
       return response.data;
     });

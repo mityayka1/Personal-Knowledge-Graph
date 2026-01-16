@@ -429,18 +429,54 @@ export class NotificationService {
   /**
    * Get inline keyboard buttons for single event actions.
    * Uses unified callback_data format with Redis short ID.
-   * Format: d_c:<shortId> (confirm), d_r:<shortId> (reject)
+   * Format:
+   * - d_c:<shortId> (confirm)
+   * - d_r:<shortId> (reject)
+   * - d_rm:<shortId> (remind +7 days)
+   * - d_rs:<shortId> (reschedule - show options)
+   *
+   * Additional buttons based on event type:
+   * - MEETING: Перенести (reschedule)
+   * - PROMISE_BY_ME, TASK: Напомнить (remind)
    */
   private async getEventButtons(
     event: ExtractedEvent,
   ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
     const shortId = await this.digestActionStore.store([event.id]);
 
-    return [
+    const buttons: Array<Array<{ text: string; callback_data: string }>> = [
       [
         { text: 'Подтвердить', callback_data: `d_c:${shortId}` },
         { text: 'Игнорировать', callback_data: `d_r:${shortId}` },
       ],
     ];
+
+    // Add type-specific buttons
+    const additionalButtons: Array<{ text: string; callback_data: string }> = [];
+
+    // Remind button for promises and tasks
+    if (
+      event.eventType === ExtractedEventType.PROMISE_BY_ME ||
+      event.eventType === ExtractedEventType.TASK
+    ) {
+      additionalButtons.push({
+        text: 'Напомнить',
+        callback_data: `d_rm:${shortId}`,
+      });
+    }
+
+    // Reschedule button for meetings
+    if (event.eventType === ExtractedEventType.MEETING) {
+      additionalButtons.push({
+        text: 'Перенести',
+        callback_data: `d_rs:${shortId}`,
+      });
+    }
+
+    if (additionalButtons.length > 0) {
+      buttons.push(additionalButtons);
+    }
+
+    return buttons;
   }
 }

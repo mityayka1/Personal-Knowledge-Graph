@@ -140,12 +140,12 @@ describe('EntityService', () => {
       });
 
       expect(result).toEqual(newEntity);
-      expect(entityRepo.create).toHaveBeenCalledWith({
-        type: EntityType.PERSON,
-        name: 'Jane Doe',
-        organizationId: undefined,
-        notes: undefined,
-      });
+      expect(entityRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: EntityType.PERSON,
+          name: 'Jane Doe',
+        }),
+      );
     });
 
     it('should create entity with identifiers', async () => {

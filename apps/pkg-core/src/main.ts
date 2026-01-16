@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, ConsoleLogger, LogLevel } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
@@ -57,6 +58,19 @@ async function bootstrap() {
 
   // API prefix
   app.setGlobalPrefix(apiPrefix);
+
+  // Swagger setup
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('PKG Core API')
+    .setDescription('Personal Knowledge Graph - Second Brain API')
+    .setVersion('1.0')
+    .addTag('agent', 'Second Brain Agent endpoints (Recall, Prepare)')
+    .addTag('extracted-events', 'Extracted events management')
+    .addTag('entities', 'Entity management')
+    .addTag('search', 'Search endpoints')
+    .build();
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('docs', app, document);
 
   // CORS configuration
   app.enableCors({

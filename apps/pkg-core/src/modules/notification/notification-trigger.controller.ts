@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Query, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Query, Param, Logger, ParseUUIDPipe } from '@nestjs/common';
 import { NotificationSchedulerService } from './notification-scheduler.service';
 import { NotificationService } from './notification.service';
 
@@ -83,5 +83,18 @@ export class NotificationTriggerController {
         extractedData: e.extractedData,
       })),
     };
+  }
+
+  /**
+   * Send notification for a specific event (for testing)
+   * POST /notifications/trigger/event/:eventId
+   */
+  @Post('event/:eventId')
+  async triggerSingleEvent(
+    @Param('eventId', ParseUUIDPipe) eventId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    this.logger.log(`Manual trigger: single event notification for ${eventId}`);
+    await this.notificationService.sendNotificationForEvent(eventId);
+    return { success: true, message: `Notification sent for event ${eventId}` };
   }
 }
