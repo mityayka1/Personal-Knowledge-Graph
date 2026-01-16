@@ -13,6 +13,7 @@ import {
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestActionStoreService } from './digest-action-store.service';
+import { CarouselStateService } from './carousel-state.service';
 
 interface MorningBriefData {
   meetings: EntityEvent[];
@@ -36,6 +37,7 @@ export class DigestService {
     private telegramNotifier: TelegramNotifierService,
     private notificationService: NotificationService,
     private digestActionStore: DigestActionStoreService,
+    private carouselStateService: CarouselStateService,
   ) {}
 
   /**
@@ -74,7 +76,8 @@ export class DigestService {
   }
 
   /**
-   * Send hourly digest with medium-priority pending events
+   * Send hourly digest with medium-priority pending events.
+   * Uses carousel mode for multiple events (> 1).
    */
   async sendHourlyDigest(): Promise<void> {
     const events = await this.notificationService.getPendingEventsForDigest('medium', 10);
@@ -84,6 +87,13 @@ export class DigestService {
       return;
     }
 
+    // Use carousel mode for multiple events
+    if (events.length > 1) {
+      await this.sendDigestAsCarousel(events, 'hourly');
+      return;
+    }
+
+    // Single event - use regular format
     const message = this.formatHourlyDigest(events);
     const buttons = await this.getDigestButtons(events);
 
@@ -91,12 +101,13 @@ export class DigestService {
 
     if (success) {
       await this.notificationService.markEventsAsNotified(events.map((e) => e.id));
-      this.logger.log(`Hourly digest sent with ${events.length} events`);
+      this.logger.log(`Hourly digest sent with ${events.length} event`);
     }
   }
 
   /**
-   * Send daily digest with all remaining pending events
+   * Send daily digest with all remaining pending events.
+   * Uses carousel mode for multiple events (> 1).
    */
   async sendDailyDigest(): Promise<void> {
     // Get both medium and low priority events
@@ -116,6 +127,13 @@ export class DigestService {
       return;
     }
 
+    // Use carousel mode for multiple events
+    if (allEvents.length > 1) {
+      await this.sendDigestAsCarousel(allEvents, 'daily');
+      return;
+    }
+
+    // Single event - use regular format
     const message = this.formatDailyDigest(allEvents);
     const buttons = await this.getBatchDigestButtons(allEvents);
 
@@ -123,7 +141,61 @@ export class DigestService {
 
     if (success) {
       await this.notificationService.markEventsAsNotified(allEvents.map((e) => e.id));
-      this.logger.log(`Daily digest sent with ${allEvents.length} events`);
+      this.logger.log(`Daily digest sent with ${allEvents.length} event`);
+    }
+  }
+
+  /**
+   * Send digest as carousel (one event at a time with navigation).
+   * Creates carousel state in Redis and sends first event card.
+   */
+  private async sendDigestAsCarousel(
+    events: ExtractedEvent[],
+    digestType: 'hourly' | 'daily',
+  ): Promise<void> {
+    const eventIds = events.map((e) => e.id);
+
+    // Get owner chat ID for sending
+    const chatId = await this.telegramNotifier.getOwnerChatId();
+    if (!chatId) {
+      this.logger.warn('Cannot send carousel: no owner chat ID configured');
+      return;
+    }
+
+    // Create carousel with placeholder messageId=0 (will be updated after send)
+    // The carouselId is generated first so buttons will have correct ID
+    const carouselId = await this.carouselStateService.create(String(chatId), 0, eventIds);
+
+    // Get first event to display
+    const navResult = await this.carouselStateService.getCurrentEvent(carouselId);
+    if (!navResult) {
+      this.logger.error('Failed to get first carousel event');
+      await this.carouselStateService.delete(carouselId);
+      return;
+    }
+
+    // Format carousel card and buttons (buttons use carouselId which won't change)
+    const message = await this.notificationService.formatCarouselCard(navResult);
+    const buttons = this.notificationService.getCarouselButtons(carouselId);
+
+    // Add header based on digest type
+    const header = digestType === 'hourly' ? '<b>Новые события</b>\n\n' : '<b>Дайджест за день</b>\n\n';
+    const fullMessage = header + message;
+
+    // Send message and get messageId
+    const messageId = await this.telegramNotifier.sendWithButtonsAndGetId(fullMessage, buttons);
+
+    if (messageId) {
+      // Update carousel state with actual messageId (carouselId stays the same)
+      await this.carouselStateService.updateMessageId(carouselId, messageId);
+
+      // Mark all events as notified (they are in the carousel now)
+      await this.notificationService.markEventsAsNotified(eventIds);
+      this.logger.log(`${digestType} carousel sent with ${events.length} events (id: ${carouselId})`);
+    } else {
+      // Failed to send - cleanup
+      await this.carouselStateService.delete(carouselId);
+      this.logger.error('Failed to send carousel message');
     }
   }
 

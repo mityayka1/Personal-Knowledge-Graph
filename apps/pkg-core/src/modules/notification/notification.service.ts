@@ -5,10 +5,16 @@ import {
   ExtractedEvent,
   ExtractedEventType,
   ExtractedEventStatus,
+  EntityRecord,
+  EntityIdentifier,
+  IdentifierType,
+  Message,
+  Interaction,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { SettingsService } from '../settings/settings.service';
 import { DigestActionStoreService } from './digest-action-store.service';
+import { CarouselStateService, CarouselNavResult } from './carousel-state.service';
 
 type EventPriority = 'high' | 'medium' | 'low';
 
@@ -48,13 +54,23 @@ export class NotificationService {
   constructor(
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
+    @InjectRepository(EntityRecord)
+    private entityRepo: Repository<EntityRecord>,
+    @InjectRepository(EntityIdentifier)
+    private identifierRepo: Repository<EntityIdentifier>,
+    @InjectRepository(Message)
+    private messageRepo: Repository<Message>,
+    @InjectRepository(Interaction)
+    private interactionRepo: Repository<Interaction>,
     private telegramNotifier: TelegramNotifierService,
     private settingsService: SettingsService,
     private digestActionStore: DigestActionStoreService,
+    private carouselStateService: CarouselStateService,
   ) {}
 
   /**
-   * Send notification for extracted event
+   * Send notification for extracted event.
+   * Uses atomic update to prevent race conditions.
    */
   async notifyAboutEvent(event: ExtractedEvent): Promise<boolean> {
     const message = this.formatEventNotification(event);
@@ -63,10 +79,18 @@ export class NotificationService {
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
 
     if (success) {
-      // Mark as notified
-      await this.extractedEventRepo.update(event.id, {
-        notificationSentAt: new Date(),
-      });
+      // Atomic mark as notified (only if not already notified)
+      const result = await this.extractedEventRepo
+        .createQueryBuilder()
+        .update()
+        .set({ notificationSentAt: new Date() })
+        .where('id = :id', { id: event.id })
+        .andWhere('notification_sent_at IS NULL')
+        .execute();
+
+      if (result.affected === 0) {
+        this.logger.debug(`Event ${event.id} was already notified by another process`);
+      }
     }
 
     return success;
@@ -147,14 +171,24 @@ export class NotificationService {
   }
 
   /**
-   * Mark events as notified (after sending digest)
+   * Mark events as notified (after sending digest).
+   * Uses atomic update with WHERE clause to prevent race conditions.
+   * Returns number of events actually marked (excludes already notified).
    */
-  async markEventsAsNotified(eventIds: string[]): Promise<void> {
-    if (eventIds.length === 0) return;
+  async markEventsAsNotified(eventIds: string[]): Promise<number> {
+    if (eventIds.length === 0) return 0;
 
-    await this.extractedEventRepo.update(eventIds, {
-      notificationSentAt: new Date(),
-    });
+    // Atomic update: only update events that haven't been notified yet
+    // This prevents race conditions when multiple processes try to mark same events
+    const result = await this.extractedEventRepo
+      .createQueryBuilder()
+      .update()
+      .set({ notificationSentAt: new Date() })
+      .where('id IN (:...ids)', { ids: eventIds })
+      .andWhere('notification_sent_at IS NULL')
+      .execute();
+
+    return result.affected || 0;
   }
 
   /**
@@ -182,14 +216,19 @@ export class NotificationService {
   /**
    * Send notification for a specific event by ID.
    * Called by notification processor.
+   * Includes duplicate prevention check.
    */
   async sendNotificationForEvent(eventId: string): Promise<void> {
+    // Check for event that hasn't been notified yet (prevents duplicates)
     const event = await this.extractedEventRepo.findOne({
-      where: { id: eventId },
+      where: {
+        id: eventId,
+        notificationSentAt: IsNull(),
+      },
     });
 
     if (!event) {
-      this.logger.warn(`Event ${eventId} not found for notification`);
+      this.logger.debug(`Event ${eventId} not found or already notified, skipping`);
       return;
     }
 
@@ -199,6 +238,7 @@ export class NotificationService {
   /**
    * Send digest notification for specific events.
    * Called by notification processor for queued digest jobs.
+   * Includes duplicate prevention - filters out already notified events.
    */
   async sendDigestForEvents(
     eventIds: string[],
@@ -209,13 +249,17 @@ export class NotificationService {
       return;
     }
 
+    // Filter out already notified events (prevents duplicates on retry)
     const events = await this.extractedEventRepo.find({
-      where: { id: In(eventIds) },
+      where: {
+        id: In(eventIds),
+        notificationSentAt: IsNull(),
+      },
       order: { createdAt: 'ASC' },
     });
 
     if (events.length === 0) {
-      this.logger.warn(`No events found for digest: ${eventIds.join(', ')}`);
+      this.logger.debug(`All events for ${digestType} digest already notified, skipping`);
       return;
     }
 
@@ -478,5 +522,349 @@ export class NotificationService {
     }
 
     return buttons;
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Contact Link Helpers (Issue #62 - UX Improvements)
+  // ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Get contact info for an event (entity name and telegram ID).
+   * Returns name and telegram ID if available.
+   */
+  private async getContactInfo(event: ExtractedEvent): Promise<{ name: string; telegramUserId: string | null } | null> {
+    // First try to get entityId directly from the event
+    let entityId = event.entityId;
+
+    // If not set, try to get from the source message's sender
+    if (!entityId && event.sourceMessageId) {
+      const message = await this.messageRepo.findOne({
+        where: { id: event.sourceMessageId },
+        select: ['senderEntityId'],
+      });
+      entityId = message?.senderEntityId ?? null;
+    }
+
+    if (!entityId) {
+      return null;
+    }
+
+    // Get entity name
+    const entity = await this.entityRepo.findOne({
+      where: { id: entityId },
+      select: ['name'],
+    });
+
+    if (!entity) {
+      return null;
+    }
+
+    // Get telegram user ID from identifiers
+    const telegramIdentifier = await this.identifierRepo.findOne({
+      where: {
+        entityId,
+        identifierType: IdentifierType.TELEGRAM_USER_ID,
+      },
+      select: ['identifierValue'],
+    });
+
+    return {
+      name: entity.name,
+      telegramUserId: telegramIdentifier?.identifierValue ?? null,
+    };
+  }
+
+  /**
+   * Format contact name as a clickable Telegram link if telegram ID is available.
+   * Format: <a href="tg://user?id=123">Name</a>
+   * Falls back to plain text if no telegram ID.
+   */
+  private formatContactLink(name: string, telegramUserId: string | null): string {
+    const escapedName = this.escapeHtml(name);
+    if (telegramUserId) {
+      return `<a href="tg://user?id=${telegramUserId}">${escapedName}</a>`;
+    }
+    return escapedName;
+  }
+
+  /**
+   * Get message link info for an event (deep link to original message).
+   * Returns the telegram chat ID and message ID if available.
+   */
+  private async getMessageLinkInfo(event: ExtractedEvent): Promise<{
+    deepLink: string | null;
+    sourceQuote: string | null;
+  }> {
+    // Get sourceQuote directly from event
+    const sourceQuote = event.sourceQuote ?? null;
+
+    // Need sourceMessageId and sourceInteractionId to build deep link
+    if (!event.sourceMessageId) {
+      return { deepLink: null, sourceQuote };
+    }
+
+    // Get the message to find telegram message ID
+    const message = await this.messageRepo.findOne({
+      where: { id: event.sourceMessageId },
+      select: ['sourceMessageId', 'interactionId'],
+    });
+
+    if (!message?.sourceMessageId) {
+      return { deepLink: null, sourceQuote };
+    }
+
+    // Get the interaction to find telegram chat ID
+    const interactionId = event.sourceInteractionId ?? message.interactionId;
+    if (!interactionId) {
+      return { deepLink: null, sourceQuote };
+    }
+
+    const interaction = await this.interactionRepo.findOne({
+      where: { id: interactionId },
+      select: ['sourceMetadata'],
+    });
+
+    const telegramChatId = interaction?.sourceMetadata?.telegram_chat_id;
+    if (!telegramChatId) {
+      return { deepLink: null, sourceQuote };
+    }
+
+    // Format deep link: https://t.me/c/CHAT_ID/MSG_ID
+    // For private chats/groups, we need to remove the -100 prefix from chat ID
+    let chatIdForLink = telegramChatId;
+    if (chatIdForLink.startsWith('-100')) {
+      chatIdForLink = chatIdForLink.substring(4); // Remove -100 prefix
+    } else if (chatIdForLink.startsWith('-')) {
+      chatIdForLink = chatIdForLink.substring(1); // Remove - prefix for groups
+    }
+
+    const deepLink = `https://t.me/c/${chatIdForLink}/${message.sourceMessageId}`;
+    return { deepLink, sourceQuote };
+  }
+
+  /**
+   * Format message link as a clickable Telegram deep link.
+   */
+  private formatMessageLink(deepLink: string): string {
+    return `<a href="${deepLink}">📎 Сообщение</a>`;
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Carousel Methods (Issue #61)
+  // ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Format a carousel card for single event display.
+   * Shows event details with position indicator.
+   *
+   * Example:
+   * ```
+   * 📋 События (1/10)
+   * ─────────────────
+   * 📋 Задача • 🎯 Высокий приоритет
+   * 👤 От: Иван Петров
+   * 📝 подготовить отчёт
+   * ─────────────────
+   * ```
+   */
+  async formatCarouselCard(navResult: CarouselNavResult): Promise<string> {
+    const { event, index, total, remaining } = navResult;
+
+    const emoji = this.getEventEmoji(event.eventType);
+    const typeLabel = this.getEventTypeLabel(event.eventType);
+    const priority = await this.calculatePriority(event);
+    const priorityIcon = this.getPriorityIcon(priority);
+
+    // Get contact info and message link for the event (parallel)
+    const [contactInfo, messageLinkInfo] = await Promise.all([
+      this.getContactInfo(event),
+      this.getMessageLinkInfo(event),
+    ]);
+
+    const lines: string[] = [];
+
+    // Header with position
+    lines.push(`<b>📋 События (${index + 1}/${total})</b>`);
+    lines.push('─────────────────');
+
+    // Event type and priority
+    lines.push(`${emoji} ${typeLabel} • ${priorityIcon}`);
+
+    // Contact link (clickable if telegram ID available)
+    if (contactInfo) {
+      const contactLink = this.formatContactLink(contactInfo.name, contactInfo.telegramUserId);
+      lines.push(`👤 ${contactLink}`);
+    }
+
+    // Event-specific content
+    const content = this.getCarouselEventContent(event);
+    lines.push(...content);
+
+    // Source quote (if available)
+    if (messageLinkInfo.sourceQuote) {
+      const truncatedQuote = messageLinkInfo.sourceQuote.length > 100
+        ? messageLinkInfo.sourceQuote.slice(0, 100) + '...'
+        : messageLinkInfo.sourceQuote;
+      lines.push(`💬 <i>"${this.escapeHtml(truncatedQuote)}"</i>`);
+    }
+
+    // Message deep link (if available)
+    if (messageLinkInfo.deepLink) {
+      lines.push(this.formatMessageLink(messageLinkInfo.deepLink));
+    }
+
+    // Warning for abstract events that need context clarification
+    if (event.needsContext) {
+      lines.push('');
+      lines.push('⚠️ <i>Контекст не найден. Уточните о чём речь.</i>');
+    }
+
+    // Show linked event info if enrichment found a related event
+    if (event.linkedEventId && event.enrichmentData?.synthesis) {
+      lines.push('');
+      lines.push(`🔗 <i>${this.escapeHtml(event.enrichmentData.synthesis)}</i>`);
+    }
+
+    // Footer with remaining count
+    lines.push('─────────────────');
+    if (remaining > 1) {
+      lines.push(`<i>Осталось: ${remaining - 1}</i>`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Get inline keyboard buttons for carousel navigation.
+   * Callback format:
+   * - car_p:<carouselId> - Previous
+   * - car_n:<carouselId> - Next
+   * - car_c:<carouselId> - Confirm current
+   * - car_r:<carouselId> - Reject current
+   */
+  getCarouselButtons(
+    carouselId: string,
+  ): Array<Array<{ text: string; callback_data: string }>> {
+    return [
+      [
+        { text: '◀️', callback_data: `car_p:${carouselId}` },
+        { text: '✅ Да', callback_data: `car_c:${carouselId}` },
+        { text: '❌ Нет', callback_data: `car_r:${carouselId}` },
+        { text: '▶️', callback_data: `car_n:${carouselId}` },
+      ],
+    ];
+  }
+
+  /**
+   * Format completion message when all carousel events are processed.
+   */
+  formatCarouselComplete(processedCount: number): string {
+    return (
+      `<b>✅ Все события обработаны</b>\n\n` +
+      `Обработано: ${processedCount} событий`
+    );
+  }
+
+  /**
+   * Get human-readable event type label.
+   */
+  private getEventTypeLabel(type: ExtractedEventType): string {
+    const labels: Record<ExtractedEventType, string> = {
+      [ExtractedEventType.MEETING]: 'Встреча',
+      [ExtractedEventType.PROMISE_BY_ME]: 'Моё обещание',
+      [ExtractedEventType.PROMISE_BY_THEM]: 'Их обещание',
+      [ExtractedEventType.TASK]: 'Задача',
+      [ExtractedEventType.FACT]: 'Факт',
+      [ExtractedEventType.CANCELLATION]: 'Отмена',
+    };
+    return labels[type] || 'Событие';
+  }
+
+  /**
+   * Get priority icon.
+   */
+  private getPriorityIcon(priority: EventPriority): string {
+    switch (priority) {
+      case 'high':
+        return '🎯 Высокий';
+      case 'medium':
+        return '📌 Средний';
+      case 'low':
+        return '📎 Низкий';
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * Get event-specific content lines for carousel card.
+   */
+  private getCarouselEventContent(event: ExtractedEvent): string[] {
+    const esc = (text: string | undefined | null): string =>
+      text ? this.escapeHtml(text) : '';
+    const lines: string[] = [];
+
+    switch (event.eventType) {
+      case ExtractedEventType.MEETING: {
+        const meetingData = event.extractedData as MeetingData;
+        if (meetingData.topic) {
+          lines.push(`📝 ${esc(meetingData.topic)}`);
+        }
+        if (meetingData.dateText || meetingData.datetime) {
+          lines.push(`🕐 ${esc(meetingData.dateText) || esc(meetingData.datetime)}`);
+        }
+        break;
+      }
+
+      case ExtractedEventType.PROMISE_BY_ME: {
+        const promiseData = event.extractedData as PromiseData;
+        lines.push(`📝 ${esc(promiseData.what)}`);
+        if (promiseData.deadlineText || promiseData.deadline) {
+          lines.push(`⏰ ${esc(promiseData.deadlineText) || esc(promiseData.deadline)}`);
+        }
+        break;
+      }
+
+      case ExtractedEventType.PROMISE_BY_THEM: {
+        const promiseData = event.extractedData as PromiseData;
+        lines.push(`📝 ${esc(promiseData.what)}`);
+        if (promiseData.deadlineText || promiseData.deadline) {
+          lines.push(`⏰ ${esc(promiseData.deadlineText) || esc(promiseData.deadline)}`);
+        }
+        break;
+      }
+
+      case ExtractedEventType.TASK: {
+        const taskData = event.extractedData as TaskData;
+        lines.push(`📝 ${esc(taskData.what)}`);
+        if (taskData.deadline) {
+          lines.push(`⏰ ${esc(taskData.deadline)}`);
+        }
+        break;
+      }
+
+      case ExtractedEventType.FACT: {
+        const factData = event.extractedData as FactData;
+        lines.push(`📝 ${esc(factData.factType)}: ${esc(factData.value)}`);
+        if (factData.quote) {
+          lines.push(`💬 <i>"${esc(factData.quote.slice(0, 100))}${factData.quote.length > 100 ? '...' : ''}"</i>`);
+        }
+        break;
+      }
+
+      case ExtractedEventType.CANCELLATION: {
+        const cancelData = event.extractedData as CancellationData;
+        lines.push(`📝 ${esc(cancelData.what)}`);
+        if (cancelData.reason) {
+          lines.push(`💬 ${esc(cancelData.reason)}`);
+        }
+        break;
+      }
+
+      default:
+        lines.push(`📝 ${esc(JSON.stringify(event.extractedData))}`);
+    }
+
+    return lines;
   }
 }

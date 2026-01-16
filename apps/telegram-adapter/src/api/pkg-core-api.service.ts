@@ -133,6 +133,21 @@ export interface RescheduleResponse {
   updatedEntityEventId?: string;
 }
 
+// ============================================
+// Carousel API Types
+// ============================================
+
+export interface CarouselNavResponse {
+  success: boolean;
+  complete: boolean;
+  message?: string;
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  chatId?: string;
+  messageId?: number;
+  processedCount?: number;
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -349,5 +364,57 @@ export class PkgCoreApiService {
       }
       throw error;
     }
+  }
+
+  // ============================================
+  // Carousel API Methods
+  // ============================================
+
+  /**
+   * Navigate to next event in carousel
+   */
+  async carouselNext(carouselId: string): Promise<CarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<CarouselNavResponse>(
+        `/carousel/${carouselId}/next`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Navigate to previous event in carousel
+   */
+  async carouselPrev(carouselId: string): Promise<CarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<CarouselNavResponse>(
+        `/carousel/${carouselId}/prev`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Confirm current carousel event and navigate to next
+   */
+  async carouselConfirm(carouselId: string): Promise<CarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<CarouselNavResponse>(
+        `/carousel/${carouselId}/confirm`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject current carousel event and navigate to next
+   */
+  async carouselReject(carouselId: string): Promise<CarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<CarouselNavResponse>(
+        `/carousel/${carouselId}/reject`,
+      );
+      return response.data;
+    });
   }
 }

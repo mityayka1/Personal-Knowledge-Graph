@@ -13,6 +13,7 @@ export interface SendNotificationOptions {
 export interface NotificationResponse {
   success: boolean;
   error?: string;
+  messageId?: number;
 }
 
 @Injectable()
@@ -93,6 +94,99 @@ export class TelegramNotifierService {
       buttons,
       parseMode,
     });
+  }
+
+  /**
+   * Send notification with buttons and return message ID (for carousel).
+   * Uses HTML parse mode by default.
+   */
+  async sendWithButtonsAndGetId(
+    message: string,
+    buttons: Array<Array<{ text: string; callback_data: string }>>,
+    parseMode: 'Markdown' | 'HTML' = 'HTML',
+  ): Promise<number | null> {
+    const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/send-with-id`;
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post<NotificationResponse>(
+          targetUrl,
+          {
+            message,
+            buttons,
+            parseMode,
+          },
+          { headers: this.getHeaders() },
+        ),
+      );
+
+      if (!response.data.success || !response.data.messageId) {
+        this.logger.warn(`Notification failed: ${response.data.error || 'No messageId returned'}`);
+        return null;
+      }
+
+      return response.data.messageId;
+    } catch (error) {
+      const errorMsg = this.getErrorMessage(error);
+      this.logger.error(`Failed to send notification with ID: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  /**
+   * Edit an existing message (for carousel navigation).
+   */
+  async editMessage(
+    chatId: number | string,
+    messageId: number,
+    message: string,
+    buttons?: Array<Array<{ text: string; callback_data: string }>>,
+    parseMode: 'Markdown' | 'HTML' = 'HTML',
+  ): Promise<boolean> {
+    const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/edit`;
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post<NotificationResponse>(
+          targetUrl,
+          {
+            chatId,
+            messageId,
+            message,
+            parseMode,
+            buttons,
+          },
+          { headers: this.getHeaders() },
+        ),
+      );
+
+      if (!response.data.success) {
+        this.logger.warn(`Edit message failed: ${response.data.error}`);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      const errorMsg = this.getErrorMessage(error);
+      this.logger.error(`Failed to edit message: ${errorMsg}`);
+      return false;
+    }
+  }
+
+  /**
+   * Get the owner chat ID from telegram-adapter.
+   * Caches the result for subsequent calls.
+   */
+  private cachedOwnerChatId: number | null | undefined = undefined;
+
+  async getOwnerChatId(): Promise<number | null> {
+    if (this.cachedOwnerChatId !== undefined) {
+      return this.cachedOwnerChatId;
+    }
+
+    const status = await this.checkStatus();
+    this.cachedOwnerChatId = status.ownerChatId;
+    return this.cachedOwnerChatId;
   }
 
   /**
