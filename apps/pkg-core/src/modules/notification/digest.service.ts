@@ -258,38 +258,28 @@ export class DigestService {
 
   /**
    * Get buttons for digest notification.
-   * Single event: use UUID directly (fits in 64 bytes)
-   * Multiple events: store IDs in Redis and use short ID
+   * Always uses Redis short ID for unified callback_data format.
+   * Format: d_c:<shortId> (confirm), d_r:<shortId> (reject)
    */
   private async getDigestButtons(
     events: ExtractedEvent[],
   ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
-    if (events.length === 1) {
-      // Single event - UUID fits in callback_data (ev_c:UUID = ~41 chars)
-      return [
-        [
-          { text: 'Подтвердить', callback_data: `ev_c:${events[0].id}` },
-          { text: 'Игнорировать', callback_data: `ev_r:${events[0].id}` },
-        ],
-      ];
-    }
-
-    // Multiple events - store IDs in Redis and use short ID
     const eventIds = events.map((e) => e.id);
     const shortId = await this.digestActionStore.store(eventIds);
 
-    // d_c:d_<12hex> = ~18 chars (well under 64 byte limit)
+    const confirmText = events.length === 1 ? 'Подтвердить' : 'Подтвердить все';
+    const rejectText = events.length === 1 ? 'Игнорировать' : 'Игнорировать все';
+
     return [
       [
-        { text: 'Подтвердить все', callback_data: `d_c:${shortId}` },
-        { text: 'Игнорировать все', callback_data: `d_r:${shortId}` },
+        { text: confirmText, callback_data: `d_c:${shortId}` },
+        { text: rejectText, callback_data: `d_r:${shortId}` },
       ],
     ];
   }
 
   /**
-   * Get batch action buttons for daily digest.
-   * Always uses Redis storage for short IDs.
+   * Get batch action buttons for daily digest (vertical layout).
    */
   private async getBatchDigestButtons(
     events: ExtractedEvent[],
@@ -298,12 +288,8 @@ export class DigestService {
     const shortId = await this.digestActionStore.store(eventIds);
 
     return [
-      [
-        { text: 'Подтвердить все', callback_data: `d_c:${shortId}` },
-      ],
-      [
-        { text: 'Игнорировать все', callback_data: `d_r:${shortId}` },
-      ],
+      [{ text: 'Подтвердить все', callback_data: `d_c:${shortId}` }],
+      [{ text: 'Игнорировать все', callback_data: `d_r:${shortId}` }],
     ];
   }
 
