@@ -24,19 +24,19 @@
 #### B1.2 AgentController (Day 1)
 - [x] Controller создан
 - [x] DTOs с валидацией
-- [ ] Swagger документация
+- [x] Swagger документация
 
 #### B1.3 Recall Endpoint (Day 2-3)
 - [x] POST /agent/recall работает
 - [x] Итеративный поиск (видно tool calls в логах)
 - [x] Ответ содержит sources
-- [ ] Фильтрация по entityId
+- [x] Фильтрация по entityId
 - [x] Timeout обработка
 
 #### B1.4 Recall Tests (Day 3)
-- [ ] E2E тест: успешный поиск
-- [ ] E2E тест: maxTurns limit
-- [ ] E2E тест: пустой результат
+- [x] E2E тест: успешный поиск
+- [x] E2E тест: maxTurns limit
+- [x] E2E тест: пустой результат
 
 #### B1.5 Prepare Endpoint (Day 4-5)
 - [x] POST /agent/prepare/:entityId работает
@@ -105,13 +105,15 @@
 #### C2.4 Callback Handlers (Day 20-21)
 - [x] event_confirm handler
 - [x] event_reject handler
-- [ ] event_reschedule handler
-- [ ] event_remind handler
+- [x] event_reschedule handler
+- [x] event_remind handler
 
 #### C2.5 API Endpoints (Day 21)
 - [x] GET /extracted-events
 - [x] POST /:id/confirm
 - [x] POST /:id/reject
+- [x] POST /:id/remind
+- [x] POST /:id/reschedule
 
 ### Week 5: Scheduled Jobs
 
@@ -207,7 +209,7 @@
 
 ## Documentation
 
-- [ ] API Swagger docs
+- [x] API Swagger docs (available at /api/v1/docs)
 - [ ] User guide
 - [ ] Troubleshooting guide
 - [ ] Architecture diagram update
