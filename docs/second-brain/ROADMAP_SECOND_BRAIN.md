@@ -690,9 +690,9 @@ export class CreateExtractedEvents implements MigrationInterface {
 ```
 
 Acceptance Criteria:
-- [ ] Entity создана и экспортирована из @pkg/entities
-- [ ] Миграция применена без ошибок
-- [ ] CRUD операции работают
+- [x] Entity создана и экспортирована из @pkg/entities
+- [x] Миграция применена без ошибок
+- [x] CRUD операции работают
 
 #### День 13-15: Event Extraction Service
 
@@ -823,10 +823,10 @@ const EVENT_EXTRACTION_SCHEMA = {
 ```
 
 Acceptance Criteria:
-- [ ] Сервис извлекает события из сообщений
-- [ ] Confidence scoring работает
-- [ ] События сохраняются в БД
-- [ ] Batch processing работает
+- [x] Сервис извлекает события из сообщений
+- [x] Confidence scoring работает
+- [x] События сохраняются в БД
+- [x] Batch processing работает
 
 ### Неделя 4: Processing Pipeline и уведомления
 
