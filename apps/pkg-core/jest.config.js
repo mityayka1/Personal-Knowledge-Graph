@@ -11,5 +11,6 @@ module.exports = {
   moduleNameMapper: {
     '^@pkg/entities$': '<rootDir>/../../../packages/entities/src',
     '^@pkg/shared$': '<rootDir>/../../../packages/shared/src',
+    '^@anthropic-ai/claude-agent-sdk$': '<rootDir>/../__mocks__/@anthropic-ai/claude-agent-sdk.js',
   },
 };

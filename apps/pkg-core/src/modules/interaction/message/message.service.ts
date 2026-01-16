@@ -242,6 +242,7 @@ export class MessageService {
           entityId,
           messageId: result.saved.id,
           messageContent: dto.text,
+          isOutgoing: dto.is_outgoing,
         });
       } catch (error) {
         // Don't fail message creation if extraction scheduling fails
