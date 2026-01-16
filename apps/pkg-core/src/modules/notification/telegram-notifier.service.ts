@@ -80,15 +80,18 @@ export class TelegramNotifierService {
   }
 
   /**
-   * Send notification with inline buttons to owner
+   * Send notification with inline buttons to owner.
+   * Uses HTML parse mode by default.
    */
   async sendWithButtons(
     message: string,
     buttons: Array<Array<{ text: string; callback_data: string }>>,
+    parseMode: 'Markdown' | 'HTML' = 'HTML',
   ): Promise<boolean> {
     return this.send({
       message,
       buttons,
+      parseMode,
     });
   }
 

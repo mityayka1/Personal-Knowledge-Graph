@@ -88,8 +88,8 @@ export class EventCallbackHandler {
       const message = ctx.callbackQuery?.message;
       if (message && 'text' in message) {
         // Update message text and remove buttons
-        await ctx.editMessageText(`${message.text}\n\n_${resultText}_`, {
-          parse_mode: 'Markdown',
+        await ctx.editMessageText(`${message.text}\n\n<i>${resultText}</i>`, {
+          parse_mode: 'HTML',
         });
       }
     } catch (error) {

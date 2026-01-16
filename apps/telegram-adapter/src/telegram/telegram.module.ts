@@ -7,6 +7,7 @@ import { HistoryImportService } from './history-import.service';
 import { HistoryImportController } from './history-import.controller';
 import { ChatController } from './chat.controller';
 import { ApiModule } from '../api/api.module';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 @Module({
   imports: [ApiModule],
@@ -17,6 +18,7 @@ import { ApiModule } from '../api/api.module';
     AgentHandlerService,
     SessionService,
     HistoryImportService,
+    ApiKeyGuard,
   ],
   exports: [TelegramService],
 })

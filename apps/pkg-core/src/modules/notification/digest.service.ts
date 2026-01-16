@@ -66,7 +66,7 @@ export class DigestService {
         pendingFollowups,
       });
 
-      await this.telegramNotifier.send({ message });
+      await this.telegramNotifier.send({ message, parseMode: 'HTML' });
       this.logger.log('Morning brief sent successfully');
     } catch (error) {
       this.logger.error('Failed to send morning brief:', error);
@@ -110,7 +110,8 @@ export class DigestService {
     if (allEvents.length === 0) {
       // Send a "nothing pending" message
       await this.telegramNotifier.send({
-        message: '*Дайджест за день*\n\nНет новых событий для обработки.',
+        message: '<b>Дайджест за день</b>\n\nНет новых событий для обработки.',
+        parseMode: 'HTML',
       });
       return;
     }
@@ -170,11 +171,11 @@ export class DigestService {
   }
 
   private formatMorningBrief(data: MorningBriefData): string {
-    const parts: string[] = ['*Доброе утро! Вот твой день:*'];
+    const parts: string[] = ['<b>Доброе утро! Вот твой день:</b>'];
 
     if (data.meetings.length > 0) {
       parts.push('');
-      parts.push('*Встречи:*');
+      parts.push('<b>Встречи:</b>');
       data.meetings.forEach((m) => {
         const time = m.eventDate
           ? m.eventDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -186,7 +187,7 @@ export class DigestService {
 
     if (data.deadlines.length > 0) {
       parts.push('');
-      parts.push('*Дедлайны:*');
+      parts.push('<b>Дедлайны:</b>');
       data.deadlines.forEach((d) => {
         parts.push(`• ${d.title}`);
       });
@@ -194,7 +195,7 @@ export class DigestService {
 
     if (data.birthdays.length > 0) {
       parts.push('');
-      parts.push('*Дни рождения:*');
+      parts.push('<b>Дни рождения:</b>');
       data.birthdays.forEach((b) => {
         parts.push(`• ${b.name}`);
       });
@@ -202,7 +203,7 @@ export class DigestService {
 
     if (data.overdueCommitments.length > 0) {
       parts.push('');
-      parts.push('*Просроченные обещания:*');
+      parts.push('<b>Просроченные обещания:</b>');
       data.overdueCommitments.forEach((c) => {
         const daysOverdue = this.getDaysOverdue(c.eventDate);
         parts.push(`• ${c.title} (${daysOverdue} дн.)`);
@@ -211,7 +212,7 @@ export class DigestService {
 
     if (data.pendingFollowups.length > 0) {
       parts.push('');
-      parts.push('*Ждёшь ответа:*');
+      parts.push('<b>Ждёшь ответа:</b>');
       data.pendingFollowups.forEach((f) => {
         const name = f.entity?.name || 'Неизвестно';
         parts.push(`• ${f.title} от ${name}`);
@@ -219,14 +220,14 @@ export class DigestService {
     }
 
     if (parts.length === 1) {
-      return '*Доброе утро!*\n\nСегодня ничего запланированного. Хорошего дня!';
+      return '<b>Доброе утро!</b>\n\nСегодня ничего запланированного. Хорошего дня!';
     }
 
     return parts.join('\n');
   }
 
   private formatHourlyDigest(events: ExtractedEvent[]): string {
-    const lines: string[] = ['*Новые события:*', ''];
+    const lines: string[] = ['<b>Новые события:</b>', ''];
 
     events.forEach((event, index) => {
       lines.push(`${index + 1}. ${this.getEventEmoji(event.eventType)} ${this.getEventSummary(event)}`);
@@ -236,7 +237,7 @@ export class DigestService {
   }
 
   private formatDailyDigest(events: ExtractedEvent[]): string {
-    const lines: string[] = ['*Дайджест за день*', ''];
+    const lines: string[] = ['<b>Дайджест за день</b>', ''];
 
     // Group by type
     const grouped = this.groupEventsByType(events);
@@ -244,14 +245,14 @@ export class DigestService {
     for (const [type, typeEvents] of Object.entries(grouped)) {
       if (typeEvents.length === 0) continue;
 
-      lines.push(`*${this.getEventTypeLabel(type as ExtractedEventType)}:*`);
+      lines.push(`<b>${this.getEventTypeLabel(type as ExtractedEventType)}:</b>`);
       typeEvents.forEach((event) => {
         lines.push(`• ${this.getEventSummary(event)}`);
       });
       lines.push('');
     }
 
-    lines.push(`_Всего: ${events.length} событий_`);
+    lines.push(`<i>Всего: ${events.length} событий</i>`);
 
     return lines.join('\n');
   }
@@ -346,11 +347,28 @@ export class DigestService {
   private getEventSummary(event: ExtractedEvent): string {
     const data = event.extractedData as Record<string, unknown>;
 
-    if (data.topic) return String(data.topic);
-    if (data.what) return String(data.what);
-    if (data.value) return `${data.factType}: ${data.value}`;
+    let text: string;
+    if (data.topic) {
+      text = String(data.topic);
+    } else if (data.what) {
+      text = String(data.what);
+    } else if (data.value) {
+      text = `${data.factType}: ${data.value}`;
+    } else {
+      text = 'Событие без описания';
+    }
 
-    return 'Событие без описания';
+    return this.escapeHtml(text);
+  }
+
+  /**
+   * Escape HTML special characters to prevent parse errors.
+   */
+  private escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   private getDaysOverdue(eventDate: Date | null): number {

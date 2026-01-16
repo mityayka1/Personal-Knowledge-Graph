@@ -1,6 +1,7 @@
-import { Controller, Post, Get, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, HttpException, HttpStatus, UseGuards } from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { HistoryImportService, ImportProgress } from './history-import.service';
+import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
 interface StartImportDto {
   /**
@@ -24,6 +25,7 @@ interface ReimportChatDto {
 }
 
 @Controller('import')
+@UseGuards(ApiKeyGuard)
 export class HistoryImportController {
   constructor(
     private telegramService: TelegramService,

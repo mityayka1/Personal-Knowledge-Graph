@@ -58,7 +58,7 @@ export class NotificationService {
    */
   async notifyAboutEvent(event: ExtractedEvent): Promise<boolean> {
     const message = this.formatEventNotification(event);
-    const buttons = this.getEventButtons(event);
+    const buttons = await this.getEventButtons(event);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
 
@@ -112,18 +112,22 @@ export class NotificationService {
 
   /**
    * Get pending events for digest by priority.
+   * Loads all pending events to ensure correct priority filtering.
    */
   async getPendingEventsForDigest(
     priority: EventPriority,
     limit = 20,
   ): Promise<ExtractedEvent[]> {
+    // Load all pending events without notification (up to reasonable max)
+    // This ensures we find events of requested priority even if
+    // there are many lower-priority events created earlier
     const all = await this.extractedEventRepo.find({
       where: {
         status: ExtractedEventStatus.PENDING,
         notificationSentAt: IsNull(),
       },
       order: { createdAt: 'ASC' },
-      take: limit * 3, // Get more to filter by priority
+      take: 200, // Reasonable max to scan
     });
 
     // Get settings once for batch filtering
@@ -234,7 +238,7 @@ export class NotificationService {
     digestType: 'hourly' | 'daily',
   ): string {
     const header =
-      digestType === 'hourly' ? '*Новые события:*' : '*Дайджест за день*';
+      digestType === 'hourly' ? '<b>Новые события:</b>' : '<b>Дайджест за день</b>';
     const lines: string[] = [header, ''];
 
     events.forEach((event, index) => {
@@ -245,7 +249,7 @@ export class NotificationService {
 
     if (digestType === 'daily') {
       lines.push('');
-      lines.push(`_Всего: ${events.length} событий_`);
+      lines.push(`<i>Всего: ${events.length} событий</i>`);
     }
 
     return lines.join('\n');
@@ -272,40 +276,48 @@ export class NotificationService {
   private getEventSummary(event: ExtractedEvent): string {
     const data = event.extractedData as Record<string, unknown>;
 
-    if (data.topic) return String(data.topic);
-    if (data.what) return String(data.what);
-    if (data.value) return `${data.factType}: ${data.value}`;
+    let text: string;
+    if (data.topic) {
+      text = String(data.topic);
+    } else if (data.what) {
+      text = String(data.what);
+    } else if (data.value) {
+      text = `${data.factType}: ${data.value}`;
+    } else {
+      text = 'Событие без описания';
+    }
 
-    return 'Событие без описания';
+    return this.escapeHtml(text);
+  }
+
+  /**
+   * Escape HTML special characters to prevent parse errors.
+   */
+  private escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   /**
    * Get buttons for digest notification.
-   * Single event: use UUID directly (fits in 64 bytes).
-   * Multiple events: store IDs in Redis and use short ID.
+   * Always uses Redis short ID for unified callback_data format.
+   * Format: d_c:<shortId> (confirm), d_r:<shortId> (reject)
    */
   private async getDigestButtons(
     events: ExtractedEvent[],
   ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
-    if (events.length === 1) {
-      // Single event - UUID fits in callback_data (ev_c:UUID = ~41 chars)
-      return [
-        [
-          { text: 'Подтвердить', callback_data: `ev_c:${events[0].id}` },
-          { text: 'Игнорировать', callback_data: `ev_r:${events[0].id}` },
-        ],
-      ];
-    }
-
-    // Multiple events - store IDs in Redis and use short ID
     const eventIds = events.map((e) => e.id);
     const shortId = await this.digestActionStore.store(eventIds);
 
-    // d_c:d_<12hex> = ~18 chars (well under 64 byte limit)
+    const confirmText = events.length === 1 ? 'Подтвердить' : 'Подтвердить все';
+    const rejectText = events.length === 1 ? 'Игнорировать' : 'Игнорировать все';
+
     return [
       [
-        { text: 'Подтвердить все', callback_data: `d_c:${shortId}` },
-        { text: 'Игнорировать все', callback_data: `d_r:${shortId}` },
+        { text: confirmText, callback_data: `d_c:${shortId}` },
+        { text: rejectText, callback_data: `d_r:${shortId}` },
       ],
     ];
   }
@@ -363,83 +375,72 @@ export class NotificationService {
    * Format event notification message
    */
   private formatEventNotification(event: ExtractedEvent): string {
+    const esc = (text: string | undefined | null): string =>
+      text ? this.escapeHtml(text) : '';
+
     switch (event.eventType) {
       case ExtractedEventType.MEETING: {
         const data = event.extractedData as MeetingData;
         return (
-          `*Договорились о встрече:*\n` +
-          `${data.topic || 'Созвон'}\n` +
-          `${data.dateText || data.datetime || 'Дата не указана'}`
+          `<b>Договорились о встрече:</b>\n` +
+          `${esc(data.topic) || 'Созвон'}\n` +
+          `${esc(data.dateText) || esc(data.datetime) || 'Дата не указана'}`
         );
       }
 
       case ExtractedEventType.PROMISE_BY_ME: {
         const data = event.extractedData as PromiseData;
         return (
-          `*Ты обещал:*\n` +
-          `${data.what}\n` +
-          `${data.deadlineText ? `${data.deadlineText}` : ''}`
+          `<b>Ты обещал:</b>\n` +
+          `${esc(data.what)}\n` +
+          `${data.deadlineText ? esc(data.deadlineText) : ''}`
         );
       }
 
       case ExtractedEventType.PROMISE_BY_THEM: {
         const data = event.extractedData as PromiseData;
         return (
-          `*Тебе обещали:*\n` +
-          `${data.what}\n` +
-          `${data.deadlineText ? `${data.deadlineText}` : ''}`
+          `<b>Тебе обещали:</b>\n` +
+          `${esc(data.what)}\n` +
+          `${data.deadlineText ? esc(data.deadlineText) : ''}`
         );
       }
 
       case ExtractedEventType.TASK: {
         const data = event.extractedData as TaskData;
-        return `*Тебя просят:*\n${data.what}`;
+        return `<b>Тебя просят:</b>\n${esc(data.what)}`;
       }
 
       case ExtractedEventType.FACT: {
         const data = event.extractedData as FactData;
-        return `*Новый факт:*\n${data.factType}: ${data.value}`;
+        return `<b>Новый факт:</b>\n${esc(data.factType)}: ${esc(data.value)}`;
       }
 
       case ExtractedEventType.CANCELLATION: {
         const data = event.extractedData as CancellationData;
-        return `*Отмена/перенос:*\n${data.what}`;
+        return `<b>Отмена/перенос:</b>\n${esc(data.what)}`;
       }
 
       default:
-        return `*Событие:*\n${JSON.stringify(event.extractedData)}`;
+        return `<b>Событие:</b>\n${this.escapeHtml(JSON.stringify(event.extractedData))}`;
     }
   }
 
   /**
-   * Get inline keyboard buttons for event actions
+   * Get inline keyboard buttons for single event actions.
+   * Uses unified callback_data format with Redis short ID.
+   * Format: d_c:<shortId> (confirm), d_r:<shortId> (reject)
    */
-  private getEventButtons(
+  private async getEventButtons(
     event: ExtractedEvent,
-  ): Array<Array<{ text: string; callback_data: string }>> {
-    const baseButtons = [
-      { text: 'Подтвердить', callback_data: `event_confirm:${event.id}` },
-      { text: 'Игнорировать', callback_data: `event_reject:${event.id}` },
+  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
+    const shortId = await this.digestActionStore.store([event.id]);
+
+    return [
+      [
+        { text: 'Подтвердить', callback_data: `d_c:${shortId}` },
+        { text: 'Игнорировать', callback_data: `d_r:${shortId}` },
+      ],
     ];
-
-    // Add type-specific buttons
-    if (event.eventType === ExtractedEventType.MEETING) {
-      return [
-        baseButtons,
-        [{ text: 'Изменить время', callback_data: `event_reschedule:${event.id}` }],
-      ];
-    }
-
-    if (
-      event.eventType === ExtractedEventType.PROMISE_BY_ME ||
-      event.eventType === ExtractedEventType.TASK
-    ) {
-      return [
-        baseButtons,
-        [{ text: 'Напомнить позже', callback_data: `event_remind:${event.id}` }],
-      ];
-    }
-
-    return [baseButtons];
   }
 }

@@ -1,5 +1,6 @@
-import { Controller, Post, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Query, Logger } from '@nestjs/common';
 import { NotificationSchedulerService } from './notification-scheduler.service';
+import { NotificationService } from './notification.service';
 
 /**
  * Controller for manually triggering notification jobs.
@@ -9,7 +10,10 @@ import { NotificationSchedulerService } from './notification-scheduler.service';
 export class NotificationTriggerController {
   private readonly logger = new Logger(NotificationTriggerController.name);
 
-  constructor(private schedulerService: NotificationSchedulerService) {}
+  constructor(
+    private schedulerService: NotificationSchedulerService,
+    private notificationService: NotificationService,
+  ) {}
 
   /**
    * Trigger high-priority event processing
@@ -53,5 +57,31 @@ export class NotificationTriggerController {
     this.logger.log('Manual trigger: morning brief');
     await this.schedulerService.sendMorningBrief();
     return { success: true, message: 'Morning brief sent' };
+  }
+
+  /**
+   * Debug: get pending events for digest
+   * GET /notifications/trigger/debug-pending?priority=medium&limit=10
+   */
+  @Get('debug-pending')
+  async debugPending(
+    @Query('priority') priority: 'high' | 'medium' | 'low' = 'medium',
+    @Query('limit') limit = '10',
+  ): Promise<{ count: number; events: unknown[] }> {
+    const events = await this.notificationService.getPendingEventsForDigest(
+      priority,
+      parseInt(limit, 10),
+    );
+    return {
+      count: events.length,
+      events: events.map((e) => ({
+        id: e.id,
+        eventType: e.eventType,
+        confidence: e.confidence,
+        status: e.status,
+        notificationSentAt: e.notificationSentAt,
+        extractedData: e.extractedData,
+      })),
+    };
   }
 }
