@@ -295,4 +295,22 @@ export class PkgCoreApiService {
       return response.data;
     });
   }
+
+  /**
+   * Get event IDs from Redis by digest short ID.
+   * Used for batch actions on digest notifications.
+   */
+  async getDigestEventIds(shortId: string): Promise<string[] | null> {
+    try {
+      const response = await this.client.get<{ eventIds: string[] | null }>(
+        `/digest-actions/${shortId}`,
+      );
+      return response.data.eventIds;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null; // Short ID not found or expired
+      }
+      throw error;
+    }
+  }
 }

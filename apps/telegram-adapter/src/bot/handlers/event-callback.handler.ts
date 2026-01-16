@@ -4,8 +4,11 @@ import { PkgCoreApiService } from '../../api/pkg-core-api.service';
 
 /**
  * Handles callback queries from extracted event notification buttons
- * Callback data format: "event_<action>:<eventId>"
- * Actions: confirm, reject, reschedule, remind
+ *
+ * Callback data formats:
+ * - Single event: "ev_c:<uuid>" (confirm), "ev_r:<uuid>" (reject)
+ * - Batch digest: "d_c:<shortId>" (confirm all), "d_r:<shortId>" (reject all)
+ * - Legacy: "event_<action>:<eventId>", "digest_<action>:<ids>"
  */
 @Injectable()
 export class EventCallbackHandler {
@@ -17,7 +20,12 @@ export class EventCallbackHandler {
    * Check if this handler can process the callback
    */
   canHandle(callbackData: string): boolean {
-    return callbackData.startsWith('event_') || callbackData.startsWith('digest_');
+    return (
+      callbackData.startsWith('ev_') ||
+      callbackData.startsWith('d_') ||
+      callbackData.startsWith('event_') ||
+      callbackData.startsWith('digest_')
+    );
   }
 
   /**
@@ -31,12 +39,27 @@ export class EventCallbackHandler {
 
     const callbackData = callbackQuery.data;
 
-    // Handle digest batch actions
-    if (callbackData.startsWith('digest_')) {
-      return this.handleDigestAction(ctx, callbackData);
+    // Handle new short format: ev_c, ev_r (single event)
+    if (callbackData.startsWith('ev_c:')) {
+      const eventId = callbackData.substring(5); // Remove 'ev_c:'
+      return this.handleConfirm(ctx, eventId);
+    }
+    if (callbackData.startsWith('ev_r:')) {
+      const eventId = callbackData.substring(5); // Remove 'ev_r:'
+      return this.handleReject(ctx, eventId);
     }
 
-    // Handle single event actions
+    // Handle batch digest actions: d_c, d_r (uses Redis short ID)
+    if (callbackData.startsWith('d_c:') || callbackData.startsWith('d_r:')) {
+      return this.handleBatchDigestAction(ctx, callbackData);
+    }
+
+    // Legacy: Handle digest batch actions (digest_confirm_all:id1,id2,...)
+    if (callbackData.startsWith('digest_')) {
+      return this.handleLegacyDigestAction(ctx, callbackData);
+    }
+
+    // Legacy: Handle single event actions (event_confirm:id)
     const [actionPart, eventId] = callbackData.split(':');
     const action = actionPart.replace('event_', '');
 
@@ -66,9 +89,49 @@ export class EventCallbackHandler {
   }
 
   /**
-   * Handle digest batch actions (confirm_all, reject_all)
+   * Handle batch digest actions with Redis short ID.
+   * Format: d_c:<shortId> (confirm all), d_r:<shortId> (reject all)
    */
-  private async handleDigestAction(ctx: Context, callbackData: string): Promise<void> {
+  private async handleBatchDigestAction(ctx: Context, callbackData: string): Promise<void> {
+    const isConfirm = callbackData.startsWith('d_c:');
+    const shortId = callbackData.substring(4); // Remove 'd_c:' or 'd_r:'
+
+    this.logger.log(`Batch digest action: ${isConfirm ? 'confirm' : 'reject'}, shortId=${shortId}`);
+
+    try {
+      // Get event IDs from Redis via pkg-core API
+      const eventIds = await this.pkgCoreApi.getDigestEventIds(shortId);
+
+      if (!eventIds || eventIds.length === 0) {
+        await ctx.answerCbQuery('Действие истекло. Повторите запрос.');
+        return;
+      }
+
+      let successCount = 0;
+      for (const eventId of eventIds) {
+        try {
+          const result = isConfirm
+            ? await this.pkgCoreApi.confirmExtractedEvent(eventId)
+            : await this.pkgCoreApi.rejectExtractedEvent(eventId);
+          if (result.success) successCount++;
+        } catch (error) {
+          this.logger.warn(`Failed to ${isConfirm ? 'confirm' : 'reject'} event ${eventId}:`, error);
+        }
+      }
+
+      const actionText = isConfirm ? 'Подтверждено' : 'Отклонено';
+      await ctx.answerCbQuery(`${actionText} ${successCount}/${eventIds.length}`);
+      await this.updateMessageWithResult(ctx, `${actionText} ${successCount} событий`);
+    } catch (error) {
+      this.logger.error(`Failed to process batch digest action:`, error);
+      await ctx.answerCbQuery('Ошибка сервера');
+    }
+  }
+
+  /**
+   * Legacy: Handle digest batch actions (digest_confirm_all:id1,id2,...)
+   */
+  private async handleLegacyDigestAction(ctx: Context, callbackData: string): Promise<void> {
     const [action, idsString] = callbackData.split(':');
     const ids = idsString?.split(',').filter(Boolean) || [];
 
@@ -77,7 +140,7 @@ export class EventCallbackHandler {
       return;
     }
 
-    this.logger.log(`Digest action: ${action} for ${ids.length} events`);
+    this.logger.log(`Legacy digest action: ${action} for ${ids.length} events`);
 
     if (action === 'digest_confirm_all') {
       let successCount = 0;

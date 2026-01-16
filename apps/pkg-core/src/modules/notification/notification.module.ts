@@ -10,6 +10,8 @@ import { DigestService } from './digest.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { NotificationSchedulerService } from './notification-scheduler.service';
 import { NotificationProcessor } from './notification.processor';
+import { NotificationTriggerController } from './notification-trigger.controller';
+import { DigestActionController } from './digest-action.controller';
 import { SettingsModule } from '../settings/settings.module';
 
 @Module({
@@ -28,6 +30,7 @@ import { SettingsModule } from '../settings/settings.module';
     }),
     SettingsModule,
   ],
+  controllers: [NotificationTriggerController, DigestActionController],
   providers: [
     TelegramNotifierService,
     NotificationService,

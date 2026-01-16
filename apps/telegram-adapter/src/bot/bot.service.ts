@@ -98,9 +98,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     this.setupCallbackHandlers();
     this.setupErrorHandling();
 
-    // Launch bot in polling mode
-    await this.bot.launch();
-    this.logger.log('Telegraf bot started successfully');
+    // Launch bot in polling mode (don't await - it blocks forever)
+    this.bot.launch().then(() => {
+      this.logger.log('Telegraf bot started successfully');
+    }).catch((error) => {
+      this.logger.error('Failed to launch Telegraf bot', error);
+    });
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -50,7 +50,7 @@ export class TelegramNotifierService {
    * If chatId is not provided, sends to the owner.
    */
   async send(options: SendNotificationOptions): Promise<boolean> {
-    const targetUrl = `${this.telegramAdapterUrl}/notifications/send`;
+    const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/send`;
 
     try {
       const response = await firstValueFrom(
@@ -96,7 +96,7 @@ export class TelegramNotifierService {
    * Check if notification service is available.
    */
   async checkStatus(): Promise<{ ready: boolean; ownerChatId: number | null }> {
-    const targetUrl = `${this.telegramAdapterUrl}/notifications/status`;
+    const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/status`;
 
     try {
       const response = await firstValueFrom(
