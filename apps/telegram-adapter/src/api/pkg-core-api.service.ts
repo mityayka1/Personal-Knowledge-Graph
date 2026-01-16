@@ -111,6 +111,16 @@ export interface EntitiesResponse {
   total: number;
 }
 
+// ============================================
+// Extracted Events API Types
+// ============================================
+
+export interface ExtractedEventActionResponse {
+  success: boolean;
+  createdEntityId?: string;
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -256,5 +266,33 @@ export class PkgCoreApiService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // ============================================
+  // Extracted Events API Methods
+  // ============================================
+
+  /**
+   * Confirm an extracted event and create corresponding entity/reminder
+   */
+  async confirmExtractedEvent(eventId: string): Promise<ExtractedEventActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractedEventActionResponse>(
+        `/extracted-events/${eventId}/confirm`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject an extracted event (mark as ignored)
+   */
+  async rejectExtractedEvent(eventId: string): Promise<ExtractedEventActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractedEventActionResponse>(
+        `/extracted-events/${eventId}/reject`,
+      );
+      return response.data;
+    });
   }
 }

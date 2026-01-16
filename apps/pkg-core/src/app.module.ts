@@ -29,6 +29,7 @@ import { ClaudeAgentModule } from './modules/claude-agent/claude-agent.module';
 import { SummarizationModule } from './modules/summarization/summarization.module';
 import { MediaModule } from './modules/media/media.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { NotificationModule } from './modules/notification/notification.module';
 
 @Module({
   imports: [
@@ -104,6 +105,7 @@ import { AuthModule } from './modules/auth/auth.module';
     ClaudeAgentModule,
     SummarizationModule,
     MediaModule,
+    NotificationModule,
   ],
   providers: [
     // Global Combined Auth Guard - supports JWT and API Key

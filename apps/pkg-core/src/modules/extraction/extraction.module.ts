@@ -7,9 +7,11 @@ import { FactDeduplicationService } from './fact-deduplication.service';
 import { EventExtractionService } from './event-extraction.service';
 import { SecondBrainExtractionService } from './second-brain-extraction.service';
 import { ExtractionController } from './extraction.controller';
+import { ExtractedEventController } from './extracted-event.controller';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
+import { EntityEventModule } from '../entity-event/entity-event.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 
 @Module({
@@ -18,9 +20,10 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     ResolutionModule,
     forwardRef(() => InteractionModule),
     forwardRef(() => EntityModule),
+    EntityEventModule,
     ClaudeAgentModule,
   ],
-  controllers: [ExtractionController],
+  controllers: [ExtractionController, ExtractedEventController],
   providers: [
     FactExtractionService,
     RelevanceFilterService,
