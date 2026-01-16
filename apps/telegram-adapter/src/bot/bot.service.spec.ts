@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { BotService } from './bot.service';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
+import { EventCallbackHandler } from './handlers/event-callback.handler';
+import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 
 // Mock Telegraf
 jest.mock('telegraf', () => ({
@@ -11,6 +13,7 @@ jest.mock('telegraf', () => ({
     start: jest.fn(),
     help: jest.fn(),
     command: jest.fn(),
+    on: jest.fn(),
     catch: jest.fn(),
     launch: jest.fn().mockResolvedValue(undefined),
     stop: jest.fn(),
@@ -26,6 +29,8 @@ describe('BotService', () => {
 
   const mockRecallHandler = { handle: jest.fn() };
   const mockPrepareHandler = { handle: jest.fn() };
+  const mockEventCallbackHandler = { canHandle: jest.fn(), handle: jest.fn() };
+  const mockCarouselCallbackHandler = { canHandle: jest.fn(), handle: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -44,6 +49,14 @@ describe('BotService', () => {
         {
           provide: PrepareHandler,
           useValue: mockPrepareHandler,
+        },
+        {
+          provide: EventCallbackHandler,
+          useValue: mockEventCallbackHandler,
+        },
+        {
+          provide: CarouselCallbackHandler,
+          useValue: mockCarouselCallbackHandler,
         },
       ],
     }).compile();

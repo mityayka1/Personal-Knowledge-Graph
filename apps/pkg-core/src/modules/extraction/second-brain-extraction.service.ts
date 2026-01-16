@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThanOrEqual } from 'typeorm';
+import { EnrichmentQueueService } from './enrichment-queue.service';
 import {
   ExtractedEvent,
   ExtractedEventType,
@@ -23,6 +24,8 @@ interface RawExtractedEvent {
   confidence: number;
   data: Record<string, unknown>;
   sourceQuote?: string;
+  /** True if event is abstract and needs context enrichment */
+  needsEnrichment?: boolean;
 }
 
 /**
@@ -58,6 +61,12 @@ const SECOND_BRAIN_EXTRACTION_SCHEMA = {
             description: 'Event-specific data (see type descriptions)',
             additionalProperties: true,
           },
+          needsEnrichment: {
+            type: 'boolean',
+            description:
+              'True if the event is abstract/vague and needs context enrichment from history. ' +
+              'Examples: "приступлю к задаче" (which task?), "созвонимся по нашему вопросу" (what question?)',
+          },
         },
         required: ['type', 'confidence', 'data'],
       },
@@ -92,6 +101,8 @@ export class SecondBrainExtractionService {
     private extractedEventRepo: Repository<ExtractedEvent>,
     private claudeAgentService: ClaudeAgentService,
     private settingsService: SettingsService,
+    @Optional()
+    private enrichmentQueueService: EnrichmentQueueService | null,
   ) {}
 
   /**
@@ -147,6 +158,15 @@ export class SecondBrainExtractionService {
         const extractedData = this.normalizeEventData(eventType, rawEvent.data);
 
         try {
+          // Prepare enrichment data if event needs context enrichment
+          const enrichmentData = rawEvent.needsEnrichment
+            ? {
+                needsEnrichment: true,
+                enrichmentSuccess: false,
+                enrichedAt: undefined,
+              }
+            : null;
+
           const event = this.extractedEventRepo.create({
             sourceMessageId: messageId,
             sourceInteractionId: interactionId || null,
@@ -156,10 +176,23 @@ export class SecondBrainExtractionService {
             sourceQuote: rawEvent.sourceQuote?.substring(0, settings.maxQuoteLength) || null,
             confidence: Math.min(1, Math.max(0, rawEvent.confidence)),
             status: ExtractedEventStatus.PENDING,
+            // New context-aware fields
+            needsContext: false, // Will be set to true after enrichment if context not found
+            enrichmentData,
           });
 
           const saved = await this.extractedEventRepo.save(event);
           savedEvents.push(saved);
+
+          // Queue for enrichment if event needs context
+          if (rawEvent.needsEnrichment && this.enrichmentQueueService) {
+            try {
+              await this.enrichmentQueueService.queueForEnrichment(saved.id);
+              this.logger.debug(`Queued event ${saved.id} for context enrichment`);
+            } catch (queueError) {
+              this.logger.warn(`Failed to queue event for enrichment: ${queueError}`);
+            }
+          }
         } catch (saveError) {
           const msg = saveError instanceof Error ? saveError.message : String(saveError);
           this.logger.warn(`Failed to save extracted event: ${msg}`);
@@ -321,6 +354,49 @@ export class SecondBrainExtractionService {
   }
 
   /**
+   * Get events that need context enrichment
+   * These are events marked with needsEnrichment=true in enrichmentData
+   * but haven't been enriched yet (enrichmentData.enrichedAt is null)
+   */
+  async getEventsNeedingEnrichment(limit = 10): Promise<ExtractedEvent[]> {
+    return this.extractedEventRepo
+      .createQueryBuilder('event')
+      .where('event.status = :status', { status: ExtractedEventStatus.PENDING })
+      .andWhere("event.enrichment_data->>'needsEnrichment' = 'true'")
+      .andWhere("event.enrichment_data->>'enrichedAt' IS NULL")
+      .orderBy('event.createdAt', 'ASC')
+      .take(limit)
+      .getMany();
+  }
+
+  /**
+   * Update enrichment data for an event
+   */
+  async updateEnrichmentData(
+    eventId: string,
+    enrichmentData: Record<string, unknown>,
+  ): Promise<void> {
+    await this.extractedEventRepo.update(eventId, { enrichmentData });
+  }
+
+  /**
+   * Mark event as needing context (enrichment failed to find context)
+   */
+  async markNeedsContext(eventId: string): Promise<void> {
+    await this.extractedEventRepo.update(eventId, { needsContext: true });
+  }
+
+  /**
+   * Link event to another event (enrichment found related event)
+   */
+  async linkToEvent(eventId: string, linkedEventId: string): Promise<void> {
+    await this.extractedEventRepo.update(eventId, {
+      linkedEventId,
+      needsContext: false,
+    });
+  }
+
+  /**
    * Map string type to enum
    */
   private mapEventType(type: string): ExtractedEventType | null {
@@ -433,6 +509,22 @@ export class SecondBrainExtractionService {
 - confidence 0.0-1.0 (высокий если явно указано, низкий если домыслы)
 - sourceQuote — оригинальный фрагмент текста
 - Не извлекай события из сообщений-шуток или гипотетических ситуаций
-- Различай "promise_by_me" (я обещаю) и "promise_by_them" (мне обещают)`;
+- Различай "promise_by_me" (я обещаю) и "promise_by_them" (мне обещают)
+
+АБСТРАКТНЫЕ СОБЫТИЯ (needsEnrichment = true):
+Устанавливай needsEnrichment=true если событие ссылается на что-то без конкретики:
+
+Примеры АБСТРАКТНЫХ событий (needsEnrichment: true):
+- "приступлю к задаче" → какая задача? нужен контекст
+- "созвонимся по нашему вопросу" → какой вопрос?
+- "подготовлю документы" → какие документы?
+- "сделаю как обсуждали" → что обсуждали?
+- "напомни мне об этом" → о чём?
+
+Примеры КОНКРЕТНЫХ событий (needsEnrichment: false или не указывать):
+- "приступлю к отчёту Q4" → задача ясна
+- "созвонимся по проекту Alpha" → тема указана
+- "у меня ДР 15 марта" → факт конкретный
+- "отправлю презентацию до вечера" → что и когда понятно`;
   }
 }

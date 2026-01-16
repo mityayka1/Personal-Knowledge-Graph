@@ -9,6 +9,7 @@ export type ClaudeTaskType =
   | 'context_synthesis'
   | 'fact_extraction'
   | 'event_extraction'
+  | 'context_enrichment'
   | 'recall'
   | 'meeting_prep'
   | 'daily_brief'

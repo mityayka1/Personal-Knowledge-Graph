@@ -12,6 +12,7 @@ export type ClaudeTaskType =
   | 'context_synthesis'
   | 'fact_extraction'
   | 'event_extraction'
+  | 'context_enrichment'
   | 'recall'
   | 'meeting_prep'
   | 'daily_brief'
@@ -19,7 +20,7 @@ export type ClaudeTaskType =
 
 export type ExecutionMode = 'oneshot' | 'agent';
 
-export type ReferenceType = 'interaction' | 'entity' | 'message' | null;
+export type ReferenceType = 'interaction' | 'entity' | 'message' | 'extracted_event' | null;
 
 @Entity('claude_agent_runs')
 export class ClaudeAgentRun {

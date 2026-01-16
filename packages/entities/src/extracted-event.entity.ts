@@ -112,6 +112,26 @@ export interface CancellationEventData {
 }
 
 /**
+ * Data structure for context enrichment results
+ */
+export interface EnrichmentData {
+  /** Keywords extracted from the abstract event */
+  keywords?: string[];
+  /** Message IDs that were found as potential context */
+  relatedMessageIds?: string[];
+  /** Event IDs that were considered as potential links */
+  candidateEventIds?: string[];
+  /** LLM synthesis of the context */
+  synthesis?: string;
+  /** Whether enrichment was successful */
+  enrichmentSuccess?: boolean;
+  /** Reason if enrichment failed */
+  enrichmentFailureReason?: string;
+  /** Timestamp when enrichment was performed */
+  enrichedAt?: string;
+}
+
+/**
  * Union type for all extracted event data
  */
 export type ExtractedEventData =
@@ -202,6 +222,35 @@ export class ExtractedEvent {
   /** When user responded to notification */
   @Column({ name: 'user_response_at', type: 'timestamp with time zone', nullable: true })
   userResponseAt: Date | null;
+
+  // ==================== Context Enrichment ====================
+
+  /**
+   * ID of a linked event (e.g., "prepare report" -> "start working on report")
+   * Used for context-aware extraction to connect follow-up actions with original tasks
+   */
+  @Column({ name: 'linked_event_id', type: 'uuid', nullable: true })
+  @Index()
+  linkedEventId: string | null;
+
+  @ManyToOne(() => ExtractedEvent, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'linked_event_id' })
+  linkedEvent: ExtractedEvent | null;
+
+  /**
+   * Flag indicating this event is abstract and needs user clarification
+   * Set to true when context enrichment couldn't find related events
+   * Example: "приступить к задаче" without clear context
+   */
+  @Column({ name: 'needs_context', type: 'boolean', default: false })
+  needsContext: boolean;
+
+  /**
+   * Data from context enrichment process
+   * Contains: keywords extracted, search results, synthesis, etc.
+   */
+  @Column({ name: 'enrichment_data', type: 'jsonb', nullable: true })
+  enrichmentData: EnrichmentData | null;
 
   // ==================== Timestamps ====================
 

@@ -1,10 +1,11 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Telegraf, Context } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
+import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 
 export interface SendNotificationOptions {
   chatId: number | string;
@@ -25,6 +26,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly recallHandler: RecallHandler,
     private readonly prepareHandler: PrepareHandler,
     private readonly eventCallbackHandler: EventCallbackHandler,
+    @Inject(forwardRef(() => CarouselCallbackHandler))
+    private readonly carouselCallbackHandler: CarouselCallbackHandler,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -170,7 +173,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const callbackData = callbackQuery.data;
 
       // Route to appropriate handler based on callback data prefix
-      if (this.eventCallbackHandler.canHandle(callbackData)) {
+      if (this.carouselCallbackHandler.canHandle(callbackData)) {
+        await this.carouselCallbackHandler.handle(ctx);
+      } else if (this.eventCallbackHandler.canHandle(callbackData)) {
         await this.eventCallbackHandler.handle(ctx);
       } else {
         this.logger.warn(`Unknown callback data: ${callbackData}`);
@@ -260,5 +265,85 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
    */
   isReady(): boolean {
     return this.bot !== null && this.ownerChatId !== null;
+  }
+
+  /**
+   * Send notification and return message ID (for carousel).
+   */
+  async sendNotificationWithId(
+    options: SendNotificationOptions,
+  ): Promise<{ success: boolean; messageId?: number }> {
+    if (!this.bot) {
+      this.logger.warn('Cannot send notification: bot not initialized');
+      return { success: false };
+    }
+
+    try {
+      const replyMarkup: InlineKeyboardMarkup | undefined = options.buttons
+        ? {
+            inline_keyboard: options.buttons.map((row) =>
+              row.map((btn) => ({
+                text: btn.text,
+                callback_data: btn.callback_data,
+              })),
+            ),
+          }
+        : undefined;
+
+      const result = await this.bot.telegram.sendMessage(options.chatId, options.message, {
+        parse_mode: options.parseMode || 'Markdown',
+        reply_markup: replyMarkup,
+      });
+
+      this.logger.log(`Notification sent to chat ${options.chatId}, messageId: ${result.message_id}`);
+      return { success: true, messageId: result.message_id };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to send notification to ${options.chatId}: ${errorMsg}`);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Edit an existing message (for carousel navigation).
+   */
+  async editMessage(
+    chatId: number | string,
+    messageId: number,
+    message: string,
+    options?: {
+      parseMode?: 'Markdown' | 'HTML';
+      buttons?: Array<Array<{ text: string; callback_data: string }>>;
+    },
+  ): Promise<boolean> {
+    if (!this.bot) {
+      this.logger.warn('Cannot edit message: bot not initialized');
+      return false;
+    }
+
+    try {
+      const replyMarkup: InlineKeyboardMarkup | undefined = options?.buttons
+        ? {
+            inline_keyboard: options.buttons.map((row) =>
+              row.map((btn) => ({
+                text: btn.text,
+                callback_data: btn.callback_data,
+              })),
+            ),
+          }
+        : undefined;
+
+      await this.bot.telegram.editMessageText(chatId, messageId, undefined, message, {
+        parse_mode: options?.parseMode || 'HTML',
+        reply_markup: replyMarkup,
+      });
+
+      this.logger.debug(`Message ${messageId} edited in chat ${chatId}`);
+      return true;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to edit message ${messageId}: ${errorMsg}`);
+      return false;
+    }
   }
 }
