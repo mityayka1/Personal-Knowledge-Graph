@@ -17,7 +17,7 @@ export class EventCallbackHandler {
    * Check if this handler can process the callback
    */
   canHandle(callbackData: string): boolean {
-    return callbackData.startsWith('event_');
+    return callbackData.startsWith('event_') || callbackData.startsWith('digest_');
   }
 
   /**
@@ -30,6 +30,13 @@ export class EventCallbackHandler {
     }
 
     const callbackData = callbackQuery.data;
+
+    // Handle digest batch actions
+    if (callbackData.startsWith('digest_')) {
+      return this.handleDigestAction(ctx, callbackData);
+    }
+
+    // Handle single event actions
     const [actionPart, eventId] = callbackData.split(':');
     const action = actionPart.replace('event_', '');
 
@@ -55,6 +62,49 @@ export class EventCallbackHandler {
         break;
       default:
         await ctx.answerCbQuery('Unknown action');
+    }
+  }
+
+  /**
+   * Handle digest batch actions (confirm_all, reject_all)
+   */
+  private async handleDigestAction(ctx: Context, callbackData: string): Promise<void> {
+    const [action, idsString] = callbackData.split(':');
+    const ids = idsString?.split(',').filter(Boolean) || [];
+
+    if (ids.length === 0) {
+      await ctx.answerCbQuery('No events to process');
+      return;
+    }
+
+    this.logger.log(`Digest action: ${action} for ${ids.length} events`);
+
+    if (action === 'digest_confirm_all') {
+      let successCount = 0;
+      for (const id of ids) {
+        try {
+          const result = await this.pkgCoreApi.confirmExtractedEvent(id);
+          if (result.success) successCount++;
+        } catch (error) {
+          this.logger.warn(`Failed to confirm event ${id}:`, error);
+        }
+      }
+      await ctx.answerCbQuery(`Подтверждено ${successCount}/${ids.length}`);
+      await this.updateMessageWithResult(ctx, `Подтверждено ${successCount} событий`);
+    } else if (action === 'digest_reject_all') {
+      let successCount = 0;
+      for (const id of ids) {
+        try {
+          const result = await this.pkgCoreApi.rejectExtractedEvent(id);
+          if (result.success) successCount++;
+        } catch (error) {
+          this.logger.warn(`Failed to reject event ${id}:`, error);
+        }
+      }
+      await ctx.answerCbQuery(`Отклонено ${successCount}/${ids.length}`);
+      await this.updateMessageWithResult(ctx, `Отклонено ${successCount} событий`);
+    } else {
+      await ctx.answerCbQuery('Unknown digest action');
     }
   }
 
