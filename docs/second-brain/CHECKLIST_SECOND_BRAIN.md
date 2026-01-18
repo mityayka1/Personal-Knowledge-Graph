@@ -1,4 +1,4 @@
-# PKG Second Brain — Implementation Checklist
+Cj# PKG Second Brain — Implementation Checklist
 
 > Краткий чеклист для отслеживания прогресса. Детали в [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md)
 
@@ -132,31 +132,33 @@
 
 ---
 
-## Phase C+: UX Improvements (Post-MVP)
+## Phase C+: UX Improvements ✅ COMPLETED
 
 > См. [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md#улучшения-phase-c-post-mvp)
 
-#### Issue #61: Carousel UX
-- [ ] Carousel state в Redis
-- [ ] editMessageText при навигации
-- [ ] Пропуск обработанных событий
-- [ ] Исправить дублирование уведомлений
+#### Issue #61: Carousel UX ✅ (PR #63)
+- [x] Carousel state в Redis (CarouselStateService)
+- [x] editMessageText при навигации
+- [x] Пропуск обработанных событий
+- [x] Исправить дублирование уведомлений
 
-#### Issue #62: Context-Aware Extraction
-- [ ] Поле `linkedEventId` в ExtractedEvent
-- [ ] Поле `needsContext` в ExtractedEvent
-- [ ] ContextEnrichmentService
-- [ ] Extraction prompt для абстрактных событий
-- [ ] Связывание событий (follow-up, reminder)
-- [ ] `tg://user?id=X` ссылки
-- [ ] Deep link на исходное сообщение
-- [ ] UX для событий с needsContext
+#### Issue #62: Context-Aware Extraction ✅ (PR #66)
+- [x] Поле `linkedEventId` в ExtractedEvent
+- [x] Поле `needsContext` в ExtractedEvent
+- [x] ContextEnrichmentService
+- [x] Extraction prompt для абстрактных событий
+- [x] Связывание событий (follow-up, reminder)
+- [x] `https://t.me/username` ссылки на контакты
+- [x] Deep link на исходное сообщение
+- [x] UX для событий с needsContext
 
 ---
 
 ## Phase A: Act Capabilities (Week 6-7)
 
-### Week 6: Action Tools
+> См. [PLAN_PHASE_A.md](./PLAN_PHASE_A.md) для детального плана
+
+### Week 6: Core Infrastructure
 
 #### A1.1 ActionToolsProvider (Day 25-26)
 - [ ] draft_message tool
@@ -174,17 +176,45 @@
 - [ ] Identifier lookup
 - [ ] Error handling
 
-### Week 7: Integration
+#### A1.4 Send-as-User Endpoint (Day 28)
+- [ ] POST /telegram/send-as-user в Telegram Adapter
+- [ ] GramJS sendMessage через юзербот
+- [ ] Логирование отправленных сообщений
 
-#### A1.4 Act Endpoint (Day 29)
+### Week 7: Integration & UX
+
+#### A2.1 Act Endpoint (Day 29)
 - [ ] POST /agent/act
 - [ ] Approval hook integration
 - [ ] Response formatting
 
-#### A1.5 Telegram Bot (Day 30)
-- [ ] /act command
-- [ ] Approval callbacks
-- [ ] Edit message flow
+#### A2.2 Approval Flow UI (Day 29)
+- [ ] Три кнопки: Отправить / Изменить / Отмена
+- [ ] Callback handlers: act_approve, act_edit, act_cancel
+
+#### A2.3 Edit Mode Selection (Day 30)
+- [ ] Кнопки: Задать / Как есть
+- [ ] "Задать" → AI генерирует по описанию
+- [ ] "Как есть" → отправка verbatim текста
+- [ ] Callback handlers: edit_describe, edit_verbatim
+- [ ] Conversation state в Redis
+
+#### A2.4 Proactive Action Buttons (Day 31)
+- [ ] Action buttons в Morning Brief
+- [ ] Кнопка [💬 Написать X] для задач
+- [ ] Кнопка [💬 Напомнить X] для follow-ups
+- [ ] Кнопка [📋 Подготовить brief] для встреч
+- [ ] Callback format: act_write:{entityId}:{eventId}
+
+#### A2.5 Follow-up Suggestion (Day 31)
+- [ ] Предложение после успешной отправки
+- [ ] Кнопки: Через 2 часа / Завтра / Не нужно
+- [ ] Автоматическое создание EntityEvent (FOLLOW_UP)
+
+#### A2.6 /act Command (Day 32)
+- [ ] /act команда в боте
+- [ ] Natural language action detection
+- [ ] Integration tests
 
 ---
 
