@@ -1393,7 +1393,7 @@ export class DigestService {
 - [x] Пропускать обработанные события при навигации
 - [x] Исправить дублирование уведомлений
 
-#### Issue #62: Context-Aware Extraction
+#### Issue #62: Context-Aware Extraction ✅ COMPLETED
 
 **Проблема:** Извлечённые события бесполезны без контекста. "приступить к задаче" — к КАКОЙ задаче?
 
@@ -1452,15 +1452,17 @@ needsContext: boolean;  // Требует уточнения от пользов
 - Показ цитаты из сообщения
 - Название чата и время
 
-**Tasks:**
-- [ ] Добавить поле `linkedEventId` в ExtractedEvent entity
-- [ ] Добавить поле `needsContext` в ExtractedEvent entity
-- [ ] Реализовать ContextEnrichmentService
-- [ ] Обновить extraction prompt — помечать абстрактные события
-- [ ] Реализовать связывание событий (follow-up, reminder)
-- [ ] Добавить `tg://user?id=X` ссылки для имён контактов
-- [ ] Добавить deep link на исходное сообщение
-- [ ] UX для событий с `needsContext=true`
+**Tasks:** ✅ COMPLETED (PR #64)
+- [x] Добавить поле `linkedEventId` в ExtractedEvent entity
+- [x] Добавить поле `needsContext` в ExtractedEvent entity
+- [x] Добавить поле `enrichmentData` (JSONB) для хранения результатов обогащения
+- [x] Реализовать ContextEnrichmentService — поиск контекста, синтез через LLM
+- [x] Обновить extraction prompt — помечать абстрактные события (needsEnrichment)
+- [x] Реализовать связывание событий (linkedEventId)
+- [x] Добавить `tg://user?id=X` ссылки для имён контактов
+- [x] Добавить deep link на исходное сообщение
+- [x] UX для событий с `needsContext=true` (предупреждение + synthesis)
+- [x] Добавить endpoints для тестирования: POST /enrich, GET /queue/stats
 
 ---
 
