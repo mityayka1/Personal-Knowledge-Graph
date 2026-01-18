@@ -73,7 +73,7 @@ export class NotificationService {
    * Uses atomic update to prevent race conditions.
    */
   async notifyAboutEvent(event: ExtractedEvent): Promise<boolean> {
-    const message = this.formatEventNotification(event);
+    const message = await this.formatEnhancedEventNotification(event);
     const buttons = await this.getEventButtons(event);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
@@ -471,6 +471,69 @@ export class NotificationService {
   }
 
   /**
+   * Format enhanced event notification with contact links, message deep links,
+   * needsContext warning, and enrichment synthesis.
+   */
+  private async formatEnhancedEventNotification(event: ExtractedEvent): Promise<string> {
+    const [contactInfo, messageLinkInfo] = await Promise.all([
+      this.getContactInfo(event),
+      this.getMessageLinkInfo(event),
+    ]);
+
+    const lines: string[] = [];
+
+    // Event type header with emoji
+    const emoji = this.getEventEmoji(event.eventType);
+    const typeLabel = this.getEventTypeLabel(event.eventType);
+    lines.push(`${emoji} <b>${typeLabel}</b>`);
+
+    // Contact link (clickable if telegram info available)
+    if (contactInfo) {
+      const contactLink = this.formatContactLink(
+        contactInfo.name,
+        contactInfo.telegramUserId,
+        contactInfo.telegramUsername,
+      );
+      lines.push(`👤 От: ${contactLink}`);
+    }
+
+    // Event content (basic formatting)
+    const basicContent = this.formatEventNotification(event);
+    // Remove the header from basic content (it's duplicated)
+    const contentWithoutHeader = basicContent.replace(/<b>[^<]+<\/b>\n/, '');
+    if (contentWithoutHeader.trim()) {
+      lines.push(`📝 ${contentWithoutHeader.trim()}`);
+    }
+
+    // Source quote (if available)
+    if (messageLinkInfo.sourceQuote) {
+      const truncatedQuote = messageLinkInfo.sourceQuote.length > 100
+        ? messageLinkInfo.sourceQuote.slice(0, 100) + '...'
+        : messageLinkInfo.sourceQuote;
+      lines.push(`💬 <i>"${this.escapeHtml(truncatedQuote)}"</i>`);
+    }
+
+    // Message deep link (if available)
+    if (messageLinkInfo.deepLink) {
+      lines.push(this.formatMessageLink(messageLinkInfo.deepLink));
+    }
+
+    // Warning for abstract events that need context clarification
+    if (event.needsContext) {
+      lines.push('');
+      lines.push('⚠️ <i>Контекст не найден. Уточните о чём речь.</i>');
+    }
+
+    // Show linked event info if enrichment found a related event
+    if (event.linkedEventId && event.enrichmentData?.synthesis) {
+      lines.push('');
+      lines.push(`🔗 <i>${this.escapeHtml(String(event.enrichmentData.synthesis))}</i>`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
    * Get inline keyboard buttons for single event actions.
    * Uses unified callback_data format with Redis short ID.
    * Format:
@@ -529,10 +592,14 @@ export class NotificationService {
   // ─────────────────────────────────────────────────────────────────
 
   /**
-   * Get contact info for an event (entity name and telegram ID).
-   * Returns name and telegram ID if available.
+   * Get contact info for an event (entity name, telegram ID, and username).
+   * Returns name, telegram ID, and username if available.
    */
-  private async getContactInfo(event: ExtractedEvent): Promise<{ name: string; telegramUserId: string | null } | null> {
+  private async getContactInfo(event: ExtractedEvent): Promise<{
+    name: string;
+    telegramUserId: string | null;
+    telegramUsername: string | null;
+  } | null> {
     // First try to get entityId directly from the event
     let entityId = event.entityId;
 
@@ -559,31 +626,50 @@ export class NotificationService {
       return null;
     }
 
-    // Get telegram user ID from identifiers
+    // Get telegram user ID and username from identifiers
     const telegramIdentifier = await this.identifierRepo.findOne({
       where: {
         entityId,
         identifierType: IdentifierType.TELEGRAM_USER_ID,
       },
-      select: ['identifierValue'],
+      select: ['identifierValue', 'metadata'],
     });
+
+    // Extract username from metadata if available
+    const metadata = telegramIdentifier?.metadata as { username?: string } | null;
+    const username = metadata?.username ?? null;
 
     return {
       name: entity.name,
       telegramUserId: telegramIdentifier?.identifierValue ?? null,
+      telegramUsername: username,
     };
   }
 
   /**
-   * Format contact name as a clickable Telegram link if telegram ID is available.
-   * Format: <a href="tg://user?id=123">Name</a>
-   * Falls back to plain text if no telegram ID.
+   * Format contact name as a clickable Telegram link.
+   * Priority:
+   * 1. If username available: https://t.me/username (works for users and bots)
+   * 2. If only user ID: tg://user?id=123 (limited to users who interacted with bot)
+   * 3. Falls back to plain text if no telegram info.
    */
-  private formatContactLink(name: string, telegramUserId: string | null): string {
+  private formatContactLink(
+    name: string,
+    telegramUserId: string | null,
+    telegramUsername: string | null,
+  ): string {
     const escapedName = this.escapeHtml(name);
+
+    // Prefer username (works reliably for both users and bots)
+    if (telegramUsername) {
+      return `<a href="https://t.me/${telegramUsername}">${escapedName}</a>`;
+    }
+
+    // Fallback to user ID (limited, may not work for all users)
     if (telegramUserId) {
       return `<a href="tg://user?id=${telegramUserId}">${escapedName}</a>`;
     }
+
     return escapedName;
   }
 
@@ -630,9 +716,15 @@ export class NotificationService {
     }
 
     // Format deep link: https://t.me/c/CHAT_ID/MSG_ID
-    // For private chats/groups, we need to remove the -100 prefix from chat ID
+    // For private chats/groups, we need to normalize the chat ID:
+    // - Remove 'channel_' prefix (from some storage formats)
+    // - Remove '-100' prefix (Telegram internal format for supergroups/channels)
+    // - Remove '-' prefix (for regular groups)
     // Convert to string first - telegram_chat_id may be stored as number
     let chatIdForLink = String(telegramChatId);
+    if (chatIdForLink.startsWith('channel_')) {
+      chatIdForLink = chatIdForLink.substring(8); // Remove 'channel_' prefix
+    }
     if (chatIdForLink.startsWith('-100')) {
       chatIdForLink = chatIdForLink.substring(4); // Remove -100 prefix
     } else if (chatIdForLink.startsWith('-')) {
@@ -691,9 +783,13 @@ export class NotificationService {
     // Event type and priority
     lines.push(`${emoji} ${typeLabel} • ${priorityIcon}`);
 
-    // Contact link (clickable if telegram ID available)
+    // Contact link (clickable if telegram info available)
     if (contactInfo) {
-      const contactLink = this.formatContactLink(contactInfo.name, contactInfo.telegramUserId);
+      const contactLink = this.formatContactLink(
+        contactInfo.name,
+        contactInfo.telegramUserId,
+        contactInfo.telegramUsername,
+      );
       lines.push(`👤 ${contactLink}`);
     }
 
