@@ -3,24 +3,7 @@ import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { ContextEnrichmentService, EnrichmentResult } from './context-enrichment.service';
 import { SecondBrainExtractionService } from './second-brain-extraction.service';
-
-/**
- * Job data for enrichment queue
- */
-export interface EnrichmentJobData {
-  eventId: string;
-}
-
-/**
- * Job result for enrichment queue
- */
-export interface EnrichmentJobResult {
-  success: boolean;
-  eventId: string;
-  linkedEventId?: string;
-  needsContext: boolean;
-  error?: string;
-}
+import { EnrichmentJobData, EnrichmentJobResult } from './enrichment.types';
 
 /**
  * BullMQ processor for context enrichment jobs.

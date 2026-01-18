@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { EnrichmentJobData } from './enrichment.processor';
+import { EnrichmentJobData } from './enrichment.types';
 
 /**
  * Service for managing the enrichment queue.
