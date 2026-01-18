@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import {
@@ -85,8 +86,15 @@ export class ExtractedEventController {
     summary: 'Get enrichment queue statistics',
     description: 'Returns counts for waiting, active, completed, and failed jobs',
   })
+  @ApiResponse({ status: 200, description: 'Queue statistics returned successfully' })
+  @ApiResponse({ status: 503, description: 'Queue service unavailable' })
   async getQueueStats() {
-    return this.enrichmentQueueService.getQueueStats();
+    try {
+      return await this.enrichmentQueueService.getQueueStats();
+    } catch (error) {
+      this.logger.error('Failed to get queue stats:', error);
+      throw new ServiceUnavailableException('Queue service unavailable');
+    }
   }
 
   /**
@@ -441,12 +449,8 @@ export class ExtractedEventController {
       // Run enrichment directly (not via queue for immediate feedback)
       const result = await this.contextEnrichmentService.enrichEvent(event);
 
-      // Apply result
-      await this.extractedEventRepo.update(id, {
-        linkedEventId: result.linkedEventId || null,
-        needsContext: result.needsContext,
-        enrichmentData: result.enrichmentData,
-      });
+      // Apply result using centralized logic (DRY)
+      await this.contextEnrichmentService.applyEnrichmentResult(id, result);
 
       this.logger.log(
         `Manual enrichment completed for event ${id}: ` +
@@ -460,8 +464,9 @@ export class ExtractedEventController {
         enrichmentData: result.enrichmentData,
       };
     } catch (error) {
-      this.logger.error(`Manual enrichment failed for event ${id}:`, error);
-      throw error;
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Manual enrichment failed for event ${id}: ${errorMessage}`);
+      throw new BadRequestException(`Enrichment failed: ${errorMessage}`);
     }
   }
 
