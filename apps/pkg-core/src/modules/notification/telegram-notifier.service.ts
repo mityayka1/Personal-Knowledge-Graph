@@ -211,6 +211,27 @@ export class TelegramNotifierService {
   }
 
   private getErrorMessage(error: unknown): string {
+    // Handle axios errors specifically - they have response data
+    if (error && typeof error === 'object') {
+      const axiosError = error as {
+        response?: { status?: number; data?: unknown };
+        code?: string;
+        message?: string;
+      };
+
+      // Check for axios response error
+      if (axiosError.response) {
+        const status = axiosError.response.status;
+        const data = axiosError.response.data;
+        return `HTTP ${status}: ${JSON.stringify(data)}`;
+      }
+
+      // Check for network/connection error
+      if (axiosError.code) {
+        return `${axiosError.code}: ${axiosError.message || 'Connection error'}`;
+      }
+    }
+
     if (error instanceof Error) {
       return error.message;
     }
