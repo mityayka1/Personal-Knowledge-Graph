@@ -631,7 +631,8 @@ export class NotificationService {
 
     // Format deep link: https://t.me/c/CHAT_ID/MSG_ID
     // For private chats/groups, we need to remove the -100 prefix from chat ID
-    let chatIdForLink = telegramChatId;
+    // Convert to string first - telegram_chat_id may be stored as number
+    let chatIdForLink = String(telegramChatId);
     if (chatIdForLink.startsWith('-100')) {
       chatIdForLink = chatIdForLink.substring(4); // Remove -100 prefix
     } else if (chatIdForLink.startsWith('-')) {
