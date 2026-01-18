@@ -88,7 +88,7 @@ Phase C+ фокусируется на двух ключевых улучшен�
 
 ### Задачи
 
-#### C+1.1: CarouselStateService (Day 1)
+#### C+1.1: CarouselStateService (Day 1) ✅ COMPLETED
 
 **Файл:** `apps/pkg-core/src/modules/notification/carousel-state.service.ts`
 
@@ -119,12 +119,12 @@ export class CarouselStateService {
 ```
 
 **Acceptance Criteria:**
-- [ ] Redis хранение с TTL 24h
-- [ ] next() пропускает processedIds
-- [ ] prev() пропускает processedIds
-- [ ] getCurrentEvent() возвращает текущее событие с индексом
+- [x] Redis хранение с TTL 24h
+- [x] next() пропускает processedIds
+- [x] prev() пропускает processedIds
+- [x] getCurrentEvent() возвращает текущее событие с индексом
 
-#### C+1.2: Carousel Buttons Format (Day 1)
+#### C+1.2: Carousel Buttons Format (Day 1) ✅ COMPLETED
 
 **Файл:** `apps/pkg-core/src/modules/notification/notification.service.ts`
 
@@ -143,11 +143,11 @@ private getCarouselButtons(carouselId: string): InlineKeyboardButton[][];
 ```
 
 **Acceptance Criteria:**
-- [ ] Карточка показывает индекс (1/10)
-- [ ] Кнопки: [◀️] [✅] [❌] [▶️]
-- [ ] callback_data < 64 bytes
+- [x] Карточка показывает индекс (1/10)
+- [x] Кнопки: [◀️] [✅] [❌] [▶️]
+- [x] callback_data < 64 bytes
 
-#### C+1.3: DigestService Carousel Mode (Day 2)
+#### C+1.3: DigestService Carousel Mode (Day 2) ✅ COMPLETED
 
 **Файл:** `apps/pkg-core/src/modules/notification/digest.service.ts`
 
@@ -164,11 +164,11 @@ async sendDigestAsCarousel(events: ExtractedEvent[], chatId: string): Promise<vo
 - `sendDailyDigest()` → использует carousel если events.length > 1
 
 **Acceptance Criteria:**
-- [ ] Digest с 1 событием — обычный формат
-- [ ] Digest с 2+ событиями — carousel
-- [ ] Первая карточка отправляется корректно
+- [x] Digest с 1 событием — обычный формат
+- [x] Digest с 2+ событиями — carousel
+- [x] Первая карточка отправляется корректно
 
-#### C+1.4: Carousel Callback Handler (Day 2)
+#### C+1.4: Carousel Callback Handler (Day 2) ✅ COMPLETED
 
 **Файл:** `apps/telegram-adapter/src/bot/handlers/carousel-callback.handler.ts`
 
@@ -189,12 +189,12 @@ export class CarouselCallbackHandler {
 ```
 
 **Acceptance Criteria:**
-- [ ] Навигация работает (next/prev)
-- [ ] Confirm/reject обрабатывает текущее событие
-- [ ] После confirm/reject — автоматически next
-- [ ] В конце списка — финальное сообщение "Все события обработаны"
+- [x] Навигация работает (next/prev)
+- [x] Confirm/reject обрабатывает текущее событие
+- [x] После confirm/reject — автоматически next
+- [x] В конце списка — финальное сообщение "Все события обработаны"
 
-#### C+1.5: Fix Duplicate Notifications (Day 3)
+#### C+1.5: Fix Duplicate Notifications (Day 3) ✅ COMPLETED
 
 **Проблема:** Событие может быть уведомлено дважды если cron job запускается во время обработки.
 
@@ -209,19 +209,19 @@ if (!event) return false; // Already notified
 ```
 
 **Acceptance Criteria:**
-- [ ] Событие уведомляется только один раз
-- [ ] Race condition защищена
+- [x] Событие уведомляется только один раз
+- [x] Race condition защищена
 
-#### C+1.6: Tests (Day 3)
+#### C+1.6: Tests (Day 3) ⚠️ PARTIAL
 
 **Файлы:**
 - `apps/pkg-core/src/modules/notification/carousel-state.service.spec.ts`
 - `apps/telegram-adapter/src/bot/handlers/carousel-callback.handler.spec.ts`
 
 **Acceptance Criteria:**
-- [ ] Unit tests для CarouselStateService
-- [ ] Unit tests для CarouselCallbackHandler
-- [ ] Integration test: полный flow carousel
+- [ ] Unit tests для CarouselStateService (TODO: add tests)
+- [ ] Unit tests для CarouselCallbackHandler (TODO: add tests)
+- [x] Integration test: полный flow carousel (tested manually via real Telegram)
 
 ---
 
@@ -578,13 +578,13 @@ Existing (unchanged):
 
 ## Success Metrics
 
-### Issue #61: Carousel UX
-- [ ] Пользователь может обработать события по одному
-- [ ] Навигация работает без ошибок
-- [ ] Нет дублирования уведомлений
-- [ ] Carousel завершается корректно
+### Issue #61: Carousel UX ✅ COMPLETED (PR #63)
+- [x] Пользователь может обработать события по одному
+- [x] Навигация работает без ошибок
+- [x] Нет дублирования уведомлений
+- [x] Carousel завершается корректно
 
-### Issue #62: Context-Aware Extraction
+### Issue #62: Context-Aware Extraction (TODO)
 - [ ] 80%+ абстрактных событий обогащаются успешно
 - [ ] Ссылки на контакты кликабельны
 - [ ] Deep links на сообщения работают
