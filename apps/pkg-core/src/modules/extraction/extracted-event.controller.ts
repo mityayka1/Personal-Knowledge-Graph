@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
   Logger,
 } from '@nestjs/common';
 import {
@@ -28,6 +29,8 @@ import {
   ParticipantRole,
 } from '@pkg/entities';
 import { EntityEventService } from '../entity-event/entity-event.service';
+import { EnrichmentQueueService } from './enrichment-queue.service';
+import { ContextEnrichmentService } from './context-enrichment.service';
 
 interface ExtractedEventQueryDto {
   status?: ExtractedEventStatus;
@@ -70,7 +73,29 @@ export class ExtractedEventController {
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
     private entityEventService: EntityEventService,
+    private enrichmentQueueService: EnrichmentQueueService,
+    private contextEnrichmentService: ContextEnrichmentService,
   ) {}
+
+  /**
+   * Get enrichment queue statistics
+   * GET /extracted-events/queue/stats
+   */
+  @Get('queue/stats')
+  @ApiOperation({
+    summary: 'Get enrichment queue statistics',
+    description: 'Returns counts for waiting, active, completed, and failed jobs',
+  })
+  @ApiResponse({ status: 200, description: 'Queue statistics returned successfully' })
+  @ApiResponse({ status: 503, description: 'Queue service unavailable' })
+  async getQueueStats() {
+    try {
+      return await this.enrichmentQueueService.getQueueStats();
+    } catch (error) {
+      this.logger.error('Failed to get queue stats:', error);
+      throw new ServiceUnavailableException('Queue service unavailable');
+    }
+  }
 
   /**
    * List extracted events with optional filtering
@@ -395,6 +420,54 @@ export class ExtractedEventController {
     if (days === 2) return 'послезавтра';
     if (days === 7) return 'через неделю';
     return `через ${days} дней`;
+  }
+
+  /**
+   * Manually trigger enrichment for an extracted event
+   * POST /extracted-events/:id/enrich
+   *
+   * Useful for testing the enrichment flow or re-enriching events.
+   */
+  @Post(':id/enrich')
+  @ApiOperation({
+    summary: 'Trigger enrichment for extracted event',
+    description: 'Manually runs context enrichment on the event',
+  })
+  @ApiParam({ name: 'id', description: 'ExtractedEvent UUID' })
+  @ApiResponse({ status: 200, description: 'Enrichment completed' })
+  @ApiResponse({ status: 404, description: 'Event not found' })
+  async enrich(@Param('id', ParseUUIDPipe) id: string) {
+    const event = await this.extractedEventRepo.findOne({ where: { id } });
+
+    if (!event) {
+      throw new NotFoundException(`ExtractedEvent ${id} not found`);
+    }
+
+    try {
+      this.logger.log(`Starting manual enrichment for event ${id}`);
+
+      // Run enrichment directly (not via queue for immediate feedback)
+      const result = await this.contextEnrichmentService.enrichEvent(event);
+
+      // Apply result using centralized logic (DRY)
+      await this.contextEnrichmentService.applyEnrichmentResult(id, result);
+
+      this.logger.log(
+        `Manual enrichment completed for event ${id}: ` +
+          `success=${result.success}, needsContext=${result.needsContext}`,
+      );
+
+      return {
+        success: result.success,
+        needsContext: result.needsContext,
+        linkedEventId: result.linkedEventId,
+        enrichmentData: result.enrichmentData,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Manual enrichment failed for event ${id}: ${errorMessage}`);
+      throw new BadRequestException(`Enrichment failed: ${errorMessage}`);
+    }
   }
 
   private shouldCreateEntityEvent(eventType: ExtractedEventType): boolean {

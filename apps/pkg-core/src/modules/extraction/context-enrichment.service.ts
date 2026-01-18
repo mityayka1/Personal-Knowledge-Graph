@@ -45,6 +45,41 @@ interface EnrichmentSynthesisResult {
   confidence: number;
 }
 
+/**
+ * Configuration constants for enrichment
+ */
+const ENRICHMENT_CONFIG = {
+  /** Number of days to search back for related messages */
+  SEARCH_DAYS: 7,
+  /** Maximum number of keywords to extract */
+  MAX_KEYWORDS: 10,
+  /** Minimum word length to consider as keyword */
+  MIN_WORD_LENGTH: 3,
+  /** Maximum number of related messages to fetch */
+  MAX_RELATED_MESSAGES: 10,
+  /** Maximum number of candidate events to fetch */
+  MAX_CANDIDATE_EVENTS: 10,
+  /** Maximum content length for messages in context */
+  MAX_CONTENT_LENGTH: 500,
+  /** Confidence threshold below which event needs user context */
+  CONFIDENCE_THRESHOLD: 0.5,
+  /** Timeout for synthesis LLM call in ms */
+  SYNTHESIS_TIMEOUT_MS: 30000,
+} as const;
+
+/**
+ * Stop words to filter out from keyword extraction (Russian and English)
+ */
+const STOP_WORDS = new Set([
+  // Russian
+  'это', 'как', 'что', 'так', 'для', 'при', 'еще', 'уже', 'тоже', 'также',
+  'есть', 'был', 'была', 'были', 'будет', 'быть', 'всё', 'все', 'вот',
+  'надо', 'нужно', 'можно', 'могу', 'хочу', 'буду', 'мне', 'меня', 'мой',
+  // English
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had',
+  'her', 'was', 'one', 'our', 'out', 'has', 'have', 'been', 'will',
+]);
+
 export interface EnrichmentResult {
   success: boolean;
   linkedEventId?: string;
@@ -81,11 +116,11 @@ export class ContextEnrichmentService {
       const keywords = this.extractKeywords(event);
       this.logger.debug(`Extracted keywords for event ${event.id}: ${keywords.join(', ')}`);
 
-      // 2. Search for related messages (last 7 days)
+      // 2. Search for related messages
       const relatedMessages = await this.searchRelatedMessages(
         keywords,
         event.entityId,
-        7,
+        ENRICHMENT_CONFIG.SEARCH_DAYS,
       );
       this.logger.debug(`Found ${relatedMessages.length} related messages`);
 
@@ -157,10 +192,10 @@ export class ContextEnrichmentService {
 
     // Deduplicate and filter
     const unique = [...new Set(keywords)]
-      .filter(k => k.length >= 3) // Skip very short words
-      .filter(k => !this.isStopWord(k));
+      .filter(k => k.length >= ENRICHMENT_CONFIG.MIN_WORD_LENGTH)
+      .filter(k => !STOP_WORDS.has(k));
 
-    return unique.slice(0, 10); // Limit to 10 keywords
+    return unique.slice(0, ENRICHMENT_CONFIG.MAX_KEYWORDS);
   }
 
   /**
@@ -172,22 +207,6 @@ export class ContextEnrichmentService {
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .split(/\s+/)
       .filter(Boolean);
-  }
-
-  /**
-   * Check if word is a stop word
-   */
-  private isStopWord(word: string): boolean {
-    const stopWords = new Set([
-      // Russian
-      'это', 'как', 'что', 'так', 'для', 'при', 'еще', 'уже', 'тоже', 'также',
-      'есть', 'был', 'была', 'были', 'будет', 'быть', 'всё', 'все', 'вот',
-      'надо', 'нужно', 'можно', 'могу', 'хочу', 'буду', 'мне', 'меня', 'мой',
-      // English
-      'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had',
-      'her', 'was', 'one', 'our', 'out', 'has', 'have', 'been', 'will',
-    ]);
-    return stopWords.has(word);
   }
 
   /**
@@ -215,12 +234,12 @@ export class ContextEnrichmentService {
           to: now.toISOString(),
         },
         searchType: 'hybrid',
-        limit: 10,
+        limit: ENRICHMENT_CONFIG.MAX_RELATED_MESSAGES,
       });
 
       return results.map(r => ({
         id: r.id,
-        content: r.content.substring(0, 500), // Limit content length
+        content: r.content.substring(0, ENRICHMENT_CONFIG.MAX_CONTENT_LENGTH),
         timestamp: r.timestamp,
       }));
     } catch (error) {
@@ -240,13 +259,13 @@ export class ContextEnrichmentService {
       return [];
     }
 
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const searchFromDate = new Date();
+    searchFromDate.setDate(searchFromDate.getDate() - ENRICHMENT_CONFIG.SEARCH_DAYS);
 
     return this.extractedEventRepo.find({
       where: {
         entityId,
-        createdAt: MoreThanOrEqual(sevenDaysAgo),
+        createdAt: MoreThanOrEqual(searchFromDate),
         status: In([
           ExtractedEventStatus.PENDING,
           ExtractedEventStatus.CONFIRMED,
@@ -254,7 +273,7 @@ export class ContextEnrichmentService {
         ]),
       },
       order: { createdAt: 'DESC' },
-      take: 10,
+      take: ENRICHMENT_CONFIG.MAX_CANDIDATE_EVENTS,
     }).then(events => events.filter(e => e.id !== excludeEventId));
   }
 
@@ -277,7 +296,7 @@ export class ContextEnrichmentService {
         model: 'haiku', // Use cheaper model for synthesis
         referenceType: 'extracted_event',
         referenceId: event.id,
-        timeout: 30000,
+        timeout: ENRICHMENT_CONFIG.SYNTHESIS_TIMEOUT_MS,
       });
 
       return data;
@@ -394,7 +413,7 @@ ${candidateEvents.map((e, i) => {
     };
 
     // Determine if event still needs context (user clarification)
-    const needsContext = !synthesis.contextFound && synthesis.confidence < 0.5;
+    const needsContext = !synthesis.contextFound && synthesis.confidence < ENRICHMENT_CONFIG.CONFIDENCE_THRESHOLD;
 
     this.logger.log(
       `Enriched event ${event.id}: contextFound=${synthesis.contextFound}, ` +
