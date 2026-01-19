@@ -5,6 +5,7 @@ import {
   ExtractedEvent,
   ExtractedEventStatus,
   EnrichmentData,
+  Message,
 } from '@pkg/entities';
 import { SearchService } from '../search/search.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
@@ -101,6 +102,8 @@ export class ContextEnrichmentService {
   constructor(
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
+    @InjectRepository(Message)
+    private messageRepo: Repository<Message>,
     private searchService: SearchService,
     private claudeAgentService: ClaudeAgentService,
   ) {}
@@ -112,11 +115,23 @@ export class ContextEnrichmentService {
     const startTime = Date.now();
 
     try {
-      // 1. Extract keywords from the event
+      // 1. Load reply context (if message is a reply to another message)
+      const replyContext = await this.loadReplyContext(event.sourceMessageId);
+      if (replyContext) {
+        this.logger.debug(`Found reply context for event ${event.id}`);
+      }
+
+      // 1b. Load topic name (if message is from a forum topic)
+      const topicName = await this.loadTopicName(event.sourceMessageId);
+      if (topicName) {
+        this.logger.debug(`Found topic context for event ${event.id}: ${topicName}`);
+      }
+
+      // 2. Extract keywords from the event
       const keywords = this.extractKeywords(event);
       this.logger.debug(`Extracted keywords for event ${event.id}: ${keywords.join(', ')}`);
 
-      // 2. Search for related messages
+      // 3. Search for related messages
       const relatedMessages = await this.searchRelatedMessages(
         keywords,
         event.entityId,
@@ -124,26 +139,28 @@ export class ContextEnrichmentService {
       );
       this.logger.debug(`Found ${relatedMessages.length} related messages`);
 
-      // 3. Search for related events with same entity
+      // 4. Search for related events with same entity
       const candidateEvents = await this.findCandidateEvents(
         event.entityId,
         event.id,
       );
       this.logger.debug(`Found ${candidateEvents.length} candidate events`);
 
-      // 4. If no context found at all, mark as needing context
-      if (relatedMessages.length === 0 && candidateEvents.length === 0) {
+      // 5. If no context found at all (no reply, no messages, no events), mark as needing context
+      if (!replyContext && relatedMessages.length === 0 && candidateEvents.length === 0) {
         return this.buildNoContextResult(event, keywords);
       }
 
-      // 5. Use LLM to synthesize context and find links
+      // 6. Use LLM to synthesize context and find links
       const synthesisResult = await this.synthesizeContext(
         event,
         relatedMessages,
         candidateEvents,
+        replyContext,
+        topicName,
       );
 
-      // 6. Build enrichment result
+      // 7. Build enrichment result
       return this.buildEnrichmentResult(
         event,
         keywords,
@@ -207,6 +224,81 @@ export class ContextEnrichmentService {
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .split(/\s+/)
       .filter(Boolean);
+  }
+
+  /**
+   * Load reply chain context for a message.
+   * If the source message is a reply to another message, load that message's content.
+   */
+  private async loadReplyContext(
+    sourceMessageId: string | null,
+  ): Promise<string | null> {
+    if (!sourceMessageId) {
+      return null;
+    }
+
+    try {
+      // Load the source message to get its replyToSourceMessageId
+      const sourceMessage = await this.messageRepo.findOne({
+        where: { id: sourceMessageId },
+        select: ['id', 'replyToSourceMessageId'],
+      });
+
+      if (!sourceMessage?.replyToSourceMessageId) {
+        return null;
+      }
+
+      // Load the message being replied to (by Telegram message ID)
+      const replyToMessage = await this.messageRepo.findOne({
+        where: { sourceMessageId: sourceMessage.replyToSourceMessageId },
+        select: ['id', 'content'],
+      });
+
+      if (!replyToMessage?.content) {
+        return null;
+      }
+
+      this.logger.debug(
+        `Loaded reply context for message ${sourceMessageId}: ` +
+          `${replyToMessage.content.substring(0, 50)}...`,
+      );
+
+      return replyToMessage.content;
+    } catch (error) {
+      this.logger.warn(`Failed to load reply context: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Load topic name for a message (if it's from a forum topic).
+   */
+  private async loadTopicName(
+    sourceMessageId: string | null,
+  ): Promise<string | null> {
+    if (!sourceMessageId) {
+      return null;
+    }
+
+    try {
+      const sourceMessage = await this.messageRepo.findOne({
+        where: { id: sourceMessageId },
+        select: ['id', 'topicName'],
+      });
+
+      if (!sourceMessage?.topicName) {
+        return null;
+      }
+
+      this.logger.debug(
+        `Loaded topic name for message ${sourceMessageId}: ${sourceMessage.topicName}`,
+      );
+
+      return sourceMessage.topicName;
+    } catch (error) {
+      this.logger.warn(`Failed to load topic name: ${error}`);
+      return null;
+    }
   }
 
   /**
@@ -284,8 +376,10 @@ export class ContextEnrichmentService {
     event: ExtractedEvent,
     messages: Array<{ id: string; content: string; timestamp: string }>,
     candidateEvents: ExtractedEvent[],
+    replyContext: string | null,
+    topicName: string | null,
   ): Promise<EnrichmentSynthesisResult> {
-    const prompt = this.buildSynthesisPrompt(event, messages, candidateEvents);
+    const prompt = this.buildSynthesisPrompt(event, messages, candidateEvents, replyContext, topicName);
 
     try {
       const { data } = await this.claudeAgentService.call<EnrichmentSynthesisResult>({
@@ -317,6 +411,8 @@ export class ContextEnrichmentService {
     event: ExtractedEvent,
     messages: Array<{ id: string; content: string; timestamp: string }>,
     candidateEvents: ExtractedEvent[],
+    replyContext: string | null,
+    topicName: string | null,
   ): string {
     const eventData = event.extractedData as Record<string, unknown>;
     const eventDescription = eventData.what || eventData.topic || event.sourceQuote || 'неизвестно';
@@ -329,6 +425,25 @@ export class ContextEnrichmentService {
 ${event.sourceQuote ? `Цитата: "${event.sourceQuote}"` : ''}
 
 `;
+
+    // Add topic context if available (message is from a forum topic)
+    if (topicName) {
+      prompt += `ТЕМА ФОРУМА: "${topicName}"
+Это сообщение из форумного чата в теме "${topicName}". Учитывай это при анализе контекста.
+
+`;
+    }
+
+    // Add reply context first (most important for understanding)
+    if (replyContext) {
+      const cleanReplyContent = replyContext.replace(/\n/g, ' ').substring(0, ENRICHMENT_CONFIG.MAX_CONTENT_LENGTH);
+      prompt += `КОНТЕКСТ ОТВЕТА (сообщение, на которое отвечали):
+"${cleanReplyContent}"
+
+ВАЖНО: Это сообщение напрямую связано с событием — используй его для понимания контекста!
+
+`;
+    }
 
     if (messages.length > 0) {
       prompt += `СВЯЗАННЫЕ СООБЩЕНИЯ (последние 7 дней):
@@ -349,9 +464,10 @@ ${candidateEvents.map((e, i) => {
 
     prompt += `ЗАДАЧА:
 1. Определи, к какому конкретному событию или теме относится абстрактное событие
-2. Если найдено соответствие среди СУЩЕСТВУЮЩИХ СОБЫТИЙ, укажи его UUID в linkedEventId
-3. Если контекст понятен из СООБЩЕНИЙ, опиши его в synthesis
-4. Если контекст не найден, установи contextFound=false
+2. ${replyContext ? 'ПРИОРИТЕТ: используй КОНТЕКСТ ОТВЕТА — это прямая связь!' : ''}
+3. Если найдено соответствие среди СУЩЕСТВУЮЩИХ СОБЫТИЙ, укажи его UUID в linkedEventId
+4. Если контекст понятен${replyContext ? ' из КОНТЕКСТА ОТВЕТА или' : ''} из СООБЩЕНИЙ, опиши его в synthesis
+5. Если контекст не найден, установи contextFound=false
 
 ВАЖНО: linkedEventId должен быть точным UUID из списка выше или null`;
 

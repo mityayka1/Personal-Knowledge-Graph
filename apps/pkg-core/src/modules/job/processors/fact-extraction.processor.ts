@@ -1,6 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, forwardRef, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
 import { Job as BullJob } from 'bullmq';
+import { Message } from '@pkg/entities';
 import { FactExtractionService } from '../../extraction/fact-extraction.service';
 import { EventExtractionService } from '../../extraction/event-extraction.service';
 import { SecondBrainExtractionService } from '../../extraction/second-brain-extraction.service';
@@ -20,6 +23,8 @@ export class FactExtractionProcessor extends WorkerHost {
     private secondBrainExtractionService: SecondBrainExtractionService,
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
+    @InjectRepository(Message)
+    private messageRepo: Repository<Message>,
   ) {
     super();
   }
@@ -57,6 +62,9 @@ export class FactExtractionProcessor extends WorkerHost {
       });
 
       // Second Brain extraction - creates ExtractedEvent (pending confirmation)
+      // Load reply-to message content for context
+      const replyToContents = await this.loadReplyToContents(messages);
+
       const secondBrainMessages = messages.map((m) => ({
         messageId: m.id,
         messageContent: m.content,
@@ -64,6 +72,10 @@ export class FactExtractionProcessor extends WorkerHost {
         entityId,
         entityName: entity.name,
         isOutgoing: m.isOutgoing ?? false,
+        replyToContent: m.replyToSourceMessageId
+          ? replyToContents.get(m.replyToSourceMessageId)
+          : undefined,
+        topicName: m.topicName,
       }));
 
       const secondBrainResults =
@@ -89,5 +101,40 @@ export class FactExtractionProcessor extends WorkerHost {
       this.logger.error(`Extraction job ${job.id} failed: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Load content of messages that are being replied to.
+   * Returns a map of sourceMessageId -> content
+   */
+  private async loadReplyToContents(
+    messages: ExtractionJobData['messages'],
+  ): Promise<Map<string, string>> {
+    const replyToIds = messages
+      .map((m) => m.replyToSourceMessageId)
+      .filter((id): id is string => !!id);
+
+    if (replyToIds.length === 0) {
+      return new Map();
+    }
+
+    // Find messages by their source_message_id (Telegram message ID)
+    const replyToMessages = await this.messageRepo.find({
+      where: { sourceMessageId: In(replyToIds) },
+      select: ['sourceMessageId', 'content'],
+    });
+
+    const contentMap = new Map<string, string>();
+    for (const msg of replyToMessages) {
+      if (msg.sourceMessageId && msg.content) {
+        contentMap.set(msg.sourceMessageId, msg.content);
+      }
+    }
+
+    this.logger.debug(
+      `Loaded ${contentMap.size} reply-to messages for ${replyToIds.length} replies`,
+    );
+
+    return contentMap;
   }
 }

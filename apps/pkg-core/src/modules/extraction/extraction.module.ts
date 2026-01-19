@@ -1,7 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { EntityFact, EntityEvent, ExtractedEvent } from '@pkg/entities';
+import { EntityFact, EntityEvent, ExtractedEvent, Message } from '@pkg/entities';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelevanceFilterService } from './relevance-filter.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
@@ -22,7 +22,7 @@ import { SearchModule } from '../search/search.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent]),
+    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent, Message]),
     BullModule.registerQueue({
       name: 'enrichment',
       defaultJobOptions: {

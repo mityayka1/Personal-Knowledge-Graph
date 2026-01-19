@@ -15,6 +15,10 @@ export interface ExtractionJobData {
     content: string;
     timestamp: string;
     isOutgoing: boolean;
+    /** Source message ID this message is replying to (from Telegram) */
+    replyToSourceMessageId?: string;
+    /** Forum topic name for context (if message is from a forum) */
+    topicName?: string;
   }>;
 }
 
@@ -78,8 +82,10 @@ export class JobService {
     messageId: string;
     messageContent: string;
     isOutgoing?: boolean;
+    replyToSourceMessageId?: string;
+    topicName?: string;
   }): Promise<void> {
-    const { interactionId, entityId, messageId, messageContent, isOutgoing = false } = params;
+    const { interactionId, entityId, messageId, messageContent, isOutgoing = false, replyToSourceMessageId, topicName } = params;
     // BullMQ doesn't allow colons in custom job IDs, use underscore instead
     const jobId = `extraction_${interactionId}`;
 
@@ -103,6 +109,8 @@ export class JobService {
             content: messageContent,
             timestamp: new Date().toISOString(),
             isOutgoing,
+            replyToSourceMessageId,
+            topicName,
           }],
         });
         await existingJob.changeDelay(delayMs); // Reset delay
@@ -123,6 +131,8 @@ export class JobService {
             content: messageContent,
             timestamp: new Date().toISOString(),
             isOutgoing,
+            replyToSourceMessageId,
+            topicName,
           }],
         } as ExtractionJobData, {
           jobId,
@@ -143,6 +153,8 @@ export class JobService {
           content: messageContent,
           timestamp: new Date().toISOString(),
           isOutgoing,
+          replyToSourceMessageId,
+          topicName,
         }],
       } as ExtractionJobData, {
         jobId: uniqueJobId,
@@ -162,6 +174,8 @@ export class JobService {
         content: messageContent,
         timestamp: new Date().toISOString(),
         isOutgoing,
+        replyToSourceMessageId,
+        topicName,
       }],
     } as ExtractionJobData, {
       jobId,

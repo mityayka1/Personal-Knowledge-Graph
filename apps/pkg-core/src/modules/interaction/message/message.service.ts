@@ -9,10 +9,14 @@ import {
   EntityType,
   CreationSource,
   ChatCategory,
+  FactType,
+  FactSource,
+  FactCategory,
 } from '@pkg/entities';
 import { InteractionService } from '../interaction.service';
 import { EntityIdentifierService } from '../../entity/entity-identifier/entity-identifier.service';
 import { EntityService } from '../../entity/entity.service';
+import { EntityFactService } from '../../entity/entity-fact/entity-fact.service';
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { JobService } from '../../job/job.service';
 import { ChatCategoryService } from '../../chat-category/chat-category.service';
@@ -31,6 +35,8 @@ export class MessageService {
     private identifierService: EntityIdentifierService,
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
+    @Inject(forwardRef(() => EntityFactService))
+    private entityFactService: EntityFactService,
     @Inject(forwardRef(() => PendingResolutionService))
     private pendingResolutionService: PendingResolutionService,
     @Inject(forwardRef(() => JobService))
@@ -71,6 +77,9 @@ export class MessageService {
     if (identifier) {
       // Known contact - use existing entity
       entityId = identifier.entityId;
+
+      // Update missing identifiers (e.g., username became available)
+      await this.updateMissingIdentifiers(entityId, dto);
     } else if (chatCategory.category === ChatCategory.PERSONAL && !dto.is_outgoing) {
       // Private chat with unknown contact - auto-create Entity with all available data
       const entityName = this.buildEntityName(dto);
@@ -120,6 +129,12 @@ export class MessageService {
       pendingResolutionId = pending.id;
     }
 
+    // 3b. Resolve RECIPIENT entity for outgoing messages in private chats
+    let recipientEntityId: string | null = null;
+    if (dto.is_outgoing && chatCategory.category === ChatCategory.PERSONAL && dto.recipient_user_id) {
+      recipientEntityId = await this.resolveRecipientEntity(dto);
+    }
+
     // 3. Add participant to interaction
     await this.interactionService.addParticipant(interaction.id, {
       entityId: entityId || undefined,
@@ -153,6 +168,7 @@ export class MessageService {
         // Update existing message with sender identifier and content
         isUpdate = true;
         existingMessage.senderEntityId = entityId;
+        existingMessage.recipientEntityId = recipientEntityId;
         existingMessage.senderIdentifierType = IdentifierType.TELEGRAM_USER_ID;
         existingMessage.senderIdentifierValue = dto.telegram_user_id;
         // Also update content and media in case message was edited
@@ -167,6 +183,7 @@ export class MessageService {
         const message = messageRepo.create({
           interactionId: interaction.id,
           senderEntityId: entityId,
+          recipientEntityId: recipientEntityId, // For outgoing private chat messages
           senderIdentifierType: IdentifierType.TELEGRAM_USER_ID,
           senderIdentifierValue: dto.telegram_user_id,
           content: dto.text,
@@ -243,6 +260,8 @@ export class MessageService {
           messageId: result.saved.id,
           messageContent: dto.text,
           isOutgoing: dto.is_outgoing,
+          replyToSourceMessageId: dto.reply_to_message_id,
+          topicName: dto.topic_name,
         });
       } catch (error) {
         // Don't fail message creation if extraction scheduling fails
@@ -257,6 +276,7 @@ export class MessageService {
       id: result.saved.id,
       interaction_id: interaction.id,
       entity_id: entityId,
+      recipient_entity_id: recipientEntityId,
       entity_resolution_status: resolutionStatus,
       pending_resolution_id: pendingResolutionId,
       auto_created_entity: autoCreatedEntity,
@@ -333,6 +353,363 @@ export class MessageService {
     }
 
     return identifiers;
+  }
+
+  /**
+   * Update entity data and identifiers when new information becomes available.
+   * Updates: name (if was auto-generated), profile photo, identifiers (username, phone).
+   */
+  private async updateMissingIdentifiers(
+    entityId: string,
+    dto: CreateMessageDto,
+  ): Promise<void> {
+    // 1. Update entity data (name, photo) if improved info available
+    await this.updateEntityData(entityId, dto);
+
+    // 2. Add telegram_username if not exists
+    const username = dto.telegram_username || dto.telegram_user_info?.username;
+    if (username) {
+      const cleanUsername = username.replace(/^@/, '');
+      const existingUsername = await this.identifierService.findByIdentifier(
+        IdentifierType.TELEGRAM_USERNAME,
+        cleanUsername,
+      );
+      if (!existingUsername) {
+        try {
+          await this.identifierService.create(entityId, {
+            type: IdentifierType.TELEGRAM_USERNAME,
+            value: cleanUsername,
+          });
+          this.logger.log(`Added telegram_username "${cleanUsername}" to entity ${entityId}`);
+        } catch (error) {
+          // Ignore duplicate key errors (race condition)
+          if (!(error instanceof Error) || !error.message.includes('duplicate')) {
+            this.logger.warn(`Failed to add username: ${error}`);
+          }
+        }
+      }
+    }
+
+    // 3. Add phone if not exists
+    const phone = dto.telegram_user_info?.phone;
+    if (phone) {
+      const existingPhone = await this.identifierService.findByIdentifier(
+        IdentifierType.PHONE,
+        phone,
+      );
+      if (!existingPhone) {
+        try {
+          await this.identifierService.create(entityId, {
+            type: IdentifierType.PHONE,
+            value: phone,
+          });
+          this.logger.log(`Added phone "${phone}" to entity ${entityId}`);
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes('duplicate')) {
+            this.logger.warn(`Failed to add phone: ${error}`);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Update entity name, photo, and facts if better data is available.
+   * - Updates name if it was auto-generated ("Telegram XXXXX")
+   * - Updates profile photo if not set
+   * - Saves birthday as EntityFact if available and not already stored
+   */
+  private async updateEntityData(
+    entityId: string,
+    dto: CreateMessageDto,
+  ): Promise<void> {
+    try {
+      const entity = await this.entityService.findOne(entityId);
+      const updates: { name?: string; profilePhoto?: string } = {};
+
+      // Update name if it was auto-generated (starts with "Telegram ") and we have a better one
+      if (entity.name.startsWith('Telegram ')) {
+        const newName = this.buildEntityName(dto);
+        if (!newName.startsWith('Telegram ')) {
+          updates.name = newName;
+          this.logger.log(`Updating entity name from "${entity.name}" to "${newName}"`);
+        }
+      }
+
+      // Update profile photo if not set
+      if (!entity.profilePhoto && dto.telegram_user_info?.photoBase64) {
+        updates.profilePhoto = dto.telegram_user_info.photoBase64;
+        this.logger.log(`Adding profile photo to entity ${entityId}`);
+      }
+
+      // Apply updates if any
+      if (Object.keys(updates).length > 0) {
+        await this.entityService.update(entityId, updates);
+      }
+
+      // Save birthday as fact if available
+      if (dto.telegram_user_info?.birthday) {
+        await this.saveBirthdayFact(entityId, dto.telegram_user_info.birthday);
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to update entity data: ${error}`);
+    }
+  }
+
+  /**
+   * Save birthday as EntityFact if not already exists.
+   * Birthday format: "YYYY-MM-DD" or "MM-DD" (if year not shared)
+   */
+  private async saveBirthdayFact(entityId: string, birthday: string): Promise<void> {
+    try {
+      // Check if birthday fact already exists
+      const existingFacts = await this.entityFactService.findByEntity(entityId);
+      const hasBirthday = existingFacts.some(f => f.factType === FactType.BIRTHDAY);
+
+      if (hasBirthday) {
+        return; // Birthday already stored
+      }
+
+      // Parse birthday and create fact
+      // Format: "YYYY-MM-DD" or "MM-DD"
+      let valueDate: Date | undefined;
+      if (birthday.length === 10) {
+        // Full date with year: YYYY-MM-DD
+        valueDate = new Date(birthday);
+      } else if (birthday.length === 5) {
+        // Only month-day: MM-DD, use year 1900 as placeholder
+        valueDate = new Date(`1900-${birthday}`);
+      }
+
+      await this.entityFactService.create(entityId, {
+        type: FactType.BIRTHDAY,
+        category: FactCategory.PERSONAL,
+        value: birthday,
+        valueDate,
+        source: FactSource.IMPORTED,
+      });
+
+      this.logger.log(`Saved birthday fact "${birthday}" for entity ${entityId}`);
+    } catch (error) {
+      this.logger.warn(`Failed to save birthday fact: ${error}`);
+    }
+  }
+
+  /**
+   * Resolve or create recipient entity for outgoing messages in private chats.
+   * Updates entity data (name, photo, birthday) if entity exists.
+   */
+  private async resolveRecipientEntity(dto: CreateMessageDto): Promise<string | null> {
+    if (!dto.recipient_user_id) {
+      return null;
+    }
+
+    try {
+      // Find existing entity by recipient's telegram_user_id
+      const identifier = await this.identifierService.findByIdentifier(
+        IdentifierType.TELEGRAM_USER_ID,
+        dto.recipient_user_id,
+      );
+
+      if (identifier) {
+        // Known recipient - update their data if improved info available
+        await this.updateRecipientEntityData(identifier.entityId, dto);
+        return identifier.entityId;
+      }
+
+      // Unknown recipient - auto-create entity
+      const recipientInfo = dto.recipient_user_info;
+      const entityName = this.buildRecipientEntityName(dto);
+      const identifiers = this.buildRecipientIdentifiers(dto);
+
+      const entity = await this.entityService.create({
+        type: EntityType.PERSON,
+        name: entityName,
+        notes: 'Auto-created from outgoing Telegram message',
+        profilePhoto: recipientInfo?.photoBase64,
+        creationSource: CreationSource.PRIVATE_CHAT,
+        isBot: recipientInfo?.isBot ?? false,
+        identifiers,
+      });
+
+      this.logger.log(
+        `Auto-created recipient Entity "${entityName}" from outgoing message to ${dto.recipient_user_id}`,
+      );
+
+      // Save birthday if available
+      if (recipientInfo?.birthday) {
+        await this.saveBirthdayFact(entity.id, recipientInfo.birthday);
+      }
+
+      return entity.id;
+    } catch (error) {
+      this.logger.warn(`Failed to resolve recipient entity: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Build entity name from recipient's Telegram user info.
+   */
+  private buildRecipientEntityName(dto: CreateMessageDto): string {
+    const userInfo = dto.recipient_user_info;
+
+    // Try firstName + lastName
+    if (userInfo?.firstName || userInfo?.lastName) {
+      return [userInfo.firstName, userInfo.lastName].filter(Boolean).join(' ');
+    }
+
+    // Try username
+    if (userInfo?.username) {
+      return userInfo.username;
+    }
+
+    // Fallback to telegram_user_id
+    return `Telegram ${dto.recipient_user_id}`;
+  }
+
+  /**
+   * Build identifiers from recipient's Telegram user info.
+   */
+  private buildRecipientIdentifiers(dto: CreateMessageDto): Array<{
+    type: IdentifierType;
+    value: string;
+    metadata?: Record<string, unknown>;
+  }> {
+    const identifiers: Array<{
+      type: IdentifierType;
+      value: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
+
+    // Always add telegram_user_id
+    if (dto.recipient_user_id) {
+      identifiers.push({
+        type: IdentifierType.TELEGRAM_USER_ID,
+        value: dto.recipient_user_id,
+        metadata: dto.recipient_user_info as Record<string, unknown>,
+      });
+    }
+
+    // Add telegram_username if present
+    const username = dto.recipient_user_info?.username;
+    if (username) {
+      identifiers.push({
+        type: IdentifierType.TELEGRAM_USERNAME,
+        value: username.replace(/^@/, ''),
+      });
+    }
+
+    // Add phone if present
+    const phone = dto.recipient_user_info?.phone;
+    if (phone) {
+      identifiers.push({
+        type: IdentifierType.PHONE,
+        value: phone,
+      });
+    }
+
+    return identifiers;
+  }
+
+  /**
+   * Update recipient entity data (name, photo, birthday) if better info available.
+   */
+  private async updateRecipientEntityData(entityId: string, dto: CreateMessageDto): Promise<void> {
+    const recipientInfo = dto.recipient_user_info;
+    if (!recipientInfo) {
+      return;
+    }
+
+    try {
+      const entity = await this.entityService.findOne(entityId);
+      const updates: { name?: string; profilePhoto?: string } = {};
+
+      // Update name if it was auto-generated
+      if (entity.name.startsWith('Telegram ')) {
+        const newName = this.buildRecipientEntityName(dto);
+        if (!newName.startsWith('Telegram ')) {
+          updates.name = newName;
+          this.logger.log(`Updating recipient entity name from "${entity.name}" to "${newName}"`);
+        }
+      }
+
+      // Update profile photo if not set
+      if (!entity.profilePhoto && recipientInfo.photoBase64) {
+        updates.profilePhoto = recipientInfo.photoBase64;
+        this.logger.log(`Adding profile photo to recipient entity ${entityId}`);
+      }
+
+      // Apply updates if any
+      if (Object.keys(updates).length > 0) {
+        await this.entityService.update(entityId, updates);
+      }
+
+      // Save birthday if available
+      if (recipientInfo.birthday) {
+        await this.saveBirthdayFact(entityId, recipientInfo.birthday);
+      }
+
+      // Add missing identifiers (username, phone)
+      await this.addRecipientIdentifiers(entityId, dto);
+    } catch (error) {
+      this.logger.warn(`Failed to update recipient entity data: ${error}`);
+    }
+  }
+
+  /**
+   * Add missing identifiers to recipient entity.
+   */
+  private async addRecipientIdentifiers(entityId: string, dto: CreateMessageDto): Promise<void> {
+    const recipientInfo = dto.recipient_user_info;
+    if (!recipientInfo) {
+      return;
+    }
+
+    // Add telegram_username if not exists
+    const username = recipientInfo.username;
+    if (username) {
+      const cleanUsername = username.replace(/^@/, '');
+      const existingUsername = await this.identifierService.findByIdentifier(
+        IdentifierType.TELEGRAM_USERNAME,
+        cleanUsername,
+      );
+      if (!existingUsername) {
+        try {
+          await this.identifierService.create(entityId, {
+            type: IdentifierType.TELEGRAM_USERNAME,
+            value: cleanUsername,
+          });
+          this.logger.log(`Added telegram_username "${cleanUsername}" to recipient entity ${entityId}`);
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes('duplicate')) {
+            this.logger.warn(`Failed to add recipient username: ${error}`);
+          }
+        }
+      }
+    }
+
+    // Add phone if not exists
+    const phone = recipientInfo.phone;
+    if (phone) {
+      const existingPhone = await this.identifierService.findByIdentifier(
+        IdentifierType.PHONE,
+        phone,
+      );
+      if (!existingPhone) {
+        try {
+          await this.identifierService.create(entityId, {
+            type: IdentifierType.PHONE,
+            value: phone,
+          });
+          this.logger.log(`Added phone "${phone}" to recipient entity ${entityId}`);
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes('duplicate')) {
+            this.logger.warn(`Failed to add recipient phone: ${error}`);
+          }
+        }
+      }
+    }
   }
 
   async findByInteraction(interactionId: string, limit = 100, offset = 0) {
