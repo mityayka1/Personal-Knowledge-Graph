@@ -43,6 +43,13 @@ export class TelegramUserInfoDto {
   @IsOptional()
   @IsString()
   photoBase64?: string;
+
+  /**
+   * Birthday in format "YYYY-MM-DD" or "MM-DD" (if year not shared by user)
+   */
+  @IsOptional()
+  @IsString()
+  birthday?: string;
 }
 
 export class CreateMessageDto {
@@ -148,4 +155,21 @@ export class CreateMessageDto {
   @IsOptional()
   @IsString()
   chat_title?: string;
+
+  /**
+   * Recipient user ID for outgoing messages in private chats.
+   * Used to identify the contact entity to update.
+   */
+  @IsOptional()
+  @IsString()
+  recipient_user_id?: string;
+
+  /**
+   * Recipient user info for outgoing messages in private chats.
+   * Contains name, photo, birthday etc. for entity updates.
+   */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TelegramUserInfoDto)
+  recipient_user_info?: TelegramUserInfoDto;
 }

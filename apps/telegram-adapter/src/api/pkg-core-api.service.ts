@@ -168,6 +168,33 @@ export interface ApprovalResponse {
   error?: string;
 }
 
+// ============================================
+// Act API Types (Phase A: Act command)
+// ============================================
+
+export interface ActRequestDto {
+  instruction: string;
+}
+
+export interface ActActionDto {
+  type: 'draft_created' | 'message_sent' | 'approval_rejected' | 'followup_created';
+  entityId?: string;
+  entityName?: string;
+  details?: string;
+}
+
+export interface ActResponseData {
+  result: string;
+  actions: ActActionDto[];
+  toolsUsed: string[];
+}
+
+export interface ActResponse {
+  success: boolean;
+  data: ActResponseData;
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -506,6 +533,26 @@ export class PkgCoreApiService {
       const response = await this.client.post<ApprovalResponse>(
         `/approvals/${approvalId}/regenerate`,
         { description },
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Act API Methods (Phase A: Act command)
+  // ============================================
+
+  /**
+   * Execute an action instruction via Claude agent
+   * @param instruction Natural language instruction (e.g., "напиши Сергею что встреча переносится")
+   * @param timeout Optional timeout in ms (default: 120000 for agent operations)
+   */
+  async act(instruction: string, timeout = 120000): Promise<ActResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ActResponse>(
+        '/agent/act',
+        { instruction } as ActRequestDto,
+        { timeout },
       );
       return response.data;
     });

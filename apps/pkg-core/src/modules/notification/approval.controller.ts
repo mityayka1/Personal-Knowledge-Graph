@@ -8,11 +8,15 @@ import {
   HttpStatus,
   NotFoundException,
   Logger,
+  Optional,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsString, MinLength, MaxLength } from 'class-validator';
 import { ApprovalService, PendingApproval } from './approval.service';
 import { TelegramSendService, SendResult } from './telegram-send.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 
 /**
  * DTO for approval action
@@ -95,9 +99,23 @@ interface ApprovalResponse {
 export class ApprovalController {
   private readonly logger = new Logger(ApprovalController.name);
 
+  /**
+   * JSON Schema for message regeneration
+   */
+  private readonly regenerateSchema = {
+    type: 'object',
+    properties: {
+      message: { type: 'string', description: 'Generated message text in Russian' },
+    },
+    required: ['message'],
+  };
+
   constructor(
     private readonly approvalService: ApprovalService,
     private readonly telegramSendService: TelegramSendService,
+    @Optional()
+    @Inject(forwardRef(() => ClaudeAgentService))
+    private readonly claudeAgentService: ClaudeAgentService | null,
   ) {}
 
   /**
@@ -322,9 +340,25 @@ export class ApprovalController {
       throw new NotFoundException('Approval not found or expired');
     }
 
-    // TODO: Call Claude to regenerate message based on description
-    // For now, just update with the description as placeholder
-    const newText = `${dto.description}`;
+    let newText: string;
+
+    // Use Claude to regenerate if available
+    if (this.claudeAgentService) {
+      try {
+        newText = await this.generateMessageWithClaude(
+          approval.entityName,
+          dto.description,
+          approval.text,
+        );
+        this.logger.log(`Regenerated message for ${approval.entityName} via Claude`);
+      } catch (error) {
+        this.logger.warn(`Claude regeneration failed, using fallback: ${error}`);
+        newText = this.generateSimpleMessage(approval.entityName, dto.description);
+      }
+    } else {
+      // Fallback without Claude
+      newText = this.generateSimpleMessage(approval.entityName, dto.description);
+    }
 
     const updated = await this.approvalService.updateText(approvalId, newText);
 
@@ -336,5 +370,59 @@ export class ApprovalController {
         text: updated?.text,
       },
     };
+  }
+
+  /**
+   * Generate message using Claude LLM
+   */
+  private async generateMessageWithClaude(
+    entityName: string,
+    description: string,
+    previousText: string,
+  ): Promise<string> {
+    // Extract first name - prefer Russian form if available
+    const firstName = this.extractRussianFirstName(entityName);
+
+    const prompt = `Сгенерируй короткое сообщение для ${firstName}.
+
+Что нужно написать: ${description}
+
+Предыдущий вариант (для контекста): "${previousText}"
+
+ВАЖНЫЕ ПРАВИЛА:
+1. Пиши НА РУССКОМ ЯЗЫКЕ
+2. Обращайся к человеку по имени НА РУССКОМ (например, "Маша" не "Marina", "Галя" не "Galina")
+3. Короткое сообщение (1-3 предложения максимум)
+4. Естественное, как будто пишет реальный человек
+5. Без излишних формальностей`;
+
+    const { data } = await this.claudeAgentService!.call<{ message: string }>({
+      mode: 'oneshot',
+      taskType: 'message_regeneration',
+      prompt,
+      model: 'haiku',
+      schema: this.regenerateSchema,
+    });
+
+    return data.message;
+  }
+
+  /**
+   * Simple message generation fallback
+   */
+  private generateSimpleMessage(entityName: string, description: string): string {
+    const firstName = this.extractRussianFirstName(entityName);
+    return `Привет, ${firstName}! ${description}`;
+  }
+
+  /**
+   * Extract Russian first name from entity name
+   * Handles cases like "Marina" -> should ideally be "Марина" if we had that data
+   * For now, just extracts first name
+   */
+  private extractRussianFirstName(entityName: string): string {
+    // TODO: In the future, we could store Russian name in entity.displayName
+    // and use it here for proper localization
+    return entityName.split(' ')[0];
   }
 }

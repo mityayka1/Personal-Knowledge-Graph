@@ -10,6 +10,7 @@ import {
 import { EntityService } from '../../entity/entity.service';
 import { EntityEventService } from '../../entity-event/entity-event.service';
 import { ContextService } from '../../context/context.service';
+import { ApprovalService } from '../../notification/approval.service';
 import { ClaudeAgentService } from '../claude-agent.service';
 import { EventType } from '@pkg/entities';
 
@@ -44,7 +45,12 @@ export class ActionToolsProvider {
     @Optional()
     @Inject(forwardRef(() => ClaudeAgentService))
     private readonly claudeAgentService: ClaudeAgentService | null,
-  ) {}
+    @Optional()
+    @Inject(forwardRef(() => ApprovalService))
+    private readonly approvalService: ApprovalService | null,
+  ) {
+    this.logger.log(`ActionToolsProvider initialized. ApprovalService available: ${!!this.approvalService}`);
+  }
 
   /**
    * Get action tools (cached)
@@ -158,13 +164,21 @@ Creates a reminder event that will appear in morning brief.`,
 
   /**
    * Handle send_telegram tool
-   * Creates pending approval, does NOT send directly
+   * Creates pending approval via ApprovalService, does NOT send directly
    */
   private async handleSendTelegram(args: {
     entityId: string;
     text: string;
   }) {
     try {
+      // Check if ApprovalService is available
+      if (!this.approvalService) {
+        return toolError(
+          'Approval service not available',
+          'Cannot send messages - approval system is not configured.',
+        );
+      }
+
       const entity = await this.entityService.findOne(args.entityId);
 
       // Find Telegram identifier
@@ -179,14 +193,28 @@ Creates a reminder event that will appear in morning brief.`,
         );
       }
 
-      // Return pending status - actual approval is handled by ApprovalService
+      // Create approval request (non-blocking)
+      const result = await this.approvalService.createApproval(
+        args.entityId,
+        args.text,
+      );
+
+      if (result.status === 'error') {
+        return toolError(
+          `Failed to create approval: ${result.error}`,
+          'Try again or check if the contact has valid Telegram identifier.',
+        );
+      }
+
+      this.logger.log(`Created approval ${result.approvalId} for ${entity.name}`);
+
       return toolSuccess({
         status: 'pending_approval',
+        approvalId: result.approvalId,
         entityId: args.entityId,
         entityName: entity.name,
         text: args.text,
-        telegramUserId: telegramId.identifierValue,
-        message: `Message to ${entity.name} is pending user approval. User will see this message and can approve, edit, or cancel.`,
+        message: `Сообщение для ${entity.name} отправлено на подтверждение. Пользователь увидит его в боте и может одобрить, отредактировать или отменить.`,
       });
     } catch (error) {
       return handleToolError(error, this.logger, 'send_telegram');
@@ -254,7 +282,9 @@ Creates a reminder event that will appear in morning brief.`,
 ${recentMessages.length > 0 ? `Недавние сообщения (для понимания стиля общения):
 ${recentMessages.slice(0, 5).map((m) => `- "${m}"`).join('\n')}` : ''}
 
-Требования:
+ВАЖНЫЕ ПРАВИЛА:
+- Пиши ТОЛЬКО НА РУССКОМ ЯЗЫКЕ
+- Обращайся к человеку по имени НА РУССКОМ (например, "Маша" не "Marina", "Галя" не "Galina", "Серёжа" не "Sergey")
 - Краткое (1-3 предложения максимум)
 - Естественное, как будто пишет реальный человек
 - Соответствует указанному тону

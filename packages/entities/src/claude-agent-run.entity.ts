@@ -17,7 +17,8 @@ export type ClaudeTaskType =
   | 'meeting_prep'
   | 'daily_brief'
   | 'action'
-  | 'draft_generation';
+  | 'draft_generation'
+  | 'message_regeneration';
 
 export type ExecutionMode = 'oneshot' | 'agent';
 

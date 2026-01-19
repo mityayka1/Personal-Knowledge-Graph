@@ -35,7 +35,32 @@ export class EntityService {
     }
 
     if (search) {
-      qb.andWhere('entity.name ILIKE :search', { search: `%${search}%` });
+      // Check if search is a username (starts with @)
+      if (search.startsWith('@')) {
+        const username = search.slice(1); // Remove @
+        qb.leftJoin('entity.identifiers', 'identifier')
+          .andWhere(
+            '(identifier.identifierType = :usernameType AND identifier.identifierValue ILIKE :username)',
+            { usernameType: 'telegram_username', username: `%${username}%` },
+          );
+      }
+      // Check if search looks like a phone number
+      else if (/^\+?\d[\d\s-]{5,}$/.test(search)) {
+        const phone = search.replace(/[\s-]/g, ''); // Remove spaces and dashes
+        qb.leftJoin('entity.identifiers', 'identifier')
+          .andWhere(
+            '(identifier.identifierType = :phoneType AND identifier.identifierValue LIKE :phone)',
+            { phoneType: 'phone', phone: `%${phone}%` },
+          );
+      }
+      // Default: search by name OR by any identifier value
+      else {
+        qb.leftJoin('entity.identifiers', 'identifier')
+          .andWhere(
+            '(entity.name ILIKE :search OR identifier.identifierValue ILIKE :search)',
+            { search: `%${search}%` },
+          );
+      }
     }
 
     const [items, total] = await qb.getManyAndCount();
@@ -92,6 +117,7 @@ export class EntityService {
     if (dto.name) entity.name = dto.name;
     if (dto.organizationId !== undefined) entity.organizationId = dto.organizationId;
     if (dto.notes !== undefined) entity.notes = dto.notes;
+    if (dto.profilePhoto !== undefined) entity.profilePhoto = dto.profilePhoto;
 
     await this.entityRepo.save(entity);
 

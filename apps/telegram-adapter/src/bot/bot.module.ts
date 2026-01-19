@@ -4,6 +4,7 @@ import { ApiModule } from '../api/api.module';
 import { BotService } from './bot.service';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
+import { ActHandler } from './handlers/act.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
@@ -17,6 +18,7 @@ import { ApiKeyGuard } from '../common/guards/api-key.guard';
     BotService,
     RecallHandler,
     PrepareHandler,
+    ActHandler,
     EventCallbackHandler,
     CarouselCallbackHandler,
     ApprovalCallbackHandler,

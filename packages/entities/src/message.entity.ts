@@ -94,6 +94,15 @@ export class Message {
   @JoinColumn({ name: 'sender_entity_id' })
   senderEntity: EntityRecord | null;
 
+  // Recipient entity for outgoing messages in private chats
+  @Column({ name: 'recipient_entity_id', type: 'uuid', nullable: true })
+  @Index()
+  recipientEntityId: string | null;
+
+  @ManyToOne(() => EntityRecord, { nullable: true })
+  @JoinColumn({ name: 'recipient_entity_id' })
+  recipientEntity: EntityRecord | null;
+
   // Identifier of the sender (e.g., telegram_user_id) - for proper message attribution
   @Column({ name: 'sender_identifier_type', type: 'varchar', length: 50, nullable: true })
   senderIdentifierType: string | null;

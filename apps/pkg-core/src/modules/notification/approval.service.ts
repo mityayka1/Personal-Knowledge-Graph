@@ -33,6 +33,8 @@ export interface PendingApproval {
   entityName: string;
   /** Telegram user ID of recipient */
   telegramUserId: string;
+  /** Telegram username of recipient (without @) */
+  telegramUsername: string | null;
   /** Message text to send */
   text: string;
   /** Current status */
@@ -185,6 +187,76 @@ export class ApprovalService implements OnModuleDestroy {
   }
 
   /**
+   * Create a pending approval and show bot message (async, non-blocking).
+   * Does NOT wait for user response - returns immediately with approval ID.
+   *
+   * Use this from tools when you don't want to block the agent loop.
+   *
+   * @param entityId - UUID of recipient entity
+   * @param text - Message text to send
+   * @returns Object with approvalId and status
+   */
+  async createApproval(
+    entityId: string,
+    text: string,
+  ): Promise<{ approvalId: string; status: 'pending' | 'error'; error?: string }> {
+    try {
+      // Get entity info
+      const entity = await this.entityService.findOne(entityId);
+      const telegramId = entity.identifiers?.find(
+        (i) => i.identifierType === 'telegram_user_id',
+      );
+
+      if (!telegramId) {
+        return { approvalId: '', status: 'error', error: 'No Telegram identifier for entity' };
+      }
+
+      // Get telegram username if available
+      const telegramUsername = entity.identifiers?.find(
+        (i) => i.identifierType === 'telegram_username',
+      );
+
+      // Generate short approval ID
+      const approvalId = `a_${randomBytes(6).toString('hex')}`;
+
+      // Create pending approval
+      const approval: PendingApproval = {
+        id: approvalId,
+        entityId,
+        entityName: entity.name,
+        telegramUserId: telegramId.identifierValue,
+        telegramUsername: telegramUsername?.identifierValue || null,
+        text,
+        status: ApprovalStatus.PENDING,
+        editMode: null,
+        botMessageId: null,
+        chatId: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      // Save to Redis
+      await this.save(approvalId, approval);
+
+      // Send approval message to user
+      const messageId = await this.sendApprovalMessage(approval);
+
+      if (messageId) {
+        approval.botMessageId = messageId;
+        approval.chatId = String(await this.telegramNotifier.getOwnerChatId());
+        await this.save(approvalId, approval);
+      }
+
+      this.logger.log(`Created approval ${approvalId} for ${entity.name}`);
+
+      return { approvalId, status: 'pending' };
+    } catch (error) {
+      this.logger.error(`Failed to create approval: ${error}`);
+      return { approvalId: '', status: 'error', error: String(error) };
+    }
+  }
+
+  /**
    * Create a pending approval and show bot message.
    * Returns a Promise that resolves when user responds.
    *
@@ -206,6 +278,11 @@ export class ApprovalService implements OnModuleDestroy {
       return { approved: false, reason: 'No Telegram identifier for entity' };
     }
 
+    // Get telegram username if available
+    const telegramUsername = entity.identifiers?.find(
+      (i) => i.identifierType === 'telegram_username',
+    );
+
     // Generate short approval ID
     const approvalId = `a_${randomBytes(6).toString('hex')}`;
 
@@ -215,6 +292,7 @@ export class ApprovalService implements OnModuleDestroy {
       entityId,
       entityName: entity.name,
       telegramUserId: telegramId.identifierValue,
+      telegramUsername: telegramUsername?.identifierValue || null,
       text,
       status: ApprovalStatus.PENDING,
       editMode: null,
@@ -400,9 +478,24 @@ export class ApprovalService implements OnModuleDestroy {
   private async sendApprovalMessage(
     approval: PendingApproval,
   ): Promise<number | null> {
+    // Create clickable contact link
+    // Priority: https://t.me/username (more reliable) > tg://user?id=X (limited)
+    const escapedName = this.escapeHtml(approval.entityName);
+    let contactLink: string;
+
+    if (approval.telegramUsername) {
+      // Username link - works for users and bots
+      contactLink = `<a href="https://t.me/${approval.telegramUsername}">${escapedName}</a>`;
+    } else if (approval.telegramUserId) {
+      // User ID link - limited to users who interacted with bot
+      contactLink = `<a href="tg://user?id=${approval.telegramUserId}">${escapedName}</a>`;
+    } else {
+      contactLink = escapedName;
+    }
+
     const message = `📤 <b>Отправить сообщение?</b>
 
-<b>Кому:</b> ${this.escapeHtml(approval.entityName)}
+<b>Кому:</b> ${contactLink}
 
 <b>Текст:</b>
 ${this.escapeHtml(approval.text)}`;

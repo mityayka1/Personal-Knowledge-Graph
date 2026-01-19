@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import {
   SearchToolsProvider,
@@ -35,13 +35,21 @@ export class ToolsRegistryService {
     private readonly entityToolsProvider: EntityToolsProvider,
     private readonly eventToolsProvider: EventToolsProvider,
     @Optional()
+    @Inject(forwardRef(() => ContextToolsProvider))
     private readonly contextToolsProvider: ContextToolsProvider | null,
     @Optional()
+    @Inject(forwardRef(() => ActionToolsProvider))
     private readonly actionToolsProvider: ActionToolsProvider | null,
   ) {
     // Log availability of context tools
     if (!this.contextToolsProvider?.hasTools()) {
       this.logger.warn('ContextToolsProvider not available - context tools disabled');
+    }
+    // Log availability of action tools
+    this.logger.log(`ActionToolsProvider available: ${!!this.actionToolsProvider}`);
+    if (this.actionToolsProvider) {
+      const actionTools = this.actionToolsProvider.getTools();
+      this.logger.log(`Action tools count: ${actionTools.length}, names: ${actionTools.map(t => t.name).join(', ')}`);
     }
   }
 
@@ -119,8 +127,8 @@ export class ToolsRegistryService {
   createMcpServer(categories: ToolCategory[] = ['all']): ReturnType<typeof createSdkMcpServer> {
     const tools = this.getToolsByCategory(categories);
 
-    this.logger.debug(
-      `Creating MCP server with ${tools.length} tools: ${tools.map(t => t.name).join(', ')}`
+    this.logger.log(
+      `Creating MCP server with ${tools.length} tools for categories [${categories.join(',')}]: ${tools.map(t => t.name).join(', ')}`
     );
 
     return createSdkMcpServer({

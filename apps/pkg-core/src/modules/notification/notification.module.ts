@@ -19,6 +19,7 @@ import { ApprovalController } from './approval.controller';
 import { TelegramSendService } from './telegram-send.service';
 import { SettingsModule } from '../settings/settings.module';
 import { EntityModule } from '../entity/entity.module';
+import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { EntityModule } from '../entity/entity.module';
     }),
     SettingsModule,
     forwardRef(() => EntityModule),
+    forwardRef(() => ClaudeAgentModule),
   ],
   controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController],
   providers: [
