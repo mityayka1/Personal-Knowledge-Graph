@@ -1,7 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { Job } from '@pkg/entities';
+import { Job, Message } from '@pkg/entities';
 import { JobService } from './job.service';
 import { EmbeddingProcessor } from './processors/embedding.processor';
 import { FactExtractionProcessor } from './processors/fact-extraction.processor';
@@ -13,7 +13,7 @@ import { EntityModule } from '../entity/entity.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Job]),
+    TypeOrmModule.forFeature([Job, Message]),
     BullModule.registerQueue({ name: 'embedding' }),
     BullModule.registerQueue({
       name: 'fact-extraction',
