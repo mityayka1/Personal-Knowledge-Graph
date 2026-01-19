@@ -13,6 +13,8 @@ interface TelegramUserInfo {
   isVerified?: boolean;
   isPremium?: boolean;
   photoBase64?: string;
+  /** Birthday in format "YYYY-MM-DD" or "MM-DD" (if year not shared) */
+  birthday?: string;
 }
 
 /**
@@ -61,6 +63,9 @@ interface ProcessedMessage {
   participants_count?: number;
   /** Chat title (for groups/channels) */
   chat_title?: string;
+  /** Recipient info for outgoing messages in private chats */
+  recipient_user_id?: string;
+  recipient_user_info?: TelegramUserInfo;
 }
 
 interface CachedChatInfo {
@@ -159,6 +164,84 @@ export class MessageHandlerService {
     return undefined;
   }
 
+  /**
+   * Fetch user's birthday from full user info.
+   * Returns birthday in "YYYY-MM-DD" or "MM-DD" format.
+   */
+  private async fetchUserBirthday(client: TelegramClient, user: Api.User): Promise<string | undefined> {
+    try {
+      const fullUser = await client.invoke(
+        new Api.users.GetFullUser({
+          id: user,
+        }),
+      );
+
+      if (fullUser.fullUser?.birthday) {
+        const birthday = fullUser.fullUser.birthday;
+        // Birthday has day, month, and optionally year
+        const day = String(birthday.day).padStart(2, '0');
+        const month = String(birthday.month).padStart(2, '0');
+
+        if (birthday.year) {
+          return `${birthday.year}-${month}-${day}`;
+        } else {
+          // Year not shared - return MM-DD format
+          return `${month}-${day}`;
+        }
+      }
+    } catch (error) {
+      // This is expected for users who don't share birthday or bots
+      this.logger.debug(`Could not fetch birthday for user ${user.id}: ${error}`);
+    }
+    return undefined;
+  }
+
+  /**
+   * Fetch full user info by user ID.
+   * Used for outgoing messages in private chats to get recipient info.
+   */
+  private async fetchUserInfo(client: TelegramClient, userId: string): Promise<TelegramUserInfo | undefined> {
+    try {
+      const entity = await client.getEntity(userId);
+      if (!(entity instanceof Api.User)) {
+        return undefined;
+      }
+
+      const userInfo: TelegramUserInfo = {
+        username: entity.username || undefined,
+        firstName: entity.firstName || undefined,
+        lastName: entity.lastName || undefined,
+        phone: entity.phone || undefined,
+        isBot: entity.bot || undefined,
+        isVerified: entity.verified || undefined,
+        isPremium: entity.premium || undefined,
+      };
+
+      // Fetch photo and birthday in parallel
+      const [photoBase64, birthday] = await Promise.all([
+        this.downloadProfilePhoto(client, entity),
+        this.fetchUserBirthday(client, entity),
+      ]);
+
+      if (photoBase64) {
+        userInfo.photoBase64 = photoBase64;
+      }
+      if (birthday) {
+        userInfo.birthday = birthday;
+      }
+
+      // Remove undefined values
+      const cleanedInfo = Object.fromEntries(
+        Object.entries(userInfo).filter(([_, v]) => v !== undefined),
+      ) as TelegramUserInfo;
+
+      return Object.keys(cleanedInfo).length > 0 ? cleanedInfo : undefined;
+    } catch (error) {
+      this.logger.warn(`Failed to fetch user info for ${userId}: ${error}`);
+      return undefined;
+    }
+  }
+
   private async extractMessageData(
     message: Api.Message,
     chatId: string,
@@ -176,6 +259,15 @@ export class MessageHandlerService {
     let displayName: string | undefined;
     let userInfo: TelegramUserInfo | undefined;
 
+    // Determine chat type early for recipient info logic
+    const chatType = options?.chatType || this.inferChatType(chatId);
+    const isOutgoingPrivateChat = message.out && chatType === 'private';
+
+    // Recipient info for outgoing private chat messages
+    let recipientUserId: string | undefined;
+    let recipientUserInfo: TelegramUserInfo | undefined;
+
+    // Get sender info
     if (sender && sender instanceof Api.User) {
       username = sender.username || undefined;
       const firstName = sender.firstName || '';
@@ -193,11 +285,17 @@ export class MessageHandlerService {
         isPremium: sender.premium || undefined,
       };
 
-      // Try to download profile photo if client is available
+      // Try to download profile photo and fetch birthday if client is available
       if (client) {
-        const photoBase64 = await this.downloadProfilePhoto(client, sender);
+        const [photoBase64, birthday] = await Promise.all([
+          this.downloadProfilePhoto(client, sender),
+          this.fetchUserBirthday(client, sender),
+        ]);
         if (photoBase64) {
           userInfo.photoBase64 = photoBase64;
+        }
+        if (birthday) {
+          userInfo.birthday = birthday;
         }
       }
 
@@ -219,8 +317,11 @@ export class MessageHandlerService {
       displayName = `${firstName} ${lastName}`.trim() || undefined;
     }
 
-    // Determine chat type from chatId prefix if not provided
-    const chatType = options?.chatType || this.inferChatType(chatId);
+    // For outgoing messages in private chats, also get RECIPIENT info
+    if (isOutgoingPrivateChat && client && chatId.startsWith('user_')) {
+      recipientUserId = chatId.replace('user_', '');
+      recipientUserInfo = await this.fetchUserInfo(client, recipientUserId);
+    }
 
     // Get chat info (participants count and title) from cache or fetch
     let participantsCount = options?.participantsCount;
@@ -249,11 +350,23 @@ export class MessageHandlerService {
       topic_name: options?.topicName,
       participants_count: participantsCount,
       chat_title: chatTitle,
+      // Recipient info for outgoing messages in private chats
+      recipient_user_id: recipientUserId,
+      recipient_user_info: recipientUserInfo,
     };
 
     // Handle reply
+    // In forum chats, replyToMsgId may point to the topic's first message (replyToTopId)
+    // We only want to track actual replies to specific messages, not just "message in topic"
     if (message.replyTo && 'replyToMsgId' in message.replyTo && message.replyTo.replyToMsgId) {
-      processed.reply_to_message_id = message.replyTo.replyToMsgId.toString();
+      const replyToMsgId = message.replyTo.replyToMsgId;
+      const replyToTopId = 'replyToTopId' in message.replyTo ? message.replyTo.replyToTopId : undefined;
+
+      // Only set reply_to_message_id if it's a real reply (not just a topic message)
+      // In forums: replyToMsgId === replyToTopId means it's just posted in topic, not a reply
+      if (!replyToTopId || replyToMsgId !== replyToTopId) {
+        processed.reply_to_message_id = replyToMsgId.toString();
+      }
     }
 
     // Handle media

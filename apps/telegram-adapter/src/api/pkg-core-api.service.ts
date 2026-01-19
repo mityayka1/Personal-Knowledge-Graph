@@ -148,6 +148,53 @@ export interface CarouselNavResponse {
   error?: string;
 }
 
+// ============================================
+// Message Approval API Types (Phase A: Act)
+// ============================================
+
+export interface ApprovalResponse {
+  success: boolean;
+  sendResult?: {
+    messageId?: number;
+    chatId?: string;
+  };
+  approval?: {
+    id: string;
+    status: string;
+    text?: string;
+    entityName?: string;
+    editMode?: 'describe' | 'verbatim' | null;
+  };
+  error?: string;
+}
+
+// ============================================
+// Act API Types (Phase A: Act command)
+// ============================================
+
+export interface ActRequestDto {
+  instruction: string;
+}
+
+export interface ActActionDto {
+  type: 'draft_created' | 'message_sent' | 'approval_rejected' | 'followup_created';
+  entityId?: string;
+  entityName?: string;
+  details?: string;
+}
+
+export interface ActResponseData {
+  result: string;
+  actions: ActActionDto[];
+  toolsUsed: string[];
+}
+
+export interface ActResponse {
+  success: boolean;
+  data: ActResponseData;
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -413,6 +460,99 @@ export class PkgCoreApiService {
     return this.withRetry(async () => {
       const response = await this.client.post<CarouselNavResponse>(
         `/carousel/${carouselId}/reject`,
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Message Approval API Methods (Phase A: Act)
+  // ============================================
+
+  /**
+   * Approve and send message via userbot
+   */
+  async approveAndSend(approvalId: string): Promise<ApprovalResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ApprovalResponse>(
+        `/approvals/${approvalId}/approve`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject/cancel approval
+   */
+  async rejectApproval(approvalId: string): Promise<ApprovalResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ApprovalResponse>(
+        `/approvals/${approvalId}/reject`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Set edit mode for approval
+   */
+  async setApprovalEditMode(
+    approvalId: string,
+    mode: 'describe' | 'verbatim',
+  ): Promise<ApprovalResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ApprovalResponse>(
+        `/approvals/${approvalId}/edit-mode`,
+        { mode },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Update approval text (verbatim edit mode)
+   */
+  async updateApprovalText(approvalId: string, text: string): Promise<ApprovalResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ApprovalResponse>(
+        `/approvals/${approvalId}/update-text`,
+        { text },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Regenerate approval text based on description (describe edit mode)
+   */
+  async regenerateApprovalText(
+    approvalId: string,
+    description: string,
+  ): Promise<ApprovalResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ApprovalResponse>(
+        `/approvals/${approvalId}/regenerate`,
+        { description },
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Act API Methods (Phase A: Act command)
+  // ============================================
+
+  /**
+   * Execute an action instruction via Claude agent
+   * @param instruction Natural language instruction (e.g., "напиши Сергею что встреча переносится")
+   * @param timeout Optional timeout in ms (default: 120000 for agent operations)
+   */
+  async act(instruction: string, timeout = 120000): Promise<ActResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ActResponse>(
+        '/agent/act',
+        { instruction } as ActRequestDto,
+        { timeout },
       );
       return response.data;
     });

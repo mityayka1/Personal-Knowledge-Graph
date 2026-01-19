@@ -1,7 +1,7 @@
 Cj# PKG Second Brain — Implementation Checklist
 
 > Краткий чеклист для отслеживания прогресса. Детали в [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md)
-
+Jl;ПР
 ## Pre-requisites
 
 - [x] Верификация миграции Agent SDK
@@ -158,46 +158,48 @@ Cj# PKG Second Brain — Implementation Checklist
 
 > См. [PLAN_PHASE_A.md](./PLAN_PHASE_A.md) для детального плана
 
-### Week 6: Core Infrastructure
+### Week 6: Core Infrastructure ✅ COMPLETED
 
-#### A1.1 ActionToolsProvider (Day 25-26)
-- [ ] draft_message tool
-- [ ] send_telegram tool
-- [ ] schedule_followup tool
+#### A1.1 ActionToolsProvider (Day 25-26) ✅
+- [x] draft_message tool
+- [x] send_telegram tool
+- [x] schedule_followup tool
 
-#### A1.2 Approval Hooks (Day 27-28)
-- [ ] ApprovalHookService
-- [ ] requestApproval method
-- [ ] handleApprovalResponse
-- [ ] Timeout handling (2 min)
+#### A1.2 ApprovalService (Day 27-28) ✅
+- [x] createApproval method (non-blocking)
+- [x] requestApproval method (blocking with Promise)
+- [x] handleAction (approve/reject/edit)
+- [x] setEditMode / updateText
+- [x] Redis storage with TTL (2 min)
+- [x] Pub/Sub for async notification
 
-#### A1.3 TelegramSendService (Day 28)
-- [ ] sendToEntity method
-- [ ] Identifier lookup
-- [ ] Error handling
+#### A1.3 Approval UI (Day 28) ✅
+- [x] sendApprovalMessage with buttons
+- [x] Три кнопки: ✅ Отправить / ✏️ Изменить / ❌ Отмена
+- [x] Callback format: act_a:{id}, act_e:{id}, act_r:{id}
 
-#### A1.4 Send-as-User Endpoint (Day 28)
-- [ ] POST /telegram/send-as-user в Telegram Adapter
-- [ ] GramJS sendMessage через юзербот
-- [ ] Логирование отправленных сообщений
+#### A1.4 Module Integration (Day 28) ✅
+- [x] NotificationModule exports ApprovalService
+- [x] ClaudeAgentModule imports NotificationModule (forwardRef)
+- [x] ActionToolsProvider injected with forwardRef
+- [x] ToolsRegistryService registers action tools
 
 ### Week 7: Integration & UX
 
-#### A2.1 Act Endpoint (Day 29)
-- [ ] POST /agent/act
-- [ ] Approval hook integration
-- [ ] Response formatting
+#### A2.1 Act Endpoint (Day 29) ✅
+- [x] POST /agent/act works
+- [x] Tools: list_entities → draft_message → send_telegram
+- [x] Response with actions array
 
-#### A2.2 Approval Flow UI (Day 29)
-- [ ] Три кнопки: Отправить / Изменить / Отмена
-- [ ] Callback handlers: act_approve, act_edit, act_cancel
+#### A2.2 Approval GET Endpoint (Day 29) ✅
+- [x] GET /api/v1/approvals/:id
+- [x] Returns approval status from Redis
 
 #### A2.3 Edit Mode Selection (Day 30)
 - [ ] Кнопки: Задать / Как есть
 - [ ] "Задать" → AI генерирует по описанию
 - [ ] "Как есть" → отправка verbatim текста
 - [ ] Callback handlers: edit_describe, edit_verbatim
-- [ ] Conversation state в Redis
 
 #### A2.4 Proactive Action Buttons (Day 31)
 - [ ] Action buttons в Morning Brief
@@ -211,7 +213,12 @@ Cj# PKG Second Brain — Implementation Checklist
 - [ ] Кнопки: Через 2 часа / Завтра / Не нужно
 - [ ] Автоматическое создание EntityEvent (FOLLOW_UP)
 
-#### A2.6 /act Command (Day 32)
+#### A2.6 Send-as-User Integration (Day 32)
+- [ ] POST /telegram/send-as-user в Telegram Adapter
+- [ ] GramJS sendMessage через юзербот
+- [ ] Логирование отправленных сообщений
+
+#### A2.7 /act Command (Day 32)
 - [ ] /act команда в боте
 - [ ] Natural language action detection
 - [ ] Integration tests

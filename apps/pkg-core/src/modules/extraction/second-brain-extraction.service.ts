@@ -115,8 +115,12 @@ export class SecondBrainExtractionService {
     entityId?: string;
     entityName: string;
     isOutgoing: boolean;
+    /** Content of the message this message is replying to (for context) */
+    replyToContent?: string;
+    /** Forum topic name (if message is from a forum topic) */
+    topicName?: string;
   }): Promise<SecondBrainExtractionResult> {
-    const { messageId, messageContent, interactionId, entityId, entityName, isOutgoing } = params;
+    const { messageId, messageContent, interactionId, entityId, entityName, isOutgoing, replyToContent, topicName } = params;
 
     // Get settings for extraction
     const settings = await this.settingsService.getExtractionSettings();
@@ -126,7 +130,7 @@ export class SecondBrainExtractionService {
       return { sourceMessageId: messageId, extractedEvents: [], tokensUsed: 0 };
     }
 
-    const prompt = this.buildPrompt(entityName, messageContent, isOutgoing, settings.maxContentLength);
+    const prompt = this.buildPrompt(entityName, messageContent, isOutgoing, settings.maxContentLength, replyToContent, topicName);
 
     try {
       const { data, usage } = await this.claudeAgentService.call<ExtractionResponse>({
@@ -226,6 +230,8 @@ export class SecondBrainExtractionService {
       entityId?: string;
       entityName: string;
       isOutgoing: boolean;
+      replyToContent?: string;
+      topicName?: string;
     }>,
   ): Promise<SecondBrainExtractionResult[]> {
     const results: SecondBrainExtractionResult[] = [];
@@ -473,13 +479,36 @@ export class SecondBrainExtractionService {
     content: string,
     isOutgoing: boolean,
     maxContentLength: number = 1000,
+    replyToContent?: string,
+    topicName?: string,
   ): string {
     const sender = isOutgoing ? 'я (пользователь)' : entityName;
     const cleanContent = content.replace(/\n/g, ' ').substring(0, maxContentLength);
     const today = new Date().toISOString().split('T')[0];
 
-    return `Проанализируй сообщение и извлеки события для "второй памяти".
+    // Build topic context section if available
+    let topicContext = '';
+    if (topicName) {
+      topicContext = `
+ТЕМА ФОРУМА: "${topicName}"
+Это сообщение из форумного чата в теме "${topicName}". Учитывай это при анализе контекста.
 
+`;
+    }
+
+    // Build reply context section if available
+    let replyContext = '';
+    if (replyToContent) {
+      const cleanReplyContent = replyToContent.replace(/\n/g, ' ').substring(0, 500);
+      replyContext = `
+КОНТЕКСТ (сообщение на которое отвечают):
+"${cleanReplyContent}"
+
+`;
+    }
+
+    return `Проанализируй сообщение и извлеки события для "второй памяти".
+${topicContext}${replyContext}
 Собеседник: ${entityName}
 Автор сообщения: ${sender}
 Сегодня: ${today}
@@ -510,21 +539,26 @@ export class SecondBrainExtractionService {
 - sourceQuote — оригинальный фрагмент текста
 - Не извлекай события из сообщений-шуток или гипотетических ситуаций
 - Различай "promise_by_me" (я обещаю) и "promise_by_them" (мне обещают)
+- ЕСЛИ ЕСТЬ КОНТЕКСТ (сообщение на которое отвечают) — используй его для понимания смысла!
+  Пример: контекст "Подготовь отчёт до пятницы", сообщение "Ок, сделаю" → promise_by_me с what="подготовить отчёт"
 
 АБСТРАКТНЫЕ СОБЫТИЯ (needsEnrichment = true):
-Устанавливай needsEnrichment=true если событие ссылается на что-то без конкретики:
+Устанавливай needsEnrichment=true ТОЛЬКО если:
+1. Событие ссылается на что-то без конкретики
+2. И НЕТ контекста (сообщения на которое отвечают), который проясняет смысл
 
-Примеры АБСТРАКТНЫХ событий (needsEnrichment: true):
+Примеры БЕЗ контекста (needsEnrichment: true):
 - "приступлю к задаче" → какая задача? нужен контекст
 - "созвонимся по нашему вопросу" → какой вопрос?
 - "подготовлю документы" → какие документы?
-- "сделаю как обсуждали" → что обсуждали?
-- "напомни мне об этом" → о чём?
 
-Примеры КОНКРЕТНЫХ событий (needsEnrichment: false или не указывать):
+Примеры С контекстом (needsEnrichment: false):
+- Контекст: "Сможешь сделать презентацию?", Сообщение: "Да, сделаю" → КОНКРЕТНО, what="сделать презентацию"
+- Контекст: "Созвонимся завтра в 15:00?", Сообщение: "Ок" → КОНКРЕТНО, meeting с datetime
+
+Примеры КОНКРЕТНЫХ событий (needsEnrichment: false):
 - "приступлю к отчёту Q4" → задача ясна
 - "созвонимся по проекту Alpha" → тема указана
-- "у меня ДР 15 марта" → факт конкретный
-- "отправлю презентацию до вечера" → что и когда понятно`;
+- "у меня ДР 15 марта" → факт конкретный`;
   }
 }

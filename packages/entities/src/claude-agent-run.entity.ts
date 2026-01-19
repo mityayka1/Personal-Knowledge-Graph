@@ -16,7 +16,9 @@ export type ClaudeTaskType =
   | 'recall'
   | 'meeting_prep'
   | 'daily_brief'
-  | 'action';
+  | 'action'
+  | 'draft_generation'
+  | 'message_regeneration';
 
 export type ExecutionMode = 'oneshot' | 'agent';
 

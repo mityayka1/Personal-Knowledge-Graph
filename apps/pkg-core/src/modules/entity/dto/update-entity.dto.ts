@@ -12,4 +12,8 @@ export class UpdateEntityDto {
   @IsOptional()
   @IsString()
   notes?: string | null;
+
+  @IsOptional()
+  @IsString()
+  profilePhoto?: string | null;
 }

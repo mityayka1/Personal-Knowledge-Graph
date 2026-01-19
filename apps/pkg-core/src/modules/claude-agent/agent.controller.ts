@@ -20,6 +20,9 @@ import {
   RecallRequestDto,
   RecallResponseDto,
   PrepareResponseDto,
+  ActRequestDto,
+  ActResponseDto,
+  ActActionDto,
 } from './dto';
 import {
   RecallSource,
@@ -95,6 +98,56 @@ type PrepareStructuredOutput = {
   brief: string;
   recentInteractions: number;
   openQuestions: string[];
+};
+
+/**
+ * Raw JSON Schema for act response
+ */
+const ACT_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    result: {
+      type: 'string',
+      description: 'Summary of what was done in Russian',
+    },
+    actions: {
+      type: 'array',
+      description: 'Actions taken during execution',
+      items: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            description: 'Action type: draft_created, message_sent, approval_rejected, followup_created',
+          },
+          entityId: {
+            type: 'string',
+            description: 'UUID of entity involved',
+          },
+          entityName: {
+            type: 'string',
+            description: 'Name of entity',
+          },
+          details: {
+            type: 'string',
+            description: 'Additional details about the action',
+          },
+        },
+        required: ['type'],
+      },
+    },
+  },
+  required: ['result', 'actions'],
+};
+
+type ActStructuredOutput = {
+  result: string;
+  actions: Array<{
+    type: string;
+    entityId?: string;
+    entityName?: string;
+    details?: string;
+  }>;
 };
 
 /**
@@ -327,4 +380,116 @@ export class AgentController {
 Если данных мало — так и скажи в brief.`;
   }
 
+  /**
+   * POST /agent/act
+   *
+   * Execute an action based on natural language instruction
+   *
+   * @example
+   * POST /agent/act
+   * { "instruction": "напиши Сергею что встреча переносится" }
+   */
+  @Post('act')
+  @ApiOperation({
+    summary: 'Execute an action',
+    description:
+      'Execute an action based on natural language instruction. Supports sending messages with approval flow.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Action executed successfully',
+    type: ActResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid instruction' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async act(@Body() dto: ActRequestDto): Promise<ActResponseDto> {
+    this.logger.log(
+      `Act request: "${dto.instruction.slice(0, 100)}..." maxTurns=${dto.maxTurns || 10}`,
+    );
+
+    // Validation handled by class-validator decorators in DTO
+    if (!dto.instruction || dto.instruction.trim().length < 5) {
+      throw new HttpException(
+        'Instruction must be at least 5 characters',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    try {
+      // Agent with actions tools and structured output
+      const result = await this.claudeAgentService.call<ActStructuredOutput>({
+        mode: 'agent',
+        taskType: 'action',
+        prompt: this.buildActPrompt(dto.instruction),
+        toolCategories: ['search', 'entities', 'events', 'actions'],
+        model: 'sonnet',
+        maxTurns: dto.maxTurns || 10,
+        outputFormat: {
+          type: 'json_schema',
+          schema: ACT_RESPONSE_SCHEMA,
+          strict: true,
+        },
+      });
+
+      const structuredData = result.data as ActStructuredOutput;
+
+      // Map actions to response format
+      const actions: ActActionDto[] = (structuredData?.actions || []).map(
+        (a) => ({
+          type: a.type as ActActionDto['type'],
+          entityId: a.entityId,
+          entityName: a.entityName,
+          details: a.details,
+        }),
+      );
+
+      return {
+        success: true,
+        data: {
+          result: structuredData?.result || 'Действие выполнено.',
+          actions,
+          toolsUsed: result.toolsUsed || [],
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Act failed: ${error}`);
+      throw new HttpException(
+        'Failed to execute action',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Build prompt for act task
+   */
+  private buildActPrompt(instruction: string): string {
+    return `Выполни действие по инструкции пользователя: "${instruction}"
+
+Используй инструменты:
+1. list_entities или get_entity_details — найди нужного контакта
+2. draft_message — создай черновик сообщения
+3. send_telegram — отправь сообщение (требует подтверждения пользователя)
+4. schedule_followup — создай напоминание проверить ответ (опционально)
+
+Порядок действий:
+1. Найди нужного контакта по имени/описанию
+2. Создай черновик сообщения с draft_message
+3. Отправь с send_telegram (система запросит подтверждение)
+4. При необходимости создай follow-up напоминание
+
+КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ СООБЩЕНИЙ:
+- ВСЕГДА пиши сообщения НА РУССКОМ ЯЗЫКЕ
+- Обращайся к людям по имени НА РУССКОМ (используй русскую форму имени: "Маша" не "Marina", "Галя" не "Galina", "Серёжа" не "Sergey", "Марина" не "Marina")
+- Сообщения должны быть короткими и естественными
+
+ВАЖНО:
+- Всегда сначала найди контакта перед отправкой
+- draft_message показывает черновик перед отправкой
+- send_telegram отправляет от имени пользователя через его Telegram
+
+Заполни поля ответа:
+- result: что было сделано (на русском)
+- actions: массив выполненных действий [{type: "draft_created"|"message_sent"|"approval_rejected"|"followup_created", entityId, entityName, details}]`;
+  }
 }

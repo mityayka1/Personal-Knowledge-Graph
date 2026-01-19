@@ -11,11 +11,13 @@ import {
   EntityToolsProvider,
   EventToolsProvider,
   ContextToolsProvider,
+  ActionToolsProvider,
 } from './tools';
 import { SearchModule } from '../search/search.module';
 import { ContextModule } from '../context/context.module';
 import { EntityEventModule } from '../entity-event/entity-event.module';
 import { EntityModule } from '../entity/entity.module';
+import { NotificationModule } from '../notification/notification.module';
 
 /**
  * Claude Agent Module
@@ -43,6 +45,8 @@ import { EntityModule } from '../entity/entity.module';
     forwardRef(() => ContextModule),
     EntityEventModule,
     EntityModule,
+    // NotificationModule for ApprovalService (action tools)
+    forwardRef(() => NotificationModule),
   ],
   controllers: [ClaudeAgentController, AgentController],
   providers: [
@@ -55,6 +59,7 @@ import { EntityModule } from '../entity/entity.module';
     EntityToolsProvider,
     EventToolsProvider,
     ContextToolsProvider,
+    ActionToolsProvider,
   ],
   exports: [
     ClaudeAgentService,
@@ -65,6 +70,7 @@ import { EntityModule } from '../entity/entity.module';
     EntityToolsProvider,
     EventToolsProvider,
     ContextToolsProvider,
+    ActionToolsProvider,
   ],
 })
 export class ClaudeAgentModule {}

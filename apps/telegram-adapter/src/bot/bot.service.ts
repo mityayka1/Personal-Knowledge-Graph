@@ -4,8 +4,10 @@ import { Telegraf, Context } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
+import { ActHandler } from './handlers/act.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
+import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
 
 export interface SendNotificationOptions {
   chatId: number | string;
@@ -25,9 +27,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly configService: ConfigService,
     private readonly recallHandler: RecallHandler,
     private readonly prepareHandler: PrepareHandler,
+    private readonly actHandler: ActHandler,
     private readonly eventCallbackHandler: EventCallbackHandler,
     @Inject(forwardRef(() => CarouselCallbackHandler))
     private readonly carouselCallbackHandler: CarouselCallbackHandler,
+    @Inject(forwardRef(() => ApprovalCallbackHandler))
+    private readonly approvalCallbackHandler: ApprovalCallbackHandler,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -94,6 +99,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       { command: 'help', description: 'Показать справку по командам' },
       { command: 'recall', description: 'Поиск по переписке' },
       { command: 'prepare', description: 'Подготовка к встрече' },
+      { command: 'act', description: 'Выполнить действие (написать, напомнить)' },
     ]);
     this.logger.log('Bot commands registered with Telegram');
 
@@ -125,10 +131,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         '🧠 *Second Brain Bot*\n\n' +
           'Доступные команды:\n' +
           '`/recall <запрос>` — поиск по переписке\n' +
-          '`/prepare <имя>` — подготовка к встрече\n\n' +
+          '`/prepare <имя>` — подготовка к встрече\n' +
+          '`/act <действие>` — выполнить действие\n\n' +
           '*Примеры:*\n' +
           '`/recall кто советовал юриста?`\n' +
-          '`/prepare Иван Петров`',
+          '`/prepare Иван Петров`\n' +
+          '`/act напиши Сергею что встреча переносится`',
         { parse_mode: 'Markdown' },
       );
     });
@@ -142,7 +150,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           'Пример: `/recall кто говорил про инвестиции?`\n\n' +
           '`/prepare <имя>`\n' +
           'Подготовка брифа перед встречей с человеком.\n' +
-          'Пример: `/prepare Мария Иванова`',
+          'Пример: `/prepare Мария Иванова`\n\n' +
+          '`/act <действие>`\n' +
+          'Выполнить действие: написать контакту, создать напоминание.\n' +
+          'Пример: `/act напиши Сергею что встреча переносится`',
         { parse_mode: 'Markdown' },
       );
     });
@@ -157,7 +168,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       await this.prepareHandler.handle(ctx);
     });
 
-    this.logger.log('Bot commands registered: /start, /help, /recall, /prepare');
+    // /act command
+    this.bot.command('act', async (ctx) => {
+      await this.actHandler.handle(ctx);
+    });
+
+    this.logger.log('Bot commands registered: /start, /help, /recall, /prepare, /act');
   }
 
   private setupCallbackHandlers(): void {
@@ -173,7 +189,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const callbackData = callbackQuery.data;
 
       // Route to appropriate handler based on callback data prefix
-      if (this.carouselCallbackHandler.canHandle(callbackData)) {
+      if (this.approvalCallbackHandler.canHandle(callbackData)) {
+        await this.approvalCallbackHandler.handle(ctx);
+      } else if (this.carouselCallbackHandler.canHandle(callbackData)) {
         await this.carouselCallbackHandler.handle(ctx);
       } else if (this.eventCallbackHandler.canHandle(callbackData)) {
         await this.eventCallbackHandler.handle(ctx);
@@ -181,6 +199,22 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Unknown callback data: ${callbackData}`);
         await ctx.answerCbQuery('Unknown action');
       }
+    });
+
+    // Handle text messages (for edit mode)
+    this.bot.on('text', async (ctx) => {
+      const chatId = ctx.chat?.id;
+      const text = ctx.message?.text;
+
+      if (!chatId || !text) return;
+
+      // Check if user is in approval edit mode
+      if (this.approvalCallbackHandler.isInEditMode(chatId)) {
+        const handled = await this.approvalCallbackHandler.handleTextMessage(ctx, text);
+        if (handled) return;
+      }
+
+      // Not in any special mode - could add general message handling here
     });
 
     this.logger.log('Callback handlers registered');
