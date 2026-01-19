@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
@@ -74,7 +74,7 @@ export interface ApprovalResult {
  * 5. If approved, TelegramSendService sends message via userbot
  */
 @Injectable()
-export class ApprovalService {
+export class ApprovalService implements OnModuleDestroy {
   private readonly logger = new Logger(ApprovalService.name);
 
   /** Redis key prefix for approvals */
@@ -95,6 +95,7 @@ export class ApprovalService {
     {
       resolve: (result: ApprovalResult) => void;
       timeout: NodeJS.Timeout;
+      resolved: boolean;
     }
   >();
 
@@ -105,6 +106,33 @@ export class ApprovalService {
     private readonly telegramNotifier: TelegramNotifierService,
   ) {
     this.initSubscriber();
+  }
+
+  /**
+   * Cleanup on module destroy - close Redis subscriber and pending promises
+   */
+  async onModuleDestroy(): Promise<void> {
+    this.logger.log('ApprovalService shutting down...');
+
+    // Close Redis subscriber
+    if (this.subscriber) {
+      try {
+        await this.subscriber.quit();
+        this.subscriber = null;
+        this.logger.log('Redis subscriber closed');
+      } catch (error) {
+        this.logger.error('Failed to close Redis subscriber:', error);
+      }
+    }
+
+    // Resolve all pending promises with shutdown reason
+    for (const [id, pending] of this.pendingPromises) {
+      clearTimeout(pending.timeout);
+      pending.resolve({ approved: false, reason: 'Service shutdown' });
+    }
+    this.pendingPromises.clear();
+
+    this.logger.log('ApprovalService shutdown complete');
   }
 
   /**
@@ -138,8 +166,15 @@ export class ApprovalService {
       return;
     }
 
+    // Prevent race condition - check if already resolved
+    if (pending.resolved) {
+      this.logger.debug(`Approval ${approvalId} already resolved, ignoring`);
+      return;
+    }
+
     try {
       const result: ApprovalResult = JSON.parse(message);
+      pending.resolved = true;
       clearTimeout(pending.timeout);
       this.pendingPromises.delete(approvalId);
       pending.resolve(result);
@@ -208,7 +243,18 @@ export class ApprovalService {
 
     // Return promise that resolves on user response
     return new Promise<ApprovalResult>((resolve) => {
-      const timeout = setTimeout(() => {
+      const pendingEntry = {
+        resolve,
+        timeout: null as unknown as NodeJS.Timeout,
+        resolved: false,
+      };
+
+      pendingEntry.timeout = setTimeout(() => {
+        // Prevent race condition - check if already resolved
+        if (pendingEntry.resolved) {
+          return;
+        }
+        pendingEntry.resolved = true;
         this.pendingPromises.delete(approvalId);
         if (this.subscriber) {
           this.subscriber.unsubscribe(`${this.CHANNEL_PREFIX}${approvalId}`);
@@ -216,7 +262,7 @@ export class ApprovalService {
         resolve({ approved: false, reason: 'Timeout' });
       }, this.TTL_SECONDS * 1000);
 
-      this.pendingPromises.set(approvalId, { resolve, timeout });
+      this.pendingPromises.set(approvalId, pendingEntry);
     });
   }
 
@@ -373,12 +419,14 @@ ${this.escapeHtml(approval.text)}`;
   }
 
   /**
-   * Escape HTML special characters
+   * Escape HTML special characters including quotes
    */
   private escapeHtml(text: string): string {
     return text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 }

@@ -9,7 +9,8 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiProperty } from '@nestjs/swagger';
+import { IsIn, IsString, MinLength, MaxLength } from 'class-validator';
 import { ApprovalService, PendingApproval } from './approval.service';
 import { TelegramSendService, SendResult } from './telegram-send.service';
 
@@ -17,6 +18,11 @@ import { TelegramSendService, SendResult } from './telegram-send.service';
  * DTO for approval action
  */
 class ApprovalActionDto {
+  @ApiProperty({
+    description: 'Action to take',
+    enum: ['approve', 'reject', 'edit'],
+  })
+  @IsIn(['approve', 'reject', 'edit'])
   action: 'approve' | 'reject' | 'edit';
 }
 
@@ -24,6 +30,11 @@ class ApprovalActionDto {
  * DTO for setting edit mode
  */
 class EditModeDto {
+  @ApiProperty({
+    description: 'Edit mode',
+    enum: ['describe', 'verbatim'],
+  })
+  @IsIn(['describe', 'verbatim'])
   mode: 'describe' | 'verbatim';
 }
 
@@ -31,6 +42,14 @@ class EditModeDto {
  * DTO for updating text
  */
 class UpdateTextDto {
+  @ApiProperty({
+    description: 'New message text',
+    minLength: 1,
+    maxLength: 4096,
+  })
+  @IsString()
+  @MinLength(1, { message: 'Text cannot be empty' })
+  @MaxLength(4096, { message: 'Text cannot exceed 4096 characters' })
   text: string;
 }
 
@@ -38,6 +57,14 @@ class UpdateTextDto {
  * DTO for regenerating message
  */
 class RegenerateDto {
+  @ApiProperty({
+    description: 'Description for AI to regenerate message',
+    minLength: 5,
+    maxLength: 1000,
+  })
+  @IsString()
+  @MinLength(5, { message: 'Description must be at least 5 characters' })
+  @MaxLength(1000, { message: 'Description cannot exceed 1000 characters' })
   description: string;
 }
 
