@@ -11,6 +11,7 @@ import {
   EntityToolsProvider,
   EventToolsProvider,
   ContextToolsProvider,
+  ActionToolsProvider,
 } from './tools';
 import { SearchModule } from '../search/search.module';
 import { ContextModule } from '../context/context.module';
@@ -55,6 +56,7 @@ import { EntityModule } from '../entity/entity.module';
     EntityToolsProvider,
     EventToolsProvider,
     ContextToolsProvider,
+    ActionToolsProvider,
   ],
   exports: [
     ClaudeAgentService,
@@ -65,6 +67,7 @@ import { EntityModule } from '../entity/entity.module';
     EntityToolsProvider,
     EventToolsProvider,
     ContextToolsProvider,
+    ActionToolsProvider,
   ],
 })
 export class ClaudeAgentModule {}

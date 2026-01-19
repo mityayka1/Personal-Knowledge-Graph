@@ -6,6 +6,7 @@ import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
+import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
 
 export interface SendNotificationOptions {
   chatId: number | string;
@@ -28,6 +29,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly eventCallbackHandler: EventCallbackHandler,
     @Inject(forwardRef(() => CarouselCallbackHandler))
     private readonly carouselCallbackHandler: CarouselCallbackHandler,
+    @Inject(forwardRef(() => ApprovalCallbackHandler))
+    private readonly approvalCallbackHandler: ApprovalCallbackHandler,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -173,7 +176,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const callbackData = callbackQuery.data;
 
       // Route to appropriate handler based on callback data prefix
-      if (this.carouselCallbackHandler.canHandle(callbackData)) {
+      if (this.approvalCallbackHandler.canHandle(callbackData)) {
+        await this.approvalCallbackHandler.handle(ctx);
+      } else if (this.carouselCallbackHandler.canHandle(callbackData)) {
         await this.carouselCallbackHandler.handle(ctx);
       } else if (this.eventCallbackHandler.canHandle(callbackData)) {
         await this.eventCallbackHandler.handle(ctx);
@@ -181,6 +186,22 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Unknown callback data: ${callbackData}`);
         await ctx.answerCbQuery('Unknown action');
       }
+    });
+
+    // Handle text messages (for edit mode)
+    this.bot.on('text', async (ctx) => {
+      const chatId = ctx.chat?.id;
+      const text = ctx.message?.text;
+
+      if (!chatId || !text) return;
+
+      // Check if user is in approval edit mode
+      if (this.approvalCallbackHandler.isInEditMode(chatId)) {
+        const handled = await this.approvalCallbackHandler.handleTextMessage(ctx, text);
+        if (handled) return;
+      }
+
+      // Not in any special mode - could add general message handling here
     });
 
     this.logger.log('Callback handlers registered');

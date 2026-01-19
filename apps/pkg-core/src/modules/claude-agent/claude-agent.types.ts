@@ -13,7 +13,8 @@ export type ClaudeTaskType =
   | 'recall'
   | 'meeting_prep'
   | 'daily_brief'
-  | 'action';
+  | 'action'
+  | 'draft_generation';
 
 /**
  * Model types
@@ -28,7 +29,7 @@ export type ExecutionMode = 'oneshot' | 'agent';
 /**
  * Tool categories for selective tool loading
  */
-export type ToolCategory = 'search' | 'context' | 'events' | 'entities' | 'all';
+export type ToolCategory = 'search' | 'context' | 'events' | 'entities' | 'actions' | 'all';
 
 /**
  * Base parameters for all Claude calls

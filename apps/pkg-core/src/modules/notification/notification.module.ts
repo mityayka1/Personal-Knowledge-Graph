@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -14,7 +14,11 @@ import { NotificationProcessor } from './notification.processor';
 import { NotificationTriggerController } from './notification-trigger.controller';
 import { DigestActionController } from './digest-action.controller';
 import { CarouselController } from './carousel.controller';
+import { ApprovalService } from './approval.service';
+import { ApprovalController } from './approval.controller';
+import { TelegramSendService } from './telegram-send.service';
 import { SettingsModule } from '../settings/settings.module';
+import { EntityModule } from '../entity/entity.module';
 
 @Module({
   imports: [
@@ -31,8 +35,9 @@ import { SettingsModule } from '../settings/settings.module';
       },
     }),
     SettingsModule,
+    forwardRef(() => EntityModule),
   ],
-  controllers: [NotificationTriggerController, DigestActionController, CarouselController],
+  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController],
   providers: [
     TelegramNotifierService,
     NotificationService,
@@ -41,7 +46,17 @@ import { SettingsModule } from '../settings/settings.module';
     CarouselStateService,
     NotificationSchedulerService,
     NotificationProcessor,
+    ApprovalService,
+    TelegramSendService,
   ],
-  exports: [TelegramNotifierService, NotificationService, DigestService, DigestActionStoreService, CarouselStateService],
+  exports: [
+    TelegramNotifierService,
+    NotificationService,
+    DigestService,
+    DigestActionStoreService,
+    CarouselStateService,
+    ApprovalService,
+    TelegramSendService,
+  ],
 })
 export class NotificationModule {}

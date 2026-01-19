@@ -126,3 +126,84 @@ export class PrepareResponseDto {
   @ApiProperty({ type: PrepareResponseDataDto })
   data: PrepareResponseDataDto;
 }
+
+// =====================================================
+// Act endpoint DTOs
+// =====================================================
+
+/**
+ * Request DTO for POST /agent/act
+ */
+export class ActRequestDto {
+  @ApiProperty({
+    description: 'Natural language instruction for action',
+    example: 'напиши Сергею что встреча переносится на завтра',
+    minLength: 5,
+  })
+  @IsString()
+  @MinLength(5, { message: 'Instruction must be at least 5 characters' })
+  instruction: string;
+
+  @ApiPropertyOptional({
+    description: 'Maximum agent iterations (turns)',
+    minimum: 1,
+    maximum: 15,
+    default: 10,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(15)
+  maxTurns?: number;
+}
+
+/**
+ * Action taken during act execution
+ */
+export class ActActionDto {
+  @ApiProperty({
+    description: 'Action type',
+    enum: ['draft_created', 'message_sent', 'approval_rejected', 'followup_created'],
+  })
+  type: 'draft_created' | 'message_sent' | 'approval_rejected' | 'followup_created';
+
+  @ApiPropertyOptional({ description: 'Entity ID involved' })
+  entityId?: string;
+
+  @ApiPropertyOptional({ description: 'Entity name' })
+  entityName?: string;
+
+  @ApiPropertyOptional({ description: 'Additional details' })
+  details?: string;
+}
+
+/**
+ * Response data for act endpoint
+ */
+export class ActResponseDataDto {
+  @ApiProperty({ description: 'Result summary from agent' })
+  result: string;
+
+  @ApiProperty({
+    type: [ActActionDto],
+    description: 'Actions taken during execution',
+  })
+  actions: ActActionDto[];
+
+  @ApiProperty({
+    type: [String],
+    description: 'Tools invoked during agent execution',
+  })
+  toolsUsed: string[];
+}
+
+/**
+ * Full response for act endpoint
+ */
+export class ActResponseDto {
+  @ApiProperty({ description: 'Operation success flag' })
+  success: boolean;
+
+  @ApiProperty({ type: ActResponseDataDto })
+  data: ActResponseDataDto;
+}

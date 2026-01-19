@@ -243,4 +243,45 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (!this.client) return null;
     return (this.client.session as StringSession).save();
   }
+
+  /**
+   * Send message as user (via userbot, not bot)
+   * This is used by the Act flow to send messages from user's account
+   *
+   * @param chatId - Telegram chat ID (user ID, group ID, etc.)
+   * @param text - Message text
+   * @param replyToMsgId - Optional message ID to reply to
+   * @returns Object with success status and messageId
+   */
+  async sendMessage(
+    chatId: string,
+    text: string,
+    replyToMsgId?: number,
+  ): Promise<{ success: boolean; messageId?: number; date?: number; error?: string }> {
+    if (!this.client || !this.isConnected) {
+      this.logger.warn('Cannot send message: userbot not connected');
+      return { success: false, error: 'Userbot not connected' };
+    }
+
+    try {
+      // Send message - GramJS sendMessage can handle string/number chatId directly
+      // or resolved entity. Using chatId directly is simplest.
+      const result = await this.client.sendMessage(chatId, {
+        message: text,
+        replyTo: replyToMsgId,
+      });
+
+      this.logger.log(`Message sent to ${chatId}, messageId: ${result.id}`);
+
+      return {
+        success: true,
+        messageId: result.id,
+        date: result.date,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to send message to ${chatId}: ${errorMsg}`);
+      return { success: false, error: errorMsg };
+    }
+  }
 }
