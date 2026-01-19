@@ -1,7 +1,7 @@
-Cj# PKG Second Brain — Implementation Checklist
+# PKG Second Brain — Implementation Checklist
 
 > Краткий чеклист для отслеживания прогресса. Детали в [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md)
-Jl;ПР
+
 ## Pre-requisites
 
 - [x] Верификация миграции Agent SDK
@@ -184,7 +184,7 @@ Jl;ПР
 - [x] ActionToolsProvider injected with forwardRef
 - [x] ToolsRegistryService registers action tools
 
-### Week 7: Integration & UX
+### Week 7: Integration & UX ✅ MOSTLY COMPLETE
 
 #### A2.1 Act Endpoint (Day 29) ✅
 - [x] POST /agent/act works
@@ -195,11 +195,12 @@ Jl;ПР
 - [x] GET /api/v1/approvals/:id
 - [x] Returns approval status from Redis
 
-#### A2.3 Edit Mode Selection (Day 30)
-- [ ] Кнопки: Задать / Как есть
-- [ ] "Задать" → AI генерирует по описанию
-- [ ] "Как есть" → отправка verbatim текста
-- [ ] Callback handlers: edit_describe, edit_verbatim
+#### A2.3 Edit Mode Selection (Day 30) ✅
+- [x] API endpoints: `/edit-mode`, `/update-text`, `/regenerate`
+- [x] ApprovalService: describe/verbatim modes
+- [x] "💡 Задать" → AI генерирует по описанию (`/regenerate`)
+- [x] "📝 Как есть" → отправка verbatim текста (`/update-text`)
+- [x] UI кнопки в боте: `edit_d:`, `edit_v:` callbacks
 
 #### A2.4 Proactive Action Buttons (Day 31)
 - [ ] Action buttons в Morning Brief
@@ -213,13 +214,14 @@ Jl;ПР
 - [ ] Кнопки: Через 2 часа / Завтра / Не нужно
 - [ ] Автоматическое создание EntityEvent (FOLLOW_UP)
 
-#### A2.6 Send-as-User Integration (Day 32)
-- [ ] POST /telegram/send-as-user в Telegram Adapter
-- [ ] GramJS sendMessage через юзербот
-- [ ] Логирование отправленных сообщений
+#### A2.6 Send-as-User Integration (Day 32) ✅
+- [x] POST /telegram/send-as-user в Telegram Adapter
+- [x] GramJS sendMessage через юзербот
+- [x] Сохранение отправленных сообщений в БД (recipientEntityId)
 
-#### A2.7 /act Command (Day 32)
-- [ ] /act команда в боте
+#### A2.7 /act Command (Day 32) ✅
+- [x] /act команда в боте
+- [x] ActHandler с approval flow
 - [ ] Natural language action detection
 - [ ] Integration tests
 
