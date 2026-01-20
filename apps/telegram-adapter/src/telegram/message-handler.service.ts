@@ -147,9 +147,9 @@ export class MessageHandlerService {
         return undefined;
       }
 
-      // Skip "min" users without accessHash - cannot download their photos
-      if (!user.accessHash) {
-        this.logger.debug(`Skipping profile photo for min user ${user.id} (no accessHash)`);
+      // Skip "min" users - they don't have full data to download photos
+      if (user.min || !user.accessHash) {
+        this.logger.debug(`Skipping profile photo for min user ${user.id} (min=${user.min}, accessHash=${!!user.accessHash})`);
         return undefined;
       }
 
