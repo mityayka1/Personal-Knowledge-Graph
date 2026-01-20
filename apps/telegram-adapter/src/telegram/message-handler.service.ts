@@ -147,6 +147,12 @@ export class MessageHandlerService {
         return undefined;
       }
 
+      // Skip "min" users without accessHash - cannot download their photos
+      if (!user.accessHash) {
+        this.logger.debug(`Skipping profile photo for min user ${user.id} (no accessHash)`);
+        return undefined;
+      }
+
       const buffer = await client.downloadProfilePhoto(user, {
         isBig: false, // Use small thumbnail for efficiency
       });
