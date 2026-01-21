@@ -251,7 +251,8 @@ export class MessageService {
       entityId &&
       dto.text &&
       dto.text.length > minMessageLength &&
-      !result.isUpdate
+      !result.isUpdate &&
+      !dto.telegram_user_info?.isBot // Skip bot messages
     ) {
       try {
         await this.jobService.scheduleExtraction({
