@@ -177,6 +177,17 @@ export class ExtractedEvent {
   @Index()
   entityId: string | null;
 
+  /**
+   * ID of the entity the promise was made TO (for promise_by_me events)
+   * Determined from:
+   * - Private chats: the other participant
+   * - Group chats with reply: sender of the replied message
+   * - Group chats without reply: null (unknown)
+   */
+  @Column({ name: 'promise_to_entity_id', type: 'uuid', nullable: true })
+  @Index()
+  promiseToEntityId: string | null;
+
   // ==================== Event Data ====================
 
   /** Type of extracted event */

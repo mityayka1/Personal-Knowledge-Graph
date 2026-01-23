@@ -3,12 +3,18 @@ import { Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Job as BullJob } from 'bullmq';
-import { Message } from '@pkg/entities';
+import { Message, Interaction, InteractionParticipant } from '@pkg/entities';
 import { FactExtractionService } from '../../extraction/fact-extraction.service';
 import { EventExtractionService } from '../../extraction/event-extraction.service';
 import { SecondBrainExtractionService } from '../../extraction/second-brain-extraction.service';
 import { EntityService } from '../../entity/entity.service';
 import { ExtractionJobData } from '../job.service';
+
+interface ReplyToInfo {
+  content?: string;
+  senderEntityId?: string;
+  senderName?: string;
+}
 
 @Processor('fact-extraction')
 export class FactExtractionProcessor extends WorkerHost {
@@ -25,6 +31,10 @@ export class FactExtractionProcessor extends WorkerHost {
     private entityService: EntityService,
     @InjectRepository(Message)
     private messageRepo: Repository<Message>,
+    @InjectRepository(Interaction)
+    private interactionRepo: Repository<Interaction>,
+    @InjectRepository(InteractionParticipant)
+    private participantRepo: Repository<InteractionParticipant>,
   ) {
     super();
   }
@@ -62,21 +72,44 @@ export class FactExtractionProcessor extends WorkerHost {
       });
 
       // Second Brain extraction - creates ExtractedEvent (pending confirmation)
-      // Load reply-to message content for context
-      const replyToContents = await this.loadReplyToContents(messages);
+      // Load reply-to message info (content + sender) for context
+      const replyToInfoMap = await this.loadReplyToInfo(messages, interactionId);
 
-      const secondBrainMessages = messages.map((m) => ({
-        messageId: m.id,
-        messageContent: m.content,
-        interactionId,
-        entityId,
-        entityName: entity.name,
-        isOutgoing: m.isOutgoing ?? false,
-        replyToContent: m.replyToSourceMessageId
-          ? replyToContents.get(m.replyToSourceMessageId)
-          : undefined,
-        topicName: m.topicName,
-      }));
+      // Determine promiseToEntityId for private chats
+      const privateRecipientId = await this.getPrivateChatRecipient(interactionId, entityId);
+
+      const secondBrainMessages = messages.map((m) => {
+        const replyToInfo = m.replyToSourceMessageId
+          ? replyToInfoMap.get(m.replyToSourceMessageId)
+          : undefined;
+
+        // Determine promiseToEntityId:
+        // 1. For private chats: the other participant (privateRecipientId)
+        // 2. For replies: the sender of the replied message
+        // 3. Otherwise: null
+        let promiseToEntityId: string | undefined;
+        if (m.isOutgoing) {
+          if (privateRecipientId) {
+            promiseToEntityId = privateRecipientId;
+          } else if (replyToInfo?.senderEntityId) {
+            promiseToEntityId = replyToInfo.senderEntityId;
+          }
+        }
+
+        return {
+          messageId: m.id,
+          messageContent: m.content,
+          interactionId,
+          entityId,
+          entityName: entity.name,
+          isOutgoing: m.isOutgoing ?? false,
+          replyToContent: replyToInfo?.content,
+          replyToSenderName: replyToInfo?.senderName,
+          replyToSenderId: replyToInfo?.senderEntityId,
+          promiseToEntityId,
+          topicName: m.topicName,
+        };
+      });
 
       const secondBrainResults =
         await this.secondBrainExtractionService.extractFromMessages(secondBrainMessages);
@@ -104,12 +137,13 @@ export class FactExtractionProcessor extends WorkerHost {
   }
 
   /**
-   * Load content of messages that are being replied to.
-   * Returns a map of sourceMessageId -> content
+   * Load info about messages that are being replied to.
+   * Returns a map of sourceMessageId -> ReplyToInfo (content, senderEntityId, senderName)
    */
-  private async loadReplyToContents(
+  private async loadReplyToInfo(
     messages: ExtractionJobData['messages'],
-  ): Promise<Map<string, string>> {
+    interactionId: string,
+  ): Promise<Map<string, ReplyToInfo>> {
     const replyToIds = messages
       .map((m) => m.replyToSourceMessageId)
       .filter((id): id is string => !!id);
@@ -119,22 +153,72 @@ export class FactExtractionProcessor extends WorkerHost {
     }
 
     // Find messages by their source_message_id (Telegram message ID)
-    const replyToMessages = await this.messageRepo.find({
-      where: { sourceMessageId: In(replyToIds) },
-      select: ['sourceMessageId', 'content'],
-    });
+    // Include sender info for determining promiseToEntityId
+    const replyToMessages = await this.messageRepo
+      .createQueryBuilder('m')
+      .leftJoinAndSelect('m.senderEntity', 'sender')
+      .where('m.sourceMessageId IN (:...ids)', { ids: replyToIds })
+      .andWhere('m.interactionId = :interactionId', { interactionId })
+      .getMany();
 
-    const contentMap = new Map<string, string>();
+    const infoMap = new Map<string, ReplyToInfo>();
     for (const msg of replyToMessages) {
-      if (msg.sourceMessageId && msg.content) {
-        contentMap.set(msg.sourceMessageId, msg.content);
+      if (msg.sourceMessageId) {
+        infoMap.set(msg.sourceMessageId, {
+          content: msg.content || undefined,
+          senderEntityId: msg.senderEntityId || undefined,
+          senderName: msg.senderEntity?.name || undefined,
+        });
       }
     }
 
     this.logger.debug(
-      `Loaded ${contentMap.size} reply-to messages for ${replyToIds.length} replies`,
+      `Loaded ${infoMap.size} reply-to messages for ${replyToIds.length} replies`,
     );
 
-    return contentMap;
+    return infoMap;
+  }
+
+  /**
+   * Get the other participant's entity ID for private chats.
+   * Returns undefined for group chats.
+   */
+  private async getPrivateChatRecipient(
+    interactionId: string,
+    currentEntityId: string,
+  ): Promise<string | undefined> {
+    // Get interaction to check if it's a private chat
+    const interaction = await this.interactionRepo.findOne({
+      where: { id: interactionId },
+    });
+
+    if (!interaction) {
+      return undefined;
+    }
+
+    // Check if private chat from source_metadata
+    const sourceMetadata = interaction.sourceMetadata as Record<string, unknown> | null;
+    const chatType = sourceMetadata?.chat_type as string | undefined;
+
+    if (chatType !== 'private') {
+      return undefined;
+    }
+
+    // Get all participants of this interaction
+    const participants = await this.participantRepo.find({
+      where: { interactionId },
+      relations: ['entity'],
+    });
+
+    // Find the OTHER participant (not the current entity and not the user)
+    // In private chats there are 2 participants: user and contact
+    for (const p of participants) {
+      if (p.entityId && p.entityId !== currentEntityId) {
+        // Check it's not the user themselves (is_bot = false means it's a person)
+        return p.entityId;
+      }
+    }
+
+    return undefined;
   }
 }
