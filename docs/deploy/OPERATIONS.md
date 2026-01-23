@@ -1,0 +1,201 @@
+# Operations Guide
+
+Мониторинг, логи, обновления и бэкапы.
+
+---
+
+## Мониторинг и логи
+
+### Просмотр логов
+
+```bash
+cd /opt/apps/pkg/docker
+
+# Все сервисы
+docker compose logs -f
+
+# Конкретный сервис
+docker compose logs -f pkg-core
+docker compose logs -f telegram-adapter
+
+# Последние N строк
+docker compose logs --tail=100 pkg-core
+```
+
+### Health endpoints
+
+| Сервис | Endpoint | Ожидаемый ответ |
+|--------|----------|-----------------|
+| PKG Core | `/api/v1/health` | `{ "status": "ok" }` |
+| Telegram Adapter | `/api/v1/health` | `{ "status": "ok" }` |
+| Dashboard | `/api/health` | `{ "status": "ok" }` |
+| Bull Board | `/health` | 200 OK |
+| n8n | `/healthz` | 200 OK |
+
+### Мониторинг ресурсов
+
+```bash
+# Docker stats
+docker stats
+
+# Disk usage
+docker system df
+df -h
+
+# Memory
+free -h
+```
+
+### Bull Board
+
+Мониторинг очередей BullMQ:
+- URL: `http://pkg.example.com/bull-board/`
+- Показывает: очереди, jobs, статусы, ошибки
+
+---
+
+## Обновление приложения
+
+### Стандартное обновление
+
+```bash
+cd /opt/apps/pkg
+
+# Получить изменения
+git pull origin master
+
+# Пересобрать и перезапустить
+cd docker
+docker compose build
+docker compose up -d
+
+# Проверить логи
+docker compose logs -f --tail=100
+```
+
+### Обновление с миграциями БД
+
+```bash
+cd /opt/apps/pkg
+
+# Получить изменения
+git pull origin master
+
+# Остановить сервисы
+cd docker
+docker compose down
+
+# Применить миграции (выполняется на хосте или через docker)
+docker compose run --rm pkg-core npm run migration:run
+
+# Пересобрать и запустить
+docker compose build
+docker compose up -d
+```
+
+### Откат
+
+```bash
+cd /opt/apps/pkg
+
+# Откатить код
+git checkout <previous-commit>
+
+# Откатить миграцию (если нужно)
+docker compose run --rm pkg-core npm run migration:revert
+
+# Пересобрать
+cd docker
+docker compose build
+docker compose up -d
+```
+
+---
+
+## Бэкапы
+
+### Redis (локальные данные очередей)
+
+```bash
+# Создать бэкап
+docker compose exec redis redis-cli BGSAVE
+docker cp pkg-redis:/data/dump.rdb ~/backups/redis-$(date +%Y%m%d).rdb
+
+# Восстановить
+docker compose stop redis
+docker cp ~/backups/redis-YYYYMMDD.rdb pkg-redis:/data/dump.rdb
+docker compose start redis
+```
+
+### File Storage (volume)
+
+```bash
+# Создать бэкап
+docker run --rm -v pkg_file-storage:/data -v ~/backups:/backup \
+  alpine tar czf /backup/files-$(date +%Y%m%d).tar.gz -C /data .
+
+# Восстановить
+docker run --rm -v pkg_file-storage:/data -v ~/backups:/backup \
+  alpine tar xzf /backup/files-YYYYMMDD.tar.gz -C /data
+```
+
+### n8n workflows
+
+```bash
+# Создать бэкап
+docker run --rm -v pkg_n8n-data:/data -v ~/backups:/backup \
+  alpine tar czf /backup/n8n-$(date +%Y%m%d).tar.gz -C /data .
+```
+
+### Автоматические бэкапы (cron)
+
+```bash
+crontab -e
+```
+
+```cron
+# Ежедневно в 3:00
+0 3 * * * /opt/apps/pkg/scripts/backup.sh >> /home/deploy/logs/backup.log 2>&1
+```
+
+---
+
+## Полезные команды
+
+```bash
+# Перезапустить конкретный сервис
+docker compose restart pkg-core
+
+# Пересобрать и перезапустить один сервис
+docker compose up -d --build pkg-core
+
+# Зайти в контейнер
+docker compose exec pkg-core sh
+
+# Посмотреть переменные окружения
+docker compose exec pkg-core env
+
+# Проверить сеть между контейнерами
+docker compose exec pkg-core ping redis
+
+# Посмотреть volumes
+docker volume ls | grep pkg
+
+# Экспортировать логи в файл
+docker compose logs --no-color > logs-$(date +%Y%m%d).txt
+```
+
+---
+
+## Очистка диска
+
+```bash
+# Удалить неиспользуемые образы
+docker image prune -a
+
+# Удалить все неиспользуемые ресурсы
+docker system prune -a
+
+# Очистить логи контейнеров
+sudo truncate -s 0 /var/lib/docker/containers/*/*-json.log
+```
