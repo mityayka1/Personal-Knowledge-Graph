@@ -5,6 +5,7 @@ import { InlineKeyboardMarkup } from 'telegraf/typings/core/types/typegram';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
 import { ActHandler } from './handlers/act.handler';
+import { DigestHandler } from './handlers/digest.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
@@ -28,6 +29,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly recallHandler: RecallHandler,
     private readonly prepareHandler: PrepareHandler,
     private readonly actHandler: ActHandler,
+    private readonly digestHandler: DigestHandler,
     private readonly eventCallbackHandler: EventCallbackHandler,
     @Inject(forwardRef(() => CarouselCallbackHandler))
     private readonly carouselCallbackHandler: CarouselCallbackHandler,
@@ -100,6 +102,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       { command: 'recall', description: 'Поиск по переписке' },
       { command: 'prepare', description: 'Подготовка к встрече' },
       { command: 'act', description: 'Выполнить действие (написать, напомнить)' },
+      { command: 'morning', description: 'Утренний бриф' },
+      { command: 'digest', description: 'Дайджест pending событий' },
+      { command: 'daily', description: 'Дневной дайджест' },
     ]);
     this.logger.log('Bot commands registered with Telegram');
 
@@ -129,14 +134,14 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     this.bot.start(async (ctx) => {
       await ctx.reply(
         '🧠 *Second Brain Bot*\n\n' +
-          'Доступные команды:\n' +
+          '*Поиск и подготовка:*\n' +
           '`/recall <запрос>` — поиск по переписке\n' +
           '`/prepare <имя>` — подготовка к встрече\n' +
           '`/act <действие>` — выполнить действие\n\n' +
-          '*Примеры:*\n' +
-          '`/recall кто советовал юриста?`\n' +
-          '`/prepare Иван Петров`\n' +
-          '`/act напиши Сергею что встреча переносится`',
+          '*Брифы и дайджесты:*\n' +
+          '`/morning` — утренний бриф\n' +
+          '`/digest` — дайджест pending событий\n' +
+          '`/daily` — дневной дайджест',
         { parse_mode: 'Markdown' },
       );
     });
@@ -152,8 +157,11 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           'Подготовка брифа перед встречей с человеком.\n' +
           'Пример: `/prepare Мария Иванова`\n\n' +
           '`/act <действие>`\n' +
-          'Выполнить действие: написать контакту, создать напоминание.\n' +
-          'Пример: `/act напиши Сергею что встреча переносится`',
+          'Выполнить действие: написать контакту, напоминание.\n' +
+          'Пример: `/act напиши Сергею что встреча переносится`\n\n' +
+          '`/morning` — утренний бриф\n' +
+          '`/digest` — дайджест pending событий\n' +
+          '`/daily` — дневной дайджест',
         { parse_mode: 'Markdown' },
       );
     });
@@ -173,7 +181,22 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       await this.actHandler.handle(ctx);
     });
 
-    this.logger.log('Bot commands registered: /start, /help, /recall, /prepare, /act');
+    // /morning command
+    this.bot.command('morning', async (ctx) => {
+      await this.digestHandler.handleMorning(ctx);
+    });
+
+    // /digest command
+    this.bot.command('digest', async (ctx) => {
+      await this.digestHandler.handleDigest(ctx);
+    });
+
+    // /daily command
+    this.bot.command('daily', async (ctx) => {
+      await this.digestHandler.handleDaily(ctx);
+    });
+
+    this.logger.log('Bot commands registered: /start, /help, /recall, /prepare, /act, /morning, /digest, /daily');
   }
 
   private setupCallbackHandlers(): void {
