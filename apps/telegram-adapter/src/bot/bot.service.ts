@@ -9,6 +9,7 @@ import { DigestHandler } from './handlers/digest.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
+import { BriefCallbackHandler } from './handlers/brief-callback.handler';
 
 export interface SendNotificationOptions {
   chatId: number | string;
@@ -35,6 +36,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly carouselCallbackHandler: CarouselCallbackHandler,
     @Inject(forwardRef(() => ApprovalCallbackHandler))
     private readonly approvalCallbackHandler: ApprovalCallbackHandler,
+    @Inject(forwardRef(() => BriefCallbackHandler))
+    private readonly briefCallbackHandler: BriefCallbackHandler,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -235,6 +238,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await this.approvalCallbackHandler.handle(ctx);
       } else if (this.carouselCallbackHandler.canHandle(callbackData)) {
         await this.carouselCallbackHandler.handle(ctx);
+      } else if (this.briefCallbackHandler.canHandle(callbackData)) {
+        await this.briefCallbackHandler.handle(ctx);
       } else if (this.eventCallbackHandler.canHandle(callbackData)) {
         await this.eventCallbackHandler.handle(ctx);
       } else {

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
+import { BriefState } from '@pkg/entities';
 
 export interface SendNotificationOptions {
   chatId?: number | string;
@@ -129,6 +130,40 @@ export class TelegramNotifierService {
     } catch (error) {
       const errorMsg = this.getErrorMessage(error);
       this.logger.error(`Failed to send notification with ID: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  /**
+   * Send Morning Brief notification.
+   * Formatting is handled by telegram-adapter's BriefFormatterService.
+   * Follows Source-Agnostic principle: pkg-core sends raw data, telegram-adapter handles presentation.
+   *
+   * @param state - Brief state with items to display
+   * @param chatId - Optional chat ID (uses owner if not provided)
+   * @returns Message ID if successful, null otherwise
+   */
+  async sendBrief(state: BriefState, chatId?: number | string): Promise<number | null> {
+    const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/send-brief`;
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post<NotificationResponse>(
+          targetUrl,
+          { state, chatId },
+          { headers: this.getHeaders() },
+        ),
+      );
+
+      if (!response.data.success || !response.data.messageId) {
+        this.logger.warn(`Send brief failed: ${response.data.error || 'No messageId returned'}`);
+        return null;
+      }
+
+      return response.data.messageId;
+    } catch (error) {
+      const errorMsg = this.getErrorMessage(error);
+      this.logger.error(`Failed to send brief: ${errorMsg}`);
       return null;
     }
   }

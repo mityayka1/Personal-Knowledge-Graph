@@ -20,3 +20,6 @@ export * from './entity-relationship-profile.entity';
 export { ClaudeCliRun } from './claude-cli-run.entity';
 export * from './claude-agent-run.entity';
 export * from './user.entity';
+export * from './brief.types';
+export * from './brief.constants';
+export * from './utils/html.utils';

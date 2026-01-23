@@ -3,7 +3,7 @@ import { HttpModule } from '@nestjs/axios';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bullmq';
-import { ExtractedEvent, EntityEvent, EntityRecord, EntityIdentifier, Message, Interaction } from '@pkg/entities';
+import { ExtractedEvent, EntityEvent, EntityRecord, EntityIdentifier, Message, Interaction, EntityFact } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestService } from './digest.service';
@@ -16,6 +16,9 @@ import { DigestActionController } from './digest-action.controller';
 import { CarouselController } from './carousel.controller';
 import { ApprovalService } from './approval.service';
 import { ApprovalController } from './approval.controller';
+import { BriefStateService } from './brief-state.service';
+import { BriefService } from './brief.service';
+import { BriefController } from './brief.controller';
 import { TelegramSendService } from './telegram-send.service';
 import { SettingsModule } from '../settings/settings.module';
 import { EntityModule } from '../entity/entity.module';
@@ -25,7 +28,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
   imports: [
     HttpModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([ExtractedEvent, EntityEvent, EntityRecord, EntityIdentifier, Message, Interaction]),
+    TypeOrmModule.forFeature([ExtractedEvent, EntityEvent, EntityRecord, EntityIdentifier, Message, Interaction, EntityFact]),
     BullModule.registerQueue({
       name: 'notification',
       defaultJobOptions: {
@@ -39,7 +42,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => EntityModule),
     forwardRef(() => ClaudeAgentModule),
   ],
-  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController],
+  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController, BriefController],
   providers: [
     TelegramNotifierService,
     NotificationService,
@@ -50,6 +53,8 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     NotificationProcessor,
     ApprovalService,
     TelegramSendService,
+    BriefStateService,
+    BriefService,
   ],
   exports: [
     TelegramNotifierService,
@@ -59,6 +64,8 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     CarouselStateService,
     ApprovalService,
     TelegramSendService,
+    BriefStateService,
+    BriefService,
   ],
 })
 export class NotificationModule {}

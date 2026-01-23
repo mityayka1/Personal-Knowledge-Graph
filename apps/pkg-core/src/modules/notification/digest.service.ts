@@ -9,11 +9,13 @@ import {
   EventType,
   EventStatus,
   EntityRecord,
+  escapeHtml,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService } from './carousel-state.service';
+import { BriefStateService, BriefItem } from './brief-state.service';
 
 interface MorningBriefData {
   meetings: EntityEvent[];
@@ -38,10 +40,12 @@ export class DigestService {
     private notificationService: NotificationService,
     private digestActionStore: DigestActionStoreService,
     private carouselStateService: CarouselStateService,
+    private briefStateService: BriefStateService,
   ) {}
 
   /**
-   * Send morning brief with today's schedule and reminders
+   * Send morning brief with today's schedule and reminders.
+   * Uses accordion UI with action buttons.
    */
   async sendMorningBrief(): Promise<void> {
     const today = new Date();
@@ -60,7 +64,8 @@ export class DigestService {
           this.getOverdueEvents(EventType.FOLLOW_UP),
         ]);
 
-      const message = this.formatMorningBrief({
+      // Build brief items from data
+      const items = this.buildBriefItems({
         meetings,
         deadlines,
         birthdays,
@@ -68,11 +73,131 @@ export class DigestService {
         pendingFollowups,
       });
 
-      await this.telegramNotifier.send({ message, parseMode: 'HTML' });
-      this.logger.log('Morning brief sent successfully');
+      // If no items, send simple message
+      if (items.length === 0) {
+        await this.telegramNotifier.send({
+          message: '<b>Доброе утро!</b>\n\nСегодня ничего запланированного. Хорошего дня!',
+          parseMode: 'HTML',
+        });
+        this.logger.log('Morning brief sent (empty)');
+        return;
+      }
+
+      // Get chat ID
+      const chatId = await this.telegramNotifier.getOwnerChatId();
+      if (!chatId) {
+        this.logger.warn('Cannot send morning brief: no owner chat ID');
+        return;
+      }
+
+      // Create brief state (max 10 items)
+      const limitedItems = items.slice(0, 10);
+      const briefId = await this.briefStateService.create(String(chatId), 0, limitedItems);
+
+      // Get state for sending
+      const state = await this.briefStateService.get(briefId);
+      if (!state) {
+        this.logger.error('Failed to get brief state after creation');
+        return;
+      }
+
+      // Send brief via telegram-adapter (formatting handled there)
+      const messageId = await this.telegramNotifier.sendBrief(state);
+
+      if (messageId) {
+        await this.briefStateService.updateMessageId(briefId, messageId);
+        this.logger.log(`Morning brief sent with ${limitedItems.length} items (id: ${briefId})`);
+
+        if (items.length > 10) {
+          this.logger.log(`Truncated brief from ${items.length} to 10 items`);
+        }
+      } else {
+        await this.briefStateService.delete(briefId);
+        this.logger.error('Failed to send morning brief message');
+      }
     } catch (error) {
       this.logger.error('Failed to send morning brief:', error);
     }
+  }
+
+  /**
+   * Build BriefItems from morning brief data
+   */
+  private buildBriefItems(data: MorningBriefData): BriefItem[] {
+    const items: BriefItem[] = [];
+
+    // Meetings first (most time-sensitive)
+    for (const meeting of data.meetings) {
+      const time = meeting.eventDate
+        ? meeting.eventDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+        : '??:??';
+
+      items.push({
+        type: 'meeting',
+        title: `${time} — ${meeting.title || 'Встреча'}`,
+        entityName: meeting.entity?.name || 'Без имени',
+        sourceType: 'entity_event',
+        sourceId: meeting.id,
+        details: meeting.description || `Встреча с ${meeting.entity?.name || 'контактом'}`,
+        entityId: meeting.entityId,
+      });
+    }
+
+    // Deadlines
+    for (const deadline of data.deadlines) {
+      items.push({
+        type: 'task',
+        title: deadline.title || 'Дедлайн',
+        entityName: deadline.entity?.name || 'Без имени',
+        sourceType: 'entity_event',
+        sourceId: deadline.id,
+        details: deadline.description || 'Дедлайн сегодня',
+        entityId: deadline.entityId,
+      });
+    }
+
+    // Birthdays
+    for (const birthday of data.birthdays) {
+      items.push({
+        type: 'birthday',
+        title: `День рождения`,
+        entityName: birthday.name,
+        sourceType: 'entity',
+        sourceId: birthday.id,
+        details: `День рождения у ${birthday.name}`,
+        entityId: birthday.id,
+      });
+    }
+
+    // Overdue commitments
+    for (const commitment of data.overdueCommitments) {
+      const daysOverdue = this.getDaysOverdue(commitment.eventDate);
+      items.push({
+        type: 'overdue',
+        title: `${commitment.title || 'Обещание'} (просрочено ${daysOverdue} дн.)`,
+        entityName: commitment.entity?.name || 'Без имени',
+        sourceType: 'entity_event',
+        sourceId: commitment.id,
+        details: commitment.description || `Просрочено на ${daysOverdue} дней`,
+        entityId: commitment.entityId,
+      });
+    }
+
+    // Pending followups
+    for (const followup of data.pendingFollowups) {
+      const daysWaiting = this.getDaysOverdue(followup.eventDate);
+      items.push({
+        type: 'followup',
+        title: `${followup.title || 'Ответ'} — ждёшь ${daysWaiting} дн.`,
+        entityName: followup.entity?.name || 'Неизвестно',
+        sourceType: 'entity_event',
+        sourceId: followup.id,
+        details: followup.description || `Ожидаешь ответа уже ${daysWaiting} дней`,
+        entityId: followup.entityId,
+      });
+    }
+
+    return items;
   }
 
   /**
@@ -242,61 +367,6 @@ export class DigestService {
     });
   }
 
-  private formatMorningBrief(data: MorningBriefData): string {
-    const parts: string[] = ['<b>Доброе утро! Вот твой день:</b>'];
-
-    if (data.meetings.length > 0) {
-      parts.push('');
-      parts.push('<b>Встречи:</b>');
-      data.meetings.forEach((m) => {
-        const time = m.eventDate
-          ? m.eventDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-          : '??:??';
-        const name = m.entity?.name || 'Без имени';
-        parts.push(`• ${time} — ${m.title || 'Встреча'} (${name})`);
-      });
-    }
-
-    if (data.deadlines.length > 0) {
-      parts.push('');
-      parts.push('<b>Дедлайны:</b>');
-      data.deadlines.forEach((d) => {
-        parts.push(`• ${d.title}`);
-      });
-    }
-
-    if (data.birthdays.length > 0) {
-      parts.push('');
-      parts.push('<b>Дни рождения:</b>');
-      data.birthdays.forEach((b) => {
-        parts.push(`• ${b.name}`);
-      });
-    }
-
-    if (data.overdueCommitments.length > 0) {
-      parts.push('');
-      parts.push('<b>Просроченные обещания:</b>');
-      data.overdueCommitments.forEach((c) => {
-        const daysOverdue = this.getDaysOverdue(c.eventDate);
-        parts.push(`• ${c.title} (${daysOverdue} дн.)`);
-      });
-    }
-
-    if (data.pendingFollowups.length > 0) {
-      parts.push('');
-      parts.push('<b>Ждёшь ответа:</b>');
-      data.pendingFollowups.forEach((f) => {
-        const name = f.entity?.name || 'Неизвестно';
-        parts.push(`• ${f.title} от ${name}`);
-      });
-    }
-
-    if (parts.length === 1) {
-      return '<b>Доброе утро!</b>\n\nСегодня ничего запланированного. Хорошего дня!';
-    }
-
-    return parts.join('\n');
-  }
 
   private formatHourlyDigest(events: ExtractedEvent[]): string {
     const lines: string[] = ['<b>Новые события:</b>', ''];
@@ -430,17 +500,7 @@ export class DigestService {
       text = 'Событие без описания';
     }
 
-    return this.escapeHtml(text);
-  }
-
-  /**
-   * Escape HTML special characters to prevent parse errors.
-   */
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    return escapeHtml(text);
   }
 
   private getDaysOverdue(eventDate: Date | null): number {

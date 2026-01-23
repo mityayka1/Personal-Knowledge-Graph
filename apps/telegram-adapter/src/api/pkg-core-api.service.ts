@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import type { BriefResponse } from '@pkg/entities';
 
 interface MessagePayload {
   source: string;
@@ -167,6 +168,10 @@ export interface ApprovalResponse {
   };
   error?: string;
 }
+
+// Brief types are imported from @pkg/entities
+// Re-export for backward compatibility
+export { BriefResponse, BriefItem, BriefState, BriefItemType, BriefSourceType } from '@pkg/entities';
 
 // ============================================
 // Act API Types (Phase A: Act command)
@@ -593,6 +598,112 @@ export class PkgCoreApiService {
     return this.withRetry(async () => {
       const response = await this.client.post<{ success: boolean; message: string }>(
         '/notifications/trigger/daily-digest',
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Brief API Methods (Morning Brief Accordion)
+  // ============================================
+
+  /**
+   * Get brief state
+   * @param briefId Brief ID
+   * @param timeout Optional timeout in ms (default: 10000)
+   */
+  async getBrief(briefId: string, timeout = 10000): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<BriefResponse>(`/brief/${briefId}`, { timeout });
+      return response.data;
+    });
+  }
+
+  /**
+   * Expand an item in the brief
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param timeout Optional timeout in ms (default: 10000)
+   */
+  async briefExpand(briefId: string, index: number, timeout = 10000): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/expand/${index}`,
+        {},
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Collapse all items in the brief
+   * @param briefId Brief ID
+   * @param timeout Optional timeout in ms (default: 10000)
+   */
+  async briefCollapse(briefId: string, timeout = 10000): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/collapse`,
+        {},
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Mark item as done (completed)
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param timeout Optional timeout in ms (default: 10000)
+   */
+  async briefMarkDone(briefId: string, index: number, timeout = 10000): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/done/${index}`,
+        {},
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Mark item as dismissed (not going to do)
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param timeout Optional timeout in ms (default: 10000)
+   */
+  async briefMarkDismissed(briefId: string, index: number, timeout = 10000): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/dismiss/${index}`,
+        {},
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Trigger action for an item (write, remind, prepare)
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param actionType Action type
+   * @param timeout Optional timeout in ms (default: 10000)
+   */
+  async briefAction(
+    briefId: string,
+    index: number,
+    actionType: 'write' | 'remind' | 'prepare',
+    timeout = 10000,
+  ): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/action/${index}`,
+        { actionType },
+        { timeout },
       );
       return response.data;
     });
