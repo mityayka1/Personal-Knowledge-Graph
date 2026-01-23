@@ -127,6 +127,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Check if user is the owner (for owner-only commands)
+   */
+  private isOwner(userId: number | undefined): boolean {
+    return this.ownerChatId !== null && userId === this.ownerChatId;
+  }
+
   private setupCommands(): void {
     if (!this.bot) return;
 
@@ -181,18 +188,30 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       await this.actHandler.handle(ctx);
     });
 
-    // /morning command
+    // /morning command (owner-only)
     this.bot.command('morning', async (ctx) => {
+      if (!this.isOwner(ctx.from?.id)) {
+        await ctx.reply('⛔ Эта команда доступна только владельцу бота.');
+        return;
+      }
       await this.digestHandler.handleMorning(ctx);
     });
 
-    // /digest command
+    // /digest command (owner-only)
     this.bot.command('digest', async (ctx) => {
+      if (!this.isOwner(ctx.from?.id)) {
+        await ctx.reply('⛔ Эта команда доступна только владельцу бота.');
+        return;
+      }
       await this.digestHandler.handleDigest(ctx);
     });
 
-    // /daily command
+    // /daily command (owner-only)
     this.bot.command('daily', async (ctx) => {
+      if (!this.isOwner(ctx.from?.id)) {
+        await ctx.reply('⛔ Эта команда доступна только владельцу бота.');
+        return;
+      }
       await this.digestHandler.handleDaily(ctx);
     });
 

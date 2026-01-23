@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { PkgCoreApiService } from '../../api/pkg-core-api.service';
+import { isTimeoutError } from './handler.utils';
 
 type DigestType = 'morning' | 'hourly' | 'daily';
 
@@ -71,7 +72,7 @@ export class DigestHandler {
     } catch (error) {
       this.logger.error(`Failed to trigger ${type} digest:`, (error as Error).message);
 
-      const errorMessage = this.isTimeoutError(error)
+      const errorMessage = isTimeoutError(error)
         ? `⏱ Подготовка ${config.name.toLowerCase()} занимает слишком много времени.`
         : `❌ Ошибка при подготовке ${config.name.toLowerCase()}.`;
 
@@ -108,16 +109,5 @@ export class DigestHandler {
     } catch (error) {
       this.logger.error('Failed to edit message:', (error as Error).message);
     }
-  }
-
-  private isTimeoutError(error: unknown): boolean {
-    if (error instanceof Error) {
-      return (
-        error.message.includes('timeout') ||
-        error.message.includes('ETIMEDOUT') ||
-        error.message.includes('ECONNABORTED')
-      );
-    }
-    return false;
   }
 }
