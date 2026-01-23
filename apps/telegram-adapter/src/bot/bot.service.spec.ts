@@ -3,8 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { BotService } from './bot.service';
 import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
+import { ActHandler } from './handlers/act.handler';
+import { DigestHandler } from './handlers/digest.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
+import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
 
 // Mock Telegraf
 jest.mock('telegraf', () => ({
@@ -29,8 +32,20 @@ describe('BotService', () => {
 
   const mockRecallHandler = { handle: jest.fn() };
   const mockPrepareHandler = { handle: jest.fn() };
+  const mockActHandler = { handle: jest.fn() };
+  const mockDigestHandler = {
+    handleMorning: jest.fn(),
+    handleDigest: jest.fn(),
+    handleDaily: jest.fn(),
+  };
   const mockEventCallbackHandler = { canHandle: jest.fn(), handle: jest.fn() };
   const mockCarouselCallbackHandler = { canHandle: jest.fn(), handle: jest.fn() };
+  const mockApprovalCallbackHandler = {
+    canHandle: jest.fn(),
+    handle: jest.fn(),
+    isInEditMode: jest.fn(),
+    handleTextMessage: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -51,12 +66,24 @@ describe('BotService', () => {
           useValue: mockPrepareHandler,
         },
         {
+          provide: ActHandler,
+          useValue: mockActHandler,
+        },
+        {
+          provide: DigestHandler,
+          useValue: mockDigestHandler,
+        },
+        {
           provide: EventCallbackHandler,
           useValue: mockEventCallbackHandler,
         },
         {
           provide: CarouselCallbackHandler,
           useValue: mockCarouselCallbackHandler,
+        },
+        {
+          provide: ApprovalCallbackHandler,
+          useValue: mockApprovalCallbackHandler,
         },
       ],
     }).compile();
