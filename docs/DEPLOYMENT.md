@@ -1054,6 +1054,49 @@ docker compose logs telegram-adapter
 # - Блокировка IP Telegram'ом
 ```
 
+### Защита Telegram сессии от коллизий
+
+**⚠️ ВАЖНО:** Одновременный запуск одной Telegram сессии с разных машин может привести к бану аккаунта!
+
+#### Локальная разработка
+
+При запуске `pnpm start:dev` в telegram-adapter срабатывает защита:
+
+```
+╔═══════════════════════════════════════════════════════════════════════════╗
+║  ⚠️  TELEGRAM SESSION PROTECTION                                          ║
+╠═══════════════════════════════════════════════════════════════════════════╣
+║  Local development is BLOCKED to prevent session collision with PROD.     ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+```
+
+**Для локальной разработки** (с ОТДЕЛЬНОЙ сессией от production):
+
+```bash
+# 1. Убедитесь, что production сервис остановлен ИЛИ используется другая сессия
+# 2. Запустите с флагом разрешения:
+ALLOW_LOCAL_TELEGRAM=true pnpm start:dev
+```
+
+#### Удалённая авторизация через SSH
+
+Для авторизации Telegram на удалённом сервере без GUI:
+
+```bash
+# Использование
+./scripts/remote-telegram-auth.sh deploy@your-server.com
+
+# Или с кастомным путём к PKG
+PKG_REMOTE_PATH=/custom/path ./scripts/remote-telegram-auth.sh user@server
+```
+
+Скрипт выполняет:
+1. Останавливает telegram-adapter (освобождает сессию)
+2. Запускает интерактивную авторизацию (телефон, код, 2FA)
+3. Обновляет `TELEGRAM_SESSION_STRING` в .env
+4. Перезапускает telegram-adapter
+5. Проверяет успешность подключения
+
 ### Nginx 502 Bad Gateway
 
 ```bash
