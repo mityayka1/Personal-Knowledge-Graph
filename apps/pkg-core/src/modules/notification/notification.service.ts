@@ -10,12 +10,12 @@ import {
   IdentifierType,
   Message,
   Interaction,
+  escapeHtml,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { SettingsService } from '../settings/settings.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService, CarouselNavResult } from './carousel-state.service';
-import { escapeHtml } from '../../common/utils';
 
 type EventPriority = 'high' | 'medium' | 'low';
 

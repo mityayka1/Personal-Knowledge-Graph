@@ -400,6 +400,40 @@ describe('BriefService', () => {
     });
   });
 
+  describe('repository errors', () => {
+    it('should propagate error when entityEventRepo.update fails', async () => {
+      const item = createMockItem(1, 'task', 'entity_event');
+      briefStateService.getItem.mockResolvedValue(item);
+      entityEventRepo.update.mockRejectedValue(
+        new Error('Database connection lost'),
+      );
+
+      await expect(service.markDone('b_test123456ab', 0)).rejects.toThrow(
+        'Database connection lost',
+      );
+    });
+
+    it('should propagate error when extractedEventRepo.update fails', async () => {
+      const item = createMockItem(1, 'task', 'extracted_event');
+      briefStateService.getItem.mockResolvedValue(item);
+      extractedEventRepo.update.mockRejectedValue(new Error('Database timeout'));
+
+      await expect(service.markDone('b_test123456ab', 0)).rejects.toThrow(
+        'Database timeout',
+      );
+    });
+
+    it('should propagate error when entityFactRepo.update fails', async () => {
+      const item = createMockItem(1, 'birthday', 'entity_fact');
+      briefStateService.getItem.mockResolvedValue(item);
+      entityFactRepo.update.mockRejectedValue(new Error('Connection refused'));
+
+      await expect(service.markDone('b_test123456ab', 0)).rejects.toThrow(
+        'Connection refused',
+      );
+    });
+  });
+
   describe('different item types', () => {
     it('should handle overdue item type with entity_event source', async () => {
       const item = createMockItem(1, 'overdue', 'entity_event');

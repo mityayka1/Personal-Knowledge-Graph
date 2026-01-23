@@ -2,9 +2,9 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
+import { escapeHtml } from '@pkg/entities';
 import { EntityService } from '../entity/entity.service';
 import { TelegramNotifierService } from './telegram-notifier.service';
-import { escapeHtml } from '../../common/utils';
 
 /**
  * Approval status enum

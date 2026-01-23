@@ -1,7 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import { BriefState, BriefItem } from '@pkg/entities';
-import { escapeHtml, sanitizeUrl } from '../../common/utils/html.utils';
-import { BRIEF_CALLBACKS, makeBriefCallback } from '../handlers/brief.constants';
+import {
+  BriefState,
+  BriefItem,
+  TelegramInlineKeyboard,
+  TelegramKeyboardButton,
+  escapeHtml,
+  sanitizeUrl,
+  BRIEF_CALLBACKS,
+  makeBriefCallback,
+} from '@pkg/entities';
 
 /**
  * Service for formatting Morning Brief data for Telegram display.
@@ -77,10 +84,8 @@ export class BriefFormatterService {
    * In collapsed state: number buttons for quick navigation.
    * In expanded state: number buttons + action buttons + collapse button.
    */
-  getButtons(
-    state: BriefState,
-  ): Array<Array<{ text: string; callback_data: string }>> {
-    const buttons: Array<Array<{ text: string; callback_data: string }>> = [];
+  getButtons(state: BriefState): TelegramInlineKeyboard {
+    const buttons: TelegramInlineKeyboard = [];
 
     if (state.items.length === 0) {
       return buttons;
@@ -89,7 +94,7 @@ export class BriefFormatterService {
     // Number buttons for quick navigation
     if (state.expandedIndex === null) {
       // Collapsed state - show number buttons
-      const numberRow: Array<{ text: string; callback_data: string }> = [];
+      const numberRow: TelegramKeyboardButton[] = [];
       state.items.forEach((_, index) => {
         numberRow.push({
           text: `${index + 1}`,
@@ -102,7 +107,7 @@ export class BriefFormatterService {
       const item = state.items[state.expandedIndex];
 
       // Number buttons with current highlighted
-      const numberRow: Array<{ text: string; callback_data: string }> = [];
+      const numberRow: TelegramKeyboardButton[] = [];
       state.items.forEach((_, index) => {
         const isExpanded = index === state.expandedIndex;
         numberRow.push({
@@ -157,8 +162,8 @@ export class BriefFormatterService {
     briefId: string,
     index: number,
     item: BriefItem,
-  ): Array<{ text: string; callback_data: string }> {
-    const buttons: Array<{ text: string; callback_data: string }> = [];
+  ): TelegramKeyboardButton[] {
+    const buttons: TelegramKeyboardButton[] = [];
 
     switch (item.type) {
       case 'meeting':

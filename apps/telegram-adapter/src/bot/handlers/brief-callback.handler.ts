@@ -1,15 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { BriefResponse } from '@pkg/entities';
-import { PkgCoreApiService } from '../../api/pkg-core-api.service';
 import {
+  BriefResponse,
   BRIEF_CALLBACKS,
   BriefCallbackAction,
   isBriefCallback,
   parseBriefCallback,
   actionRequiresIndex,
-} from './brief.constants';
-import { escapeHtml } from '../../common/utils';
+  escapeHtml,
+} from '@pkg/entities';
+import { PkgCoreApiService } from '../../api/pkg-core-api.service';
 import { BriefFormatterService } from '../services/brief-formatter.service';
 
 /**
@@ -151,8 +151,9 @@ export class BriefCallbackHandler {
       // Feedback for action
       const feedbackText = this.getActionFeedback(action, response.message);
       await ctx.answerCbQuery(feedbackText);
-    } catch (error) {
-      this.logger.error(`Failed to process brief action:`, error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to process brief action: ${errorMessage}`, error);
 
       // Check if it's a "message not modified" error
       if (this.isMessageNotModifiedError(error)) {
@@ -193,8 +194,9 @@ export class BriefCallbackHandler {
           `используй команду:\n\n<code>/act напиши ${escapeHtml(item.entityName)} ...</code>`,
         { parse_mode: 'HTML' },
       );
-    } catch (error) {
-      this.logger.error('Failed to handle write action:', error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to handle write action: ${errorMessage}`, error);
       await ctx.answerCbQuery('Ошибка');
     }
   }
@@ -225,8 +227,9 @@ export class BriefCallbackHandler {
           `используй команду:\n\n<code>/act напомни ${escapeHtml(item.entityName)} о ...</code>`,
         { parse_mode: 'HTML' },
       );
-    } catch (error) {
-      this.logger.error('Failed to handle remind action:', error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to handle remind action: ${errorMessage}`, error);
       await ctx.answerCbQuery('Ошибка');
     }
   }
@@ -265,8 +268,9 @@ export class BriefCallbackHandler {
           { parse_mode: 'HTML' },
         );
       }
-    } catch (error) {
-      this.logger.error('Failed to handle prepare action:', error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to handle prepare action: ${errorMessage}`, error);
       await ctx.answerCbQuery('Ошибка');
     }
   }

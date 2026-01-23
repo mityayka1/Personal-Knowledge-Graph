@@ -10,19 +10,9 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
-import { IsOptional, IsIn } from 'class-validator';
 import { BriefResponse } from '@pkg/entities';
 import { BriefService } from './brief.service';
-import { BriefStateService } from './brief-state.service';
-
-/**
- * DTO for action requests
- */
-export class BriefActionDto {
-  @IsOptional()
-  @IsIn(['write', 'remind', 'prepare'])
-  actionType?: 'write' | 'remind' | 'prepare';
-}
+import { BriefActionDto } from './brief.dto';
 
 /**
  * Controller for Morning Brief accordion operations.
@@ -40,10 +30,7 @@ export class BriefActionDto {
 @Controller('brief')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
 export class BriefController {
-  constructor(
-    private readonly briefService: BriefService,
-    private readonly briefStateService: BriefStateService,
-  ) {}
+  constructor(private readonly briefService: BriefService) {}
 
   /**
    * Get brief state
@@ -198,10 +185,13 @@ export class BriefController {
     }
 
     // Return info for the action - actual execution is handled by telegram-adapter
+    // Use getBrief which throws NotFoundException if not found
+    const state = await this.briefService.getBrief(briefId);
+
     return {
       success: true,
       message: `Action ${dto.actionType} triggered for ${item.entityName}`,
-      state: (await this.briefStateService.get(briefId)) || undefined,
+      state,
     };
   }
 }

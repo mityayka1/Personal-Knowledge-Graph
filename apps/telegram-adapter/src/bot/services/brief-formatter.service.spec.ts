@@ -108,6 +108,16 @@ describe('BriefFormatterService', () => {
       expect(message).toContain('⚠️ Overdue');
       expect(message).toContain('🎂 Birthday');
     });
+
+    it('should return default emoji for unknown item type', () => {
+      const state = createMockState([
+        { ...createMockItem(1), type: 'unknown_type' as BriefItem['type'] },
+      ]);
+
+      const message = service.formatMessage(state);
+
+      expect(message).toContain('📌'); // Default emoji
+    });
   });
 
   describe('formatAllDoneMessage', () => {

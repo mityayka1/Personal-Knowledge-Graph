@@ -9,13 +9,13 @@ import {
   EventType,
   EventStatus,
   EntityRecord,
+  escapeHtml,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService } from './carousel-state.service';
 import { BriefStateService, BriefItem } from './brief-state.service';
-import { escapeHtml } from '../../common/utils';
 
 interface MorningBriefData {
   meetings: EntityEvent[];

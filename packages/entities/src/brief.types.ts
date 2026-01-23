@@ -47,14 +47,19 @@ export interface BriefState {
   createdAt: number;
 }
 
+/** Single button in Telegram inline keyboard */
+export interface TelegramKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+/** Telegram inline keyboard layout (rows of buttons) */
+export type TelegramInlineKeyboard = TelegramKeyboardButton[][];
+
 /** Response from brief API endpoints */
 export interface BriefResponse {
   success: boolean;
   state?: BriefState;
   error?: string;
   message?: string;
-  /** Formatted message text for Telegram UI update */
-  formattedMessage?: string;
-  /** Buttons for Telegram UI update */
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
 }
