@@ -17,6 +17,7 @@ import { CarouselController } from './carousel.controller';
 import { ApprovalService } from './approval.service';
 import { ApprovalController } from './approval.controller';
 import { BriefStateService } from './brief-state.service';
+import { BriefService } from './brief.service';
 import { BriefController } from './brief.controller';
 import { TelegramSendService } from './telegram-send.service';
 import { SettingsModule } from '../settings/settings.module';
@@ -53,6 +54,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     ApprovalService,
     TelegramSendService,
     BriefStateService,
+    BriefService,
   ],
   exports: [
     TelegramNotifierService,
@@ -63,6 +65,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     ApprovalService,
     TelegramSendService,
     BriefStateService,
+    BriefService,
   ],
 })
 export class NotificationModule {}

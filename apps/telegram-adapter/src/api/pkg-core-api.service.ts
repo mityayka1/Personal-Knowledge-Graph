@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import type { BriefResponse } from '@pkg/entities';
 
 interface MessagePayload {
   source: string;
@@ -168,40 +169,9 @@ export interface ApprovalResponse {
   error?: string;
 }
 
-// ============================================
-// Brief API Types (Morning Brief Accordion)
-// ============================================
-
-/** Type of brief item */
-export type BriefItemType = 'meeting' | 'task' | 'followup' | 'overdue' | 'birthday';
-
-/** Type of source for a brief item */
-export type BriefSourceType = 'entity_event' | 'extracted_event' | 'entity_fact' | 'entity';
-
-export interface BriefResponse {
-  success: boolean;
-  state?: {
-    id: string;
-    chatId: string;
-    messageId: number;
-    items: Array<{
-      type: BriefItemType;
-      title: string;
-      entityName: string;
-      sourceType: BriefSourceType;
-      sourceId: string;
-      details: string;
-      entityId?: string;
-      sourceMessageLink?: string;
-    }>;
-    expandedIndex: number | null;
-    createdAt: number;
-  };
-  message?: string;
-  formattedMessage?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
-  error?: string;
-}
+// Brief types are imported from @pkg/entities
+// Re-export for backward compatibility
+export { BriefResponse, BriefItem, BriefState, BriefItemType, BriefSourceType } from '@pkg/entities';
 
 // ============================================
 // Act API Types (Phase A: Act command)

@@ -1,16 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
-import { EntityEvent, EventStatus, ExtractedEvent, EntityFact } from '@pkg/entities';
+import { BriefItem, BriefState } from '@pkg/entities';
 import { BriefController } from './brief.controller';
-import { BriefStateService, BriefItem, BriefState } from './brief-state.service';
+import { BriefService } from './brief.service';
+import { BriefStateService } from './brief-state.service';
 
 describe('BriefController', () => {
   let controller: BriefController;
+  let briefService: jest.Mocked<BriefService>;
   let briefStateService: jest.Mocked<BriefStateService>;
-  let entityEventRepo: { update: jest.Mock };
-  let extractedEventRepo: { update: jest.Mock };
-  let entityFactRepo: { update: jest.Mock };
 
   const createMockItem = (index: number, type: BriefItem['type'] = 'task'): BriefItem => ({
     type,
@@ -32,6 +30,15 @@ describe('BriefController', () => {
   });
 
   beforeEach(async () => {
+    briefService = {
+      getBrief: jest.fn(),
+      expand: jest.fn(),
+      collapse: jest.fn(),
+      markDone: jest.fn(),
+      markDismissed: jest.fn(),
+      getItem: jest.fn(),
+    } as unknown as jest.Mocked<BriefService>;
+
     briefStateService = {
       get: jest.fn(),
       expand: jest.fn(),
@@ -44,36 +51,16 @@ describe('BriefController', () => {
       delete: jest.fn(),
     } as unknown as jest.Mocked<BriefStateService>;
 
-    entityEventRepo = {
-      update: jest.fn().mockResolvedValue({ affected: 1 }),
-    };
-
-    extractedEventRepo = {
-      update: jest.fn().mockResolvedValue({ affected: 1 }),
-    };
-
-    entityFactRepo = {
-      update: jest.fn().mockResolvedValue({ affected: 1 }),
-    };
-
     const module: TestingModule = await Test.createTestingModule({
       controllers: [BriefController],
       providers: [
         {
+          provide: BriefService,
+          useValue: briefService,
+        },
+        {
           provide: BriefStateService,
           useValue: briefStateService,
-        },
-        {
-          provide: getRepositoryToken(EntityEvent),
-          useValue: entityEventRepo,
-        },
-        {
-          provide: getRepositoryToken(ExtractedEvent),
-          useValue: extractedEventRepo,
-        },
-        {
-          provide: getRepositoryToken(EntityFact),
-          useValue: entityFactRepo,
         },
       ],
     }).compile();
@@ -82,20 +69,18 @@ describe('BriefController', () => {
   });
 
   describe('getBrief', () => {
-    it('should return brief state with formatted message', async () => {
+    it('should return brief state', async () => {
       const state = createMockState([createMockItem(1), createMockItem(2)]);
-      briefStateService.get.mockResolvedValue(state);
+      briefService.getBrief.mockResolvedValue(state);
 
       const result = await controller.getBrief('b_test123456ab');
 
       expect(result.success).toBe(true);
       expect(result.state).toEqual(state);
-      expect(result.formattedMessage).toContain('Доброе утро');
-      expect(result.buttons).toBeDefined();
     });
 
     it('should throw NotFoundException if brief not found', async () => {
-      briefStateService.get.mockResolvedValue(null);
+      briefService.getBrief.mockRejectedValue(new NotFoundException('Brief not found or expired'));
 
       await expect(controller.getBrief('b_nonexistent')).rejects.toThrow(NotFoundException);
     });
@@ -104,17 +89,17 @@ describe('BriefController', () => {
   describe('expand', () => {
     it('should expand item and return updated state', async () => {
       const state = createMockState([createMockItem(1), createMockItem(2)], 1);
-      briefStateService.expand.mockResolvedValue(state);
+      briefService.expand.mockResolvedValue(state);
 
       const result = await controller.expand('b_test123456ab', 1);
 
       expect(result.success).toBe(true);
       expect(result.state?.expandedIndex).toBe(1);
-      expect(briefStateService.expand).toHaveBeenCalledWith('b_test123456ab', 1);
+      expect(briefService.expand).toHaveBeenCalledWith('b_test123456ab', 1);
     });
 
     it('should throw NotFoundException if brief not found', async () => {
-      briefStateService.expand.mockResolvedValue(null);
+      briefService.expand.mockRejectedValue(new NotFoundException('Brief not found or expired'));
 
       await expect(controller.expand('b_nonexistent', 0)).rejects.toThrow(NotFoundException);
     });
@@ -123,88 +108,68 @@ describe('BriefController', () => {
   describe('collapse', () => {
     it('should collapse all items and return updated state', async () => {
       const state = createMockState([createMockItem(1), createMockItem(2)], null);
-      briefStateService.collapse.mockResolvedValue(state);
+      briefService.collapse.mockResolvedValue(state);
 
       const result = await controller.collapse('b_test123456ab');
 
       expect(result.success).toBe(true);
       expect(result.state?.expandedIndex).toBeNull();
-      expect(briefStateService.collapse).toHaveBeenCalledWith('b_test123456ab');
+      expect(briefService.collapse).toHaveBeenCalledWith('b_test123456ab');
     });
 
     it('should throw NotFoundException if brief not found', async () => {
-      briefStateService.collapse.mockResolvedValue(null);
+      briefService.collapse.mockRejectedValue(new NotFoundException('Brief not found or expired'));
 
       await expect(controller.collapse('b_nonexistent')).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('markDone', () => {
-    it('should mark item as completed and remove from brief', async () => {
-      const item = createMockItem(1);
+    it('should mark item as completed and return updated state', async () => {
       const updatedState = createMockState([createMockItem(2)]);
 
-      briefStateService.getItem.mockResolvedValue(item);
-      briefStateService.removeItem.mockResolvedValue(updatedState);
+      briefService.markDone.mockResolvedValue({ state: updatedState, allDone: false });
 
       const result = await controller.markDone('b_test123456ab', 0);
 
       expect(result.success).toBe(true);
-      expect(entityEventRepo.update).toHaveBeenCalledWith(item.sourceId, {
-        status: EventStatus.COMPLETED,
-      });
-      expect(briefStateService.removeItem).toHaveBeenCalledWith('b_test123456ab', 0);
+      expect(result.state).toEqual(updatedState);
+      expect(briefService.markDone).toHaveBeenCalledWith('b_test123456ab', 0);
     });
 
     it('should return congratulation message when all items done', async () => {
-      const item = createMockItem(1);
       const emptyState = createMockState([]);
 
-      briefStateService.getItem.mockResolvedValue(item);
-      briefStateService.removeItem.mockResolvedValue(emptyState);
+      briefService.markDone.mockResolvedValue({ state: emptyState, allDone: true });
 
       const result = await controller.markDone('b_test123456ab', 0);
 
       expect(result.message).toContain('Все задачи выполнены');
-      expect(result.buttons).toEqual([]);
     });
 
     it('should throw NotFoundException if item not found', async () => {
-      briefStateService.getItem.mockResolvedValue(null);
-
-      await expect(controller.markDone('b_test123456ab', 0)).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw NotFoundException if brief not found after remove', async () => {
-      briefStateService.getItem.mockResolvedValue(createMockItem(1));
-      briefStateService.removeItem.mockResolvedValue(null);
+      briefService.markDone.mockRejectedValue(new NotFoundException('Item not found'));
 
       await expect(controller.markDone('b_test123456ab', 0)).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('markDismissed', () => {
-    it('should mark item as dismissed and remove from brief', async () => {
-      const item = createMockItem(1);
+    it('should mark item as dismissed and return updated state', async () => {
       const updatedState = createMockState([createMockItem(2)]);
 
-      briefStateService.getItem.mockResolvedValue(item);
-      briefStateService.removeItem.mockResolvedValue(updatedState);
+      briefService.markDismissed.mockResolvedValue({ state: updatedState, allDone: false });
 
       const result = await controller.markDismissed('b_test123456ab', 0);
 
       expect(result.success).toBe(true);
-      expect(entityEventRepo.update).toHaveBeenCalledWith(item.sourceId, {
-        status: EventStatus.DISMISSED,
-      });
+      expect(result.state).toEqual(updatedState);
     });
 
     it('should return completion message when all items processed', async () => {
-      const item = createMockItem(1);
       const emptyState = createMockState([]);
 
-      briefStateService.getItem.mockResolvedValue(item);
-      briefStateService.removeItem.mockResolvedValue(emptyState);
+      briefService.markDismissed.mockResolvedValue({ state: emptyState, allDone: true });
 
       const result = await controller.markDismissed('b_test123456ab', 0);
 
@@ -212,7 +177,7 @@ describe('BriefController', () => {
     });
 
     it('should throw NotFoundException if item not found', async () => {
-      briefStateService.getItem.mockResolvedValue(null);
+      briefService.markDismissed.mockRejectedValue(new NotFoundException('Item not found'));
 
       await expect(controller.markDismissed('b_test123456ab', 0)).rejects.toThrow(NotFoundException);
     });
@@ -221,17 +186,53 @@ describe('BriefController', () => {
   describe('triggerAction', () => {
     it('should return action info for write action', async () => {
       const item = createMockItem(1);
-      briefStateService.getItem.mockResolvedValue(item);
+      briefService.getItem.mockResolvedValue(item);
       briefStateService.get.mockResolvedValue(createMockState([item]));
 
       const result = await controller.triggerAction('b_test123456ab', 0, { actionType: 'write' });
 
       expect(result.success).toBe(true);
       expect(result.message).toContain('write');
+      expect(result.message).toContain(item.entityName);
+    });
+
+    it('should return action info for remind action', async () => {
+      const item = createMockItem(1);
+      briefService.getItem.mockResolvedValue(item);
+      briefStateService.get.mockResolvedValue(createMockState([item]));
+
+      const result = await controller.triggerAction('b_test123456ab', 0, { actionType: 'remind' });
+
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('remind');
+      expect(result.message).toContain(item.entityName);
+    });
+
+    it('should return action info for prepare action', async () => {
+      const item = createMockItem(1);
+      briefService.getItem.mockResolvedValue(item);
+      briefStateService.get.mockResolvedValue(createMockState([item]));
+
+      const result = await controller.triggerAction('b_test123456ab', 0, { actionType: 'prepare' });
+
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('prepare');
+      expect(result.message).toContain(item.entityName);
+    });
+
+    it('should return undefined state if brief not found', async () => {
+      const item = createMockItem(1);
+      briefService.getItem.mockResolvedValue(item);
+      briefStateService.get.mockResolvedValue(null);
+
+      const result = await controller.triggerAction('b_test123456ab', 0, { actionType: 'write' });
+
+      expect(result.success).toBe(true);
+      expect(result.state).toBeUndefined();
     });
 
     it('should throw BadRequestException if actionType missing', async () => {
-      briefStateService.getItem.mockResolvedValue(createMockItem(1));
+      briefService.getItem.mockResolvedValue(createMockItem(1));
 
       await expect(controller.triggerAction('b_test123456ab', 0, {})).rejects.toThrow(
         BadRequestException,
@@ -239,255 +240,11 @@ describe('BriefController', () => {
     });
 
     it('should throw NotFoundException if item not found', async () => {
-      briefStateService.getItem.mockResolvedValue(null);
+      briefService.getItem.mockRejectedValue(new NotFoundException('Item not found'));
 
       await expect(
         controller.triggerAction('b_test123456ab', 0, { actionType: 'write' }),
       ).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  describe('formatBriefMessage', () => {
-    it('should format collapsed state correctly', () => {
-      const state = createMockState([
-        { ...createMockItem(1), type: 'meeting', title: 'Созвон с Петром' },
-        { ...createMockItem(2), type: 'task', title: 'Подготовить отчёт' },
-      ]);
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).toContain('Доброе утро');
-      expect(message).toContain('1. 📅 Созвон с Петром');
-      expect(message).toContain('2. 📋 Подготовить отчёт');
-    });
-
-    it('should format expanded state with details', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            type: 'task',
-            title: 'Спросить у Маши про документы',
-            entityName: 'Мария Иванова',
-            details: 'Задача из сообщения от 15.01',
-            sourceMessageLink: 'https://t.me/c/123/456',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).toContain('Мария Иванова');
-      expect(message).toContain('Задача из сообщения');
-      expect(message).toContain('Перейти к сообщению');
-      expect(message).toContain('━━━');
-    });
-
-    it('should show empty message when no items', () => {
-      const state = createMockState([]);
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).toContain('Нет активных задач');
-    });
-
-    it('should escape HTML in content', () => {
-      const state = createMockState([
-        { ...createMockItem(1), title: '<script>alert("xss")</script>' },
-      ]);
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).not.toContain('<script>');
-      expect(message).toContain('&lt;script&gt;');
-    });
-  });
-
-  describe('getBriefButtons', () => {
-    it('should return number buttons in collapsed state', () => {
-      const state = createMockState([createMockItem(1), createMockItem(2), createMockItem(3)]);
-
-      const buttons = controller.getBriefButtons(state);
-
-      expect(buttons).toHaveLength(1);
-      expect(buttons[0]).toHaveLength(3);
-      expect(buttons[0][0].text).toBe('1');
-      expect(buttons[0][0].callback_data).toBe('br_e:b_test123456ab:0');
-    });
-
-    it('should return action buttons in expanded state', () => {
-      const state = createMockState([{ ...createMockItem(1), type: 'task' }], 0);
-
-      const buttons = controller.getBriefButtons(state);
-
-      // Should have: number row, action row, collapse row
-      expect(buttons.length).toBeGreaterThanOrEqual(2);
-
-      // Check number row has highlighted item
-      expect(buttons[0][0].text).toBe('1 ▼');
-
-      // Check action buttons
-      const actionButtons = buttons[1].map((b) => b.text);
-      expect(actionButtons).toContain('✅ Готово');
-      expect(actionButtons).toContain('➖ Не актуально');
-
-      // Check collapse button
-      const lastRow = buttons[buttons.length - 1];
-      expect(lastRow[0].text).toBe('🔙 Свернуть');
-    });
-
-    it('should return meeting-specific buttons', () => {
-      const state = createMockState([{ ...createMockItem(1), type: 'meeting' }], 0);
-
-      const buttons = controller.getBriefButtons(state);
-      const actionButtons = buttons[1].map((b) => b.text);
-
-      expect(actionButtons).toContain('📋 Brief');
-      expect(actionButtons).toContain('💬 Написать');
-    });
-
-    it('should return followup-specific buttons', () => {
-      const state = createMockState([{ ...createMockItem(1), type: 'followup' }], 0);
-
-      const buttons = controller.getBriefButtons(state);
-      const actionButtons = buttons[1].map((b) => b.text);
-
-      expect(actionButtons).toContain('💬 Напомнить');
-    });
-
-    it('should return birthday-specific buttons', () => {
-      const state = createMockState([{ ...createMockItem(1), type: 'birthday' }], 0);
-
-      const buttons = controller.getBriefButtons(state);
-      const actionButtons = buttons[1].map((b) => b.text);
-
-      expect(actionButtons).toContain('💬 Поздравить');
-    });
-
-    it('should return empty buttons when no items', () => {
-      const state = createMockState([]);
-
-      const buttons = controller.getBriefButtons(state);
-
-      expect(buttons).toEqual([]);
-    });
-  });
-
-  describe('sanitizeUrl', () => {
-    it('should allow https:// URLs', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'https://t.me/c/123/456',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).toContain('href="https://t.me/c/123/456"');
-    });
-
-    it('should allow tg:// URLs', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'tg://resolve?domain=test',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).toContain('href="tg://resolve?domain=test"');
-    });
-
-    it('should block javascript: URLs (XSS prevention)', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'javascript:alert("xss")',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).not.toContain('javascript:');
-      expect(message).not.toContain('href=');
-    });
-
-    it('should block http:// URLs (only https allowed)', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'http://insecure.com',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).not.toContain('http://insecure.com');
-      expect(message).not.toContain('Перейти к сообщению');
-    });
-
-    it('should block data: URLs', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'data:text/html,<script>alert(1)</script>',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).not.toContain('data:');
-    });
-
-    it('should block file:// URLs', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'file:///etc/passwd',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).not.toContain('file://');
-    });
-
-    it('should escape quotes in valid URLs', () => {
-      const state = createMockState(
-        [
-          {
-            ...createMockItem(1),
-            sourceMessageLink: 'https://t.me/c/123/456?a="test"',
-          },
-        ],
-        0,
-      );
-
-      const message = controller.formatBriefMessage(state);
-
-      expect(message).toContain('&quot;test&quot;');
-      expect(message).not.toContain('="test"');
     });
   });
 });

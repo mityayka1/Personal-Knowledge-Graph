@@ -104,6 +104,14 @@ describe('BriefStateService', () => {
 
       expect(result).toBeNull();
     });
+
+    it('should delete corrupted data on parse error', async () => {
+      mockRedis.get.mockResolvedValue('invalid json {{{');
+
+      await service.get('b_test123456ab');
+
+      expect(mockRedis.del).toHaveBeenCalledWith('brief:b_test123456ab');
+    });
   });
 
   describe('expand', () => {

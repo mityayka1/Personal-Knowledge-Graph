@@ -15,6 +15,7 @@ import { TelegramNotifierService } from './telegram-notifier.service';
 import { SettingsService } from '../settings/settings.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService, CarouselNavResult } from './carousel-state.service';
+import { escapeHtml } from '../../common/utils';
 
 type EventPriority = 'high' | 'medium' | 'low';
 
@@ -331,17 +332,7 @@ export class NotificationService {
       text = 'Событие без описания';
     }
 
-    return this.escapeHtml(text);
-  }
-
-  /**
-   * Escape HTML special characters to prevent parse errors.
-   */
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    return escapeHtml(text);
   }
 
   /**
@@ -420,7 +411,7 @@ export class NotificationService {
    */
   private formatEventNotification(event: ExtractedEvent): string {
     const esc = (text: string | undefined | null): string =>
-      text ? this.escapeHtml(text) : '';
+      text ? escapeHtml(text) : '';
 
     switch (event.eventType) {
       case ExtractedEventType.MEETING: {
@@ -466,7 +457,7 @@ export class NotificationService {
       }
 
       default:
-        return `<b>Событие:</b>\n${this.escapeHtml(JSON.stringify(event.extractedData))}`;
+        return `<b>Событие:</b>\n${escapeHtml(JSON.stringify(event.extractedData))}`;
     }
   }
 
@@ -510,7 +501,7 @@ export class NotificationService {
       const truncatedQuote = messageLinkInfo.sourceQuote.length > 100
         ? messageLinkInfo.sourceQuote.slice(0, 100) + '...'
         : messageLinkInfo.sourceQuote;
-      lines.push(`💬 <i>"${this.escapeHtml(truncatedQuote)}"</i>`);
+      lines.push(`💬 <i>"${escapeHtml(truncatedQuote)}"</i>`);
     }
 
     // Message deep link (if available)
@@ -527,7 +518,7 @@ export class NotificationService {
     // Show linked event info if enrichment found a related event
     if (event.linkedEventId && event.enrichmentData?.synthesis) {
       lines.push('');
-      lines.push(`🔗 <i>${this.escapeHtml(String(event.enrichmentData.synthesis))}</i>`);
+      lines.push(`🔗 <i>${escapeHtml(String(event.enrichmentData.synthesis))}</i>`);
     }
 
     return lines.join('\n');
@@ -658,7 +649,7 @@ export class NotificationService {
     telegramUserId: string | null,
     telegramUsername: string | null,
   ): string {
-    const escapedName = this.escapeHtml(name);
+    const escapedName = escapeHtml(name);
 
     // Prefer username (works reliably for both users and bots)
     if (telegramUsername) {
@@ -802,7 +793,7 @@ export class NotificationService {
       const truncatedQuote = messageLinkInfo.sourceQuote.length > 100
         ? messageLinkInfo.sourceQuote.slice(0, 100) + '...'
         : messageLinkInfo.sourceQuote;
-      lines.push(`💬 <i>"${this.escapeHtml(truncatedQuote)}"</i>`);
+      lines.push(`💬 <i>"${escapeHtml(truncatedQuote)}"</i>`);
     }
 
     // Message deep link (if available)
@@ -819,7 +810,7 @@ export class NotificationService {
     // Show linked event info if enrichment found a related event
     if (event.linkedEventId && event.enrichmentData?.synthesis) {
       lines.push('');
-      lines.push(`🔗 <i>${this.escapeHtml(event.enrichmentData.synthesis)}</i>`);
+      lines.push(`🔗 <i>${escapeHtml(event.enrichmentData.synthesis)}</i>`);
     }
 
     // Footer with remaining count
@@ -898,7 +889,7 @@ export class NotificationService {
    */
   private getCarouselEventContent(event: ExtractedEvent): string[] {
     const esc = (text: string | undefined | null): string =>
-      text ? this.escapeHtml(text) : '';
+      text ? escapeHtml(text) : '';
     const lines: string[] = [];
 
     switch (event.eventType) {

@@ -1,11 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BriefCallbackHandler } from './brief-callback.handler';
 import { PkgCoreApiService, BriefResponse } from '../../api/pkg-core-api.service';
+import { BriefFormatterService } from '../services/brief-formatter.service';
 import { Context } from 'telegraf';
 
 describe('BriefCallbackHandler', () => {
   let handler: BriefCallbackHandler;
   let pkgCoreApi: jest.Mocked<PkgCoreApiService>;
+  let briefFormatter: jest.Mocked<BriefFormatterService>;
 
   const mockContext = (callbackData: string): Partial<Context> =>
     ({
@@ -38,8 +40,6 @@ describe('BriefCallbackHandler', () => {
       expandedIndex: null,
       createdAt: Date.now(),
     },
-    formattedMessage: '<b>Test message</b>',
-    buttons: [[{ text: '1', callback_data: 'br_e:b_test123456ab:0' }]],
     ...overrides,
   });
 
@@ -52,12 +52,23 @@ describe('BriefCallbackHandler', () => {
       briefAction: jest.fn(),
     } as unknown as jest.Mocked<PkgCoreApiService>;
 
+    briefFormatter = {
+      formatMessage: jest.fn().mockReturnValue('<b>Formatted message</b>'),
+      getButtons: jest.fn().mockReturnValue([[{ text: '1', callback_data: 'br_e:b_test123456ab:0' }]]),
+      formatAllDoneMessage: jest.fn().mockReturnValue('<b>🎉 Все задачи выполнены!</b>'),
+      formatAllProcessedMessage: jest.fn().mockReturnValue('<b>✅ Все задачи обработаны!</b>'),
+    } as unknown as jest.Mocked<BriefFormatterService>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BriefCallbackHandler,
         {
           provide: PkgCoreApiService,
           useValue: pkgCoreApi,
+        },
+        {
+          provide: BriefFormatterService,
+          useValue: briefFormatter,
         },
       ],
     }).compile();
@@ -102,15 +113,18 @@ describe('BriefCallbackHandler', () => {
   });
 
   describe('handle - expand', () => {
-    it('should expand item and update message', async () => {
+    it('should expand item and update message using BriefFormatterService', async () => {
       const ctx = mockContext('br_e:b_test123456ab:0') as Context;
-      pkgCoreApi.briefExpand.mockResolvedValue(createMockBriefResponse());
+      const response = createMockBriefResponse();
+      pkgCoreApi.briefExpand.mockResolvedValue(response);
 
       await handler.handle(ctx);
 
       expect(pkgCoreApi.briefExpand).toHaveBeenCalledWith('b_test123456ab', 0);
+      expect(briefFormatter.formatMessage).toHaveBeenCalledWith(response.state);
+      expect(briefFormatter.getButtons).toHaveBeenCalledWith(response.state);
       expect(ctx.editMessageText).toHaveBeenCalledWith(
-        '<b>Test message</b>',
+        '<b>Formatted message</b>',
         expect.objectContaining({ parse_mode: 'HTML' }),
       );
       expect(ctx.answerCbQuery).toHaveBeenCalled();
@@ -131,13 +145,15 @@ describe('BriefCallbackHandler', () => {
   });
 
   describe('handle - collapse', () => {
-    it('should collapse and update message', async () => {
+    it('should collapse and update message using BriefFormatterService', async () => {
       const ctx = mockContext('br_c:b_test123456ab') as Context;
-      pkgCoreApi.briefCollapse.mockResolvedValue(createMockBriefResponse());
+      const response = createMockBriefResponse();
+      pkgCoreApi.briefCollapse.mockResolvedValue(response);
 
       await handler.handle(ctx);
 
       expect(pkgCoreApi.briefCollapse).toHaveBeenCalledWith('b_test123456ab');
+      expect(briefFormatter.formatMessage).toHaveBeenCalledWith(response.state);
       expect(ctx.editMessageText).toHaveBeenCalled();
     });
   });
@@ -153,7 +169,7 @@ describe('BriefCallbackHandler', () => {
       expect(ctx.answerCbQuery).toHaveBeenCalledWith('✅ Готово');
     });
 
-    it('should show completion message when all done', async () => {
+    it('should show all done message when all items done', async () => {
       const ctx = mockContext('br_d:b_test123456ab:0') as Context;
       pkgCoreApi.briefMarkDone.mockResolvedValue(
         createMockBriefResponse({
@@ -171,7 +187,11 @@ describe('BriefCallbackHandler', () => {
 
       await handler.handle(ctx);
 
-      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Все задачи выполнены!');
+      expect(briefFormatter.formatAllDoneMessage).toHaveBeenCalled();
+      expect(ctx.editMessageText).toHaveBeenCalledWith(
+        '<b>🎉 Все задачи выполнены!</b>',
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
     });
   });
 
@@ -184,6 +204,30 @@ describe('BriefCallbackHandler', () => {
 
       expect(pkgCoreApi.briefMarkDismissed).toHaveBeenCalledWith('b_test123456ab', 0);
       expect(ctx.answerCbQuery).toHaveBeenCalledWith('➖ Не актуально');
+    });
+
+    it('should show all processed message when all items dismissed', async () => {
+      const ctx = mockContext('br_x:b_test123456ab:0') as Context;
+      pkgCoreApi.briefMarkDismissed.mockResolvedValue(
+        createMockBriefResponse({
+          state: {
+            id: 'b_test123456ab',
+            chatId: '123456',
+            messageId: 789,
+            items: [],
+            expandedIndex: null,
+            createdAt: Date.now(),
+          },
+        }),
+      );
+
+      await handler.handle(ctx);
+
+      expect(briefFormatter.formatAllProcessedMessage).toHaveBeenCalled();
+      expect(ctx.editMessageText).toHaveBeenCalledWith(
+        '<b>✅ Все задачи обработаны!</b>',
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
     });
   });
 
@@ -358,7 +402,8 @@ describe('BriefCallbackHandler', () => {
 
       await handler.handle(ctx);
 
-      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid index');
+      // parseBriefCallback returns null for invalid index, so we get "Invalid request"
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid request');
     });
 
     it('should handle negative index', async () => {
@@ -366,7 +411,8 @@ describe('BriefCallbackHandler', () => {
 
       await handler.handle(ctx);
 
-      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid index');
+      // parseBriefCallback returns null for negative index, so we get "Invalid request"
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid request');
     });
 
     it('should handle server error gracefully', async () => {
@@ -392,7 +438,8 @@ describe('BriefCallbackHandler', () => {
 
       await handler.handle(ctx);
 
-      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Unknown action');
+      // parseBriefCallback returns null for unknown action prefix, so we get "Invalid request"
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid request');
     });
   });
 });

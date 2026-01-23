@@ -14,7 +14,8 @@ import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService } from './carousel-state.service';
-import { BriefStateService, BriefItem, BriefItemType, BriefState } from './brief-state.service';
+import { BriefStateService, BriefItem } from './brief-state.service';
+import { escapeHtml } from '../../common/utils';
 
 interface MorningBriefData {
   meetings: EntityEvent[];
@@ -93,19 +94,15 @@ export class DigestService {
       const limitedItems = items.slice(0, 10);
       const briefId = await this.briefStateService.create(String(chatId), 0, limitedItems);
 
-      // Get state for formatting
+      // Get state for sending
       const state = await this.briefStateService.get(briefId);
       if (!state) {
         this.logger.error('Failed to get brief state after creation');
         return;
       }
 
-      // Format message and buttons
-      const message = this.formatAccordionBrief(state);
-      const buttons = this.getBriefButtons(state);
-
-      // Send with buttons and get message ID
-      const messageId = await this.telegramNotifier.sendWithButtonsAndGetId(message, buttons);
+      // Send brief via telegram-adapter (formatting handled there)
+      const messageId = await this.telegramNotifier.sendBrief(state);
 
       if (messageId) {
         await this.briefStateService.updateMessageId(briefId, messageId);
@@ -201,131 +198,6 @@ export class DigestService {
     }
 
     return items;
-  }
-
-  /**
-   * Format accordion brief message
-   */
-  private formatAccordionBrief(state: BriefState): string {
-    const parts: string[] = ['<b>Доброе утро! Вот твой день:</b>', ''];
-
-    if (state.items.length === 0) {
-      return '<b>Доброе утро!</b>\n\nНет активных задач на сегодня.';
-    }
-
-    state.items.forEach((item, index) => {
-      const emoji = this.getBriefItemEmoji(item.type);
-      const isExpanded = state.expandedIndex === index;
-      const num = index + 1;
-
-      if (isExpanded) {
-        // Expanded view with details
-        parts.push(`<b>${num}. ${emoji} ${this.escapeHtml(item.title)}</b>`);
-        parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        parts.push(`👤 ${this.escapeHtml(item.entityName)}`);
-        if (item.details) {
-          parts.push(`📝 ${this.escapeHtml(item.details)}`);
-        }
-        if (item.sourceMessageLink) {
-          const safeUrl = this.sanitizeUrl(item.sourceMessageLink);
-          if (safeUrl) {
-            parts.push(`🔗 <a href="${safeUrl}">Перейти к сообщению</a>`);
-          }
-        }
-        parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      } else {
-        // Collapsed view
-        parts.push(`${num}. ${emoji} ${this.escapeHtml(item.title)}`);
-      }
-    });
-
-    return parts.join('\n');
-  }
-
-  /**
-   * Get inline keyboard buttons for brief
-   */
-  private getBriefButtons(state: BriefState): Array<Array<{ text: string; callback_data: string }>> {
-    if (state.items.length === 0) {
-      return [];
-    }
-
-    const buttons: Array<Array<{ text: string; callback_data: string }>> = [];
-
-    // Number row
-    const numberRow: Array<{ text: string; callback_data: string }> = [];
-    state.items.forEach((_, index) => {
-      const num = index + 1;
-      const isExpanded = state.expandedIndex === index;
-      numberRow.push({
-        text: isExpanded ? `${num} ▼` : `${num}`,
-        callback_data: `br_e:${state.id}:${index}`,
-      });
-    });
-    buttons.push(numberRow);
-
-    // Action buttons (only when expanded)
-    if (state.expandedIndex !== null) {
-      const item = state.items[state.expandedIndex];
-      const actionRow = this.getActionButtonsForItem(state.id, state.expandedIndex, item.type);
-      buttons.push(actionRow);
-
-      // Collapse button
-      buttons.push([{ text: '🔙 Свернуть', callback_data: `br_c:${state.id}` }]);
-    }
-
-    return buttons;
-  }
-
-  /**
-   * Get action buttons based on item type
-   */
-  private getActionButtonsForItem(
-    briefId: string,
-    index: number,
-    itemType: BriefItemType,
-  ): Array<{ text: string; callback_data: string }> {
-    const done = { text: '✅ Готово', callback_data: `br_d:${briefId}:${index}` };
-    const dismiss = { text: '➖ Не актуально', callback_data: `br_x:${briefId}:${index}` };
-    const write = { text: '💬 Написать', callback_data: `br_w:${briefId}:${index}` };
-    const remind = { text: '💬 Напомнить', callback_data: `br_r:${briefId}:${index}` };
-    const congrats = { text: '💬 Поздравить', callback_data: `br_w:${briefId}:${index}` };
-    const brief = { text: '📋 Brief', callback_data: `br_p:${briefId}:${index}` };
-
-    switch (itemType) {
-      case 'meeting':
-        return [brief, write];
-      case 'task':
-        return [done, dismiss, write];
-      case 'followup':
-        return [done, dismiss, remind];
-      case 'overdue':
-        return [done, dismiss, write];
-      case 'birthday':
-        return [done, congrats];
-      default:
-        return [done, dismiss];
-    }
-  }
-
-  /**
-   * Get emoji for brief item type
-   */
-  private getBriefItemEmoji(type: BriefItemType): string {
-    switch (type) {
-      case 'meeting':
-        return '📅';
-      case 'task':
-        return '📋';
-      case 'followup':
-        return '👀';
-      case 'overdue':
-        return '⚠️';
-      case 'birthday':
-        return '🎂';
-      default:
-        return '📌';
-    }
   }
 
   /**
@@ -628,32 +500,7 @@ export class DigestService {
       text = 'Событие без описания';
     }
 
-    return this.escapeHtml(text);
-  }
-
-  /**
-   * Escape HTML special characters to prevent parse errors.
-   */
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  /**
-   * Validate and escape URL for use in href attribute
-   */
-  private sanitizeUrl(url: string): string | null {
-    // Only allow https:// or tg:// protocols
-    if (!url.startsWith('https://') && !url.startsWith('tg://')) {
-      this.logger.warn(`Invalid URL protocol: ${url}`);
-      return null;
-    }
-    // Escape quotes for attribute context
-    return url.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return escapeHtml(text);
   }
 
   private getDaysOverdue(eventDate: Date | null): number {

@@ -1,12 +1,19 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, Logger, UseGuards } from '@nestjs/common';
+import { BriefState } from '@pkg/entities';
 import { BotService, SendNotificationOptions } from './bot.service';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
+import { BriefFormatterService } from './services/brief-formatter.service';
 
 export class SendNotificationDto {
   chatId?: number | string;
   message: string;
   parseMode?: 'Markdown' | 'HTML';
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
+}
+
+export class SendBriefDto {
+  chatId?: number | string;
+  state: BriefState;
 }
 
 export interface NotificationResponse {
@@ -28,7 +35,10 @@ export class EditMessageDto {
 export class NotificationController {
   private readonly logger = new Logger(NotificationController.name);
 
-  constructor(private readonly botService: BotService) {}
+  constructor(
+    private readonly botService: BotService,
+    private readonly briefFormatter: BriefFormatterService,
+  ) {}
 
   /**
    * Send notification to a specific chat or to the owner
@@ -141,5 +151,46 @@ export class NotificationController {
       ready: this.botService.isReady(),
       ownerChatId: this.botService.getOwnerChatId(),
     };
+  }
+
+  /**
+   * Send Morning Brief with formatting handled locally.
+   * POST /notifications/send-brief
+   *
+   * This endpoint accepts raw BriefState and formats it using BriefFormatterService.
+   * Follows Source-Agnostic principle: pkg-core manages data, telegram-adapter handles presentation.
+   */
+  @Post('send-brief')
+  @HttpCode(HttpStatus.OK)
+  async sendBrief(@Body() dto: SendBriefDto): Promise<NotificationResponse> {
+    this.logger.log(`Received send-brief request with ${dto.state.items.length} items`);
+
+    const chatId = dto.chatId || this.botService.getOwnerChatId();
+    if (!chatId) {
+      return {
+        success: false,
+        error: 'No chat ID provided and owner chat ID not configured.',
+      };
+    }
+
+    // Format message and buttons using BriefFormatterService
+    const message = this.briefFormatter.formatMessage(dto.state);
+    const buttons = this.briefFormatter.getButtons(dto.state);
+
+    const result = await this.botService.sendNotificationWithId({
+      chatId,
+      message,
+      parseMode: 'HTML',
+      buttons,
+    });
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: 'Failed to send brief notification. Check logs for details.',
+      };
+    }
+
+    return { success: true, messageId: result.messageId };
   }
 }

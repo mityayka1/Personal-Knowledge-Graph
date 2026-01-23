@@ -2,58 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
+import { BriefItem, BriefState } from '@pkg/entities';
 
-/**
- * Type of source for a brief item
- */
-export type BriefSourceType = 'entity_event' | 'extracted_event' | 'entity_fact' | 'entity';
-
-/**
- * Type of brief item
- */
-export type BriefItemType = 'meeting' | 'task' | 'followup' | 'overdue' | 'birthday';
-
-/**
- * Single item in the brief (accordion section)
- */
-export interface BriefItem {
-  /** Type of the item (determines available actions) */
-  type: BriefItemType;
-  /** Short title shown in collapsed state */
-  title: string;
-  /** Entity name (person/org) */
-  entityName: string;
-  /** Source type for routing operations */
-  sourceType: BriefSourceType;
-  /** Source entity ID (EntityEvent.id, ExtractedEvent.id, etc.) */
-  sourceId: string;
-  /** Detailed description shown when expanded */
-  details: string;
-  /** Original message ID for context link */
-  sourceMessageId?: string;
-  /** Deep link to source message */
-  sourceMessageLink?: string;
-  /** Entity ID for actions */
-  entityId?: string;
-}
-
-/**
- * Brief state stored in Redis
- */
-export interface BriefState {
-  /** Unique brief ID */
-  id: string;
-  /** Telegram chat ID */
-  chatId: string;
-  /** Telegram message ID for editMessage */
-  messageId: number;
-  /** All items in the brief */
-  items: BriefItem[];
-  /** Currently expanded item index (null = all collapsed) */
-  expandedIndex: number | null;
-  /** Creation timestamp */
-  createdAt: number;
-}
+// Re-export types for backward compatibility
+export { BriefItem, BriefState, BriefItemType, BriefSourceType, BriefResponse } from '@pkg/entities';
 
 /**
  * Service for managing Morning Brief accordion state in Redis.

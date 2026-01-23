@@ -1,6 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
-import { PkgCoreApiService, BriefResponse } from '../../api/pkg-core-api.service';
+import { BriefResponse } from '@pkg/entities';
+import { PkgCoreApiService } from '../../api/pkg-core-api.service';
+import {
+  BRIEF_CALLBACKS,
+  BriefCallbackAction,
+  isBriefCallback,
+  parseBriefCallback,
+  actionRequiresIndex,
+} from './brief.constants';
+import { escapeHtml } from '../../common/utils';
+import { BriefFormatterService } from '../services/brief-formatter.service';
 
 /**
  * Handles callback queries from Morning Brief accordion buttons.
@@ -18,21 +28,16 @@ import { PkgCoreApiService, BriefResponse } from '../../api/pkg-core-api.service
 export class BriefCallbackHandler {
   private readonly logger = new Logger(BriefCallbackHandler.name);
 
-  constructor(private readonly pkgCoreApi: PkgCoreApiService) {}
+  constructor(
+    private readonly pkgCoreApi: PkgCoreApiService,
+    private readonly briefFormatter: BriefFormatterService,
+  ) {}
 
   /**
    * Check if this handler can process the callback
    */
   canHandle(callbackData: string): boolean {
-    return (
-      callbackData.startsWith('br_e:') ||
-      callbackData.startsWith('br_c:') ||
-      callbackData.startsWith('br_d:') ||
-      callbackData.startsWith('br_x:') ||
-      callbackData.startsWith('br_w:') ||
-      callbackData.startsWith('br_r:') ||
-      callbackData.startsWith('br_p:')
-    );
+    return isBriefCallback(callbackData);
   }
 
   /**
@@ -46,34 +51,21 @@ export class BriefCallbackHandler {
 
     const callbackData = callbackQuery.data;
 
-    if (!this.canHandle(callbackData)) {
-      this.logger.warn(`Unknown callback data format: ${callbackData}`);
-      await ctx.answerCbQuery('Unknown action');
-      return;
-    }
-
-    // Parse action and parameters
-    const parts = callbackData.split(':');
-    const action = parts[0]; // br_e, br_c, br_d, br_x, br_w, br_r, br_p
-    const briefId = parts[1];
-
-    // Validate briefId
-    if (!briefId || briefId.trim() === '') {
-      this.logger.warn(`Invalid callback data: empty briefId in "${callbackData}"`);
+    // Parse and validate callback data
+    const parsed = parseBriefCallback(callbackData);
+    if (!parsed) {
+      this.logger.warn(`Invalid callback data format: ${callbackData}`);
       await ctx.answerCbQuery('Invalid request');
       return;
     }
 
-    // Parse and validate index
-    let index: number | undefined;
-    if (parts[2]) {
-      const parsedIndex = parseInt(parts[2], 10);
-      if (Number.isNaN(parsedIndex) || parsedIndex < 0) {
-        this.logger.warn(`Invalid callback data: invalid index "${parts[2]}" in "${callbackData}"`);
-        await ctx.answerCbQuery('Invalid index');
-        return;
-      }
-      index = parsedIndex;
+    const { action, briefId, index } = parsed;
+
+    // Validate index for actions that require it
+    if (actionRequiresIndex(action) && index === undefined) {
+      this.logger.warn(`Missing index for action ${action}: ${callbackData}`);
+      await ctx.answerCbQuery('Invalid index');
+      return;
     }
 
     this.logger.log(`Brief action: ${action}, briefId=${briefId}, index=${index}`);
@@ -82,63 +74,32 @@ export class BriefCallbackHandler {
       let response: BriefResponse;
 
       switch (action) {
-        case 'br_e':
-          // Expand item
-          if (index === undefined) {
-            await ctx.answerCbQuery('Invalid index');
-            return;
-          }
-          response = await this.pkgCoreApi.briefExpand(briefId, index);
+        case BRIEF_CALLBACKS.EXPAND:
+          response = await this.pkgCoreApi.briefExpand(briefId, index!);
           break;
 
-        case 'br_c':
-          // Collapse all
+        case BRIEF_CALLBACKS.COLLAPSE:
           response = await this.pkgCoreApi.briefCollapse(briefId);
           break;
 
-        case 'br_d':
-          // Mark as done
-          if (index === undefined) {
-            await ctx.answerCbQuery('Invalid index');
-            return;
-          }
-          response = await this.pkgCoreApi.briefMarkDone(briefId, index);
+        case BRIEF_CALLBACKS.DONE:
+          response = await this.pkgCoreApi.briefMarkDone(briefId, index!);
           break;
 
-        case 'br_x':
-          // Mark as dismissed
-          if (index === undefined) {
-            await ctx.answerCbQuery('Invalid index');
-            return;
-          }
-          response = await this.pkgCoreApi.briefMarkDismissed(briefId, index);
+        case BRIEF_CALLBACKS.DISMISS:
+          response = await this.pkgCoreApi.briefMarkDismissed(briefId, index!);
           break;
 
-        case 'br_w':
-          // Write message action
-          if (index === undefined) {
-            await ctx.answerCbQuery('Invalid index');
-            return;
-          }
-          await this.handleWriteAction(ctx, briefId, index);
+        case BRIEF_CALLBACKS.WRITE:
+          await this.handleWriteAction(ctx, briefId, index!);
           return;
 
-        case 'br_r':
-          // Remind action
-          if (index === undefined) {
-            await ctx.answerCbQuery('Invalid index');
-            return;
-          }
-          await this.handleRemindAction(ctx, briefId, index);
+        case BRIEF_CALLBACKS.REMIND:
+          await this.handleRemindAction(ctx, briefId, index!);
           return;
 
-        case 'br_p':
-          // Prepare brief action
-          if (index === undefined) {
-            await ctx.answerCbQuery('Invalid index');
-            return;
-          }
-          await this.handlePrepareAction(ctx, briefId, index);
+        case BRIEF_CALLBACKS.PREPARE:
+          await this.handlePrepareAction(ctx, briefId, index!);
           return;
 
         default:
@@ -152,13 +113,31 @@ export class BriefCallbackHandler {
         return;
       }
 
-      // Update message with new state
-      if (response.formattedMessage) {
-        await ctx.editMessageText(response.formattedMessage, {
+      // Format message and buttons locally using BriefFormatterService
+      // This follows Source-Agnostic principle: pkg-core returns data, telegram-adapter handles presentation
+      if (response.state) {
+        const isAllDone = response.state.items.length === 0 && action === BRIEF_CALLBACKS.DONE;
+        const isAllProcessed = response.state.items.length === 0 && action === BRIEF_CALLBACKS.DISMISS;
+
+        let formattedMessage: string;
+        let buttons: Array<Array<{ text: string; callback_data: string }>>;
+
+        if (isAllDone) {
+          formattedMessage = this.briefFormatter.formatAllDoneMessage();
+          buttons = [];
+        } else if (isAllProcessed) {
+          formattedMessage = this.briefFormatter.formatAllProcessedMessage();
+          buttons = [];
+        } else {
+          formattedMessage = this.briefFormatter.formatMessage(response.state);
+          buttons = this.briefFormatter.getButtons(response.state);
+        }
+
+        await ctx.editMessageText(formattedMessage, {
           parse_mode: 'HTML',
-          reply_markup: response.buttons?.length
+          reply_markup: buttons.length
             ? {
-                inline_keyboard: response.buttons.map((row) =>
+                inline_keyboard: buttons.map((row) =>
                   row.map((btn) => ({
                     text: btn.text,
                     callback_data: btn.callback_data,
@@ -210,8 +189,8 @@ export class BriefCallbackHandler {
 
       // Send a separate message with prompt to use /act command
       await ctx.reply(
-        `💬 Чтобы написать сообщение для <b>${this.escapeHtml(item.entityName)}</b>, ` +
-          `используй команду:\n\n<code>/act напиши ${this.escapeHtml(item.entityName)} ...</code>`,
+        `💬 Чтобы написать сообщение для <b>${escapeHtml(item.entityName)}</b>, ` +
+          `используй команду:\n\n<code>/act напиши ${escapeHtml(item.entityName)} ...</code>`,
         { parse_mode: 'HTML' },
       );
     } catch (error) {
@@ -242,8 +221,8 @@ export class BriefCallbackHandler {
 
       // Send prompt for /act remind command
       await ctx.reply(
-        `🔔 Чтобы напомнить <b>${this.escapeHtml(item.entityName)}</b>, ` +
-          `используй команду:\n\n<code>/act напомни ${this.escapeHtml(item.entityName)} о ...</code>`,
+        `🔔 Чтобы напомнить <b>${escapeHtml(item.entityName)}</b>, ` +
+          `используй команду:\n\n<code>/act напомни ${escapeHtml(item.entityName)} о ...</code>`,
         { parse_mode: 'HTML' },
       );
     } catch (error) {
@@ -275,14 +254,14 @@ export class BriefCallbackHandler {
       // Trigger /prepare command for this entity
       if (item.entityId) {
         await ctx.reply(
-          `📋 Готовлю brief для <b>${this.escapeHtml(item.entityName)}</b>...\n\n` +
-            `Используй команду <code>/prepare ${this.escapeHtml(item.entityName)}</code> для полного brief.`,
+          `📋 Готовлю brief для <b>${escapeHtml(item.entityName)}</b>...\n\n` +
+            `Используй команду <code>/prepare ${escapeHtml(item.entityName)}</code> для полного brief.`,
           { parse_mode: 'HTML' },
         );
       } else {
         await ctx.reply(
-          `📋 Чтобы получить brief для <b>${this.escapeHtml(item.entityName)}</b>, ` +
-            `используй команду:\n\n<code>/prepare ${this.escapeHtml(item.entityName)}</code>`,
+          `📋 Чтобы получить brief для <b>${escapeHtml(item.entityName)}</b>, ` +
+            `используй команду:\n\n<code>/prepare ${escapeHtml(item.entityName)}</code>`,
           { parse_mode: 'HTML' },
         );
       }
@@ -292,19 +271,19 @@ export class BriefCallbackHandler {
     }
   }
 
-  private getActionFeedback(action: string, message?: string): string {
+  private getActionFeedback(action: BriefCallbackAction, message?: string): string {
     if (message) {
       return message.length > 50 ? message.substring(0, 47) + '...' : message;
     }
 
     switch (action) {
-      case 'br_e':
+      case BRIEF_CALLBACKS.EXPAND:
         return '📖';
-      case 'br_c':
+      case BRIEF_CALLBACKS.COLLAPSE:
         return '📋';
-      case 'br_d':
+      case BRIEF_CALLBACKS.DONE:
         return '✅ Готово';
-      case 'br_x':
+      case BRIEF_CALLBACKS.DISMISS:
         return '➖ Не актуально';
       default:
         return '';
@@ -316,14 +295,5 @@ export class BriefCallbackHandler {
       return error.message.includes('message is not modified');
     }
     return false;
-  }
-
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 }

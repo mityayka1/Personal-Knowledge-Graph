@@ -4,6 +4,7 @@ import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
 import { EntityService } from '../entity/entity.service';
 import { TelegramNotifierService } from './telegram-notifier.service';
+import { escapeHtml } from '../../common/utils';
 
 /**
  * Approval status enum
@@ -480,7 +481,7 @@ export class ApprovalService implements OnModuleDestroy {
   ): Promise<number | null> {
     // Create clickable contact link
     // Priority: https://t.me/username (more reliable) > tg://user?id=X (limited)
-    const escapedName = this.escapeHtml(approval.entityName);
+    const escapedName = escapeHtml(approval.entityName);
     let contactLink: string;
 
     if (approval.telegramUsername) {
@@ -498,7 +499,7 @@ export class ApprovalService implements OnModuleDestroy {
 <b>Кому:</b> ${contactLink}
 
 <b>Текст:</b>
-${this.escapeHtml(approval.text)}`;
+${escapeHtml(approval.text)}`;
 
     const buttons = [
       [
@@ -509,17 +510,5 @@ ${this.escapeHtml(approval.text)}`;
     ];
 
     return this.telegramNotifier.sendWithButtonsAndGetId(message, buttons, 'HTML');
-  }
-
-  /**
-   * Escape HTML special characters including quotes
-   */
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
   }
 }
