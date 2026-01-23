@@ -639,21 +639,28 @@ export class PkgCoreApiService {
 
   /**
    * Get brief state
+   * @param briefId Brief ID
+   * @param timeout Optional timeout in ms (default: 10000)
    */
-  async getBrief(briefId: string): Promise<BriefResponse> {
+  async getBrief(briefId: string, timeout = 10000): Promise<BriefResponse> {
     return this.withRetry(async () => {
-      const response = await this.client.get<BriefResponse>(`/brief/${briefId}`);
+      const response = await this.client.get<BriefResponse>(`/brief/${briefId}`, { timeout });
       return response.data;
     });
   }
 
   /**
    * Expand an item in the brief
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param timeout Optional timeout in ms (default: 10000)
    */
-  async briefExpand(briefId: string, index: number): Promise<BriefResponse> {
+  async briefExpand(briefId: string, index: number, timeout = 10000): Promise<BriefResponse> {
     return this.withRetry(async () => {
       const response = await this.client.post<BriefResponse>(
         `/brief/${briefId}/expand/${index}`,
+        {},
+        { timeout },
       );
       return response.data;
     });
@@ -661,11 +668,15 @@ export class PkgCoreApiService {
 
   /**
    * Collapse all items in the brief
+   * @param briefId Brief ID
+   * @param timeout Optional timeout in ms (default: 10000)
    */
-  async briefCollapse(briefId: string): Promise<BriefResponse> {
+  async briefCollapse(briefId: string, timeout = 10000): Promise<BriefResponse> {
     return this.withRetry(async () => {
       const response = await this.client.post<BriefResponse>(
         `/brief/${briefId}/collapse`,
+        {},
+        { timeout },
       );
       return response.data;
     });
@@ -673,11 +684,16 @@ export class PkgCoreApiService {
 
   /**
    * Mark item as done (completed)
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param timeout Optional timeout in ms (default: 10000)
    */
-  async briefMarkDone(briefId: string, index: number): Promise<BriefResponse> {
+  async briefMarkDone(briefId: string, index: number, timeout = 10000): Promise<BriefResponse> {
     return this.withRetry(async () => {
       const response = await this.client.post<BriefResponse>(
         `/brief/${briefId}/done/${index}`,
+        {},
+        { timeout },
       );
       return response.data;
     });
@@ -685,11 +701,16 @@ export class PkgCoreApiService {
 
   /**
    * Mark item as dismissed (not going to do)
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param timeout Optional timeout in ms (default: 10000)
    */
-  async briefMarkDismissed(briefId: string, index: number): Promise<BriefResponse> {
+  async briefMarkDismissed(briefId: string, index: number, timeout = 10000): Promise<BriefResponse> {
     return this.withRetry(async () => {
       const response = await this.client.post<BriefResponse>(
         `/brief/${briefId}/dismiss/${index}`,
+        {},
+        { timeout },
       );
       return response.data;
     });
@@ -697,16 +718,22 @@ export class PkgCoreApiService {
 
   /**
    * Trigger action for an item (write, remind, prepare)
+   * @param briefId Brief ID
+   * @param index Item index (0-based)
+   * @param actionType Action type
+   * @param timeout Optional timeout in ms (default: 10000)
    */
   async briefAction(
     briefId: string,
     index: number,
     actionType: 'write' | 'remind' | 'prepare',
+    timeout = 10000,
   ): Promise<BriefResponse> {
     return this.withRetry(async () => {
       const response = await this.client.post<BriefResponse>(
         `/brief/${briefId}/action/${index}`,
         { actionType },
+        { timeout },
       );
       return response.data;
     });

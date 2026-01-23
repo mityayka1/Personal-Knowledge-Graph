@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
-import { EntityEvent, EventStatus } from '@pkg/entities';
+import { EntityEvent, EventStatus, ExtractedEvent, EntityFact } from '@pkg/entities';
 import { BriefController } from './brief.controller';
 import { BriefStateService, BriefItem, BriefState } from './brief-state.service';
 
@@ -9,6 +9,8 @@ describe('BriefController', () => {
   let controller: BriefController;
   let briefStateService: jest.Mocked<BriefStateService>;
   let entityEventRepo: { update: jest.Mock };
+  let extractedEventRepo: { update: jest.Mock };
+  let entityFactRepo: { update: jest.Mock };
 
   const createMockItem = (index: number, type: BriefItem['type'] = 'task'): BriefItem => ({
     type,
@@ -46,6 +48,14 @@ describe('BriefController', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
+    extractedEventRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
+    entityFactRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [BriefController],
       providers: [
@@ -56,6 +66,14 @@ describe('BriefController', () => {
         {
           provide: getRepositoryToken(EntityEvent),
           useValue: entityEventRepo,
+        },
+        {
+          provide: getRepositoryToken(ExtractedEvent),
+          useValue: extractedEventRepo,
+        },
+        {
+          provide: getRepositoryToken(EntityFact),
+          useValue: entityFactRepo,
         },
       ],
     }).compile();

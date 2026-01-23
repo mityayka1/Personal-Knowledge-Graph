@@ -11,10 +11,17 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { IsOptional, IsIn } from 'class-validator';
-import { EntityEvent, EventStatus } from '@pkg/entities';
+import {
+  EntityEvent,
+  EventStatus,
+  ExtractedEvent,
+  ExtractedEventStatus,
+  EntityFact,
+} from '@pkg/entities';
 import { BriefStateService, BriefState, BriefItem } from './brief-state.service';
 
 /**
@@ -48,6 +55,7 @@ export interface BriefResponse {
  * - Mark as dismissed
  * - Trigger actions (write, remind, prepare)
  */
+@ApiTags('brief')
 @Controller('brief')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
 export class BriefController {
@@ -57,12 +65,20 @@ export class BriefController {
     private readonly briefStateService: BriefStateService,
     @InjectRepository(EntityEvent)
     private readonly entityEventRepo: Repository<EntityEvent>,
+    @InjectRepository(ExtractedEvent)
+    private readonly extractedEventRepo: Repository<ExtractedEvent>,
+    @InjectRepository(EntityFact)
+    private readonly entityFactRepo: Repository<EntityFact>,
   ) {}
 
   /**
    * Get brief state
    */
   @Get(':briefId')
+  @ApiOperation({ summary: 'Get brief state', description: 'Returns brief state with formatted message and buttons' })
+  @ApiParam({ name: 'briefId', description: 'Brief ID (e.g., b_abc123)' })
+  @ApiResponse({ status: 200, description: 'Brief state retrieved successfully' })
+  @ApiResponse({ status: 404, description: 'Brief not found or expired' })
   async getBrief(@Param('briefId') briefId: string): Promise<BriefResponse> {
     const state = await this.briefStateService.get(briefId);
     if (!state) {
@@ -81,6 +97,11 @@ export class BriefController {
    * Expand an item in the brief
    */
   @Post(':briefId/expand/:index')
+  @ApiOperation({ summary: 'Expand item', description: 'Expands an item to show details and action buttons' })
+  @ApiParam({ name: 'briefId', description: 'Brief ID' })
+  @ApiParam({ name: 'index', description: 'Item index (0-based)' })
+  @ApiResponse({ status: 200, description: 'Item expanded successfully' })
+  @ApiResponse({ status: 404, description: 'Brief not found or expired' })
   async expand(
     @Param('briefId') briefId: string,
     @Param('index', ParseIntPipe) index: number,
@@ -102,6 +123,10 @@ export class BriefController {
    * Collapse all items (go back to overview)
    */
   @Post(':briefId/collapse')
+  @ApiOperation({ summary: 'Collapse items', description: 'Collapses all items to overview mode' })
+  @ApiParam({ name: 'briefId', description: 'Brief ID' })
+  @ApiResponse({ status: 200, description: 'Items collapsed successfully' })
+  @ApiResponse({ status: 404, description: 'Brief not found or expired' })
   async collapse(@Param('briefId') briefId: string): Promise<BriefResponse> {
     const state = await this.briefStateService.collapse(briefId);
     if (!state) {
@@ -120,6 +145,11 @@ export class BriefController {
    * Mark item as done (completed)
    */
   @Post(':briefId/done/:index')
+  @ApiOperation({ summary: 'Mark item done', description: 'Marks item as completed and removes from brief' })
+  @ApiParam({ name: 'briefId', description: 'Brief ID' })
+  @ApiParam({ name: 'index', description: 'Item index (0-based)' })
+  @ApiResponse({ status: 200, description: 'Item marked as done' })
+  @ApiResponse({ status: 404, description: 'Item or brief not found' })
   async markDone(
     @Param('briefId') briefId: string,
     @Param('index', ParseIntPipe) index: number,
@@ -163,6 +193,11 @@ export class BriefController {
    * Mark item as dismissed (not going to do)
    */
   @Post(':briefId/dismiss/:index')
+  @ApiOperation({ summary: 'Mark item dismissed', description: 'Marks item as dismissed (not relevant) and removes from brief' })
+  @ApiParam({ name: 'briefId', description: 'Brief ID' })
+  @ApiParam({ name: 'index', description: 'Item index (0-based)' })
+  @ApiResponse({ status: 200, description: 'Item dismissed' })
+  @ApiResponse({ status: 404, description: 'Item or brief not found' })
   async markDismissed(
     @Param('briefId') briefId: string,
     @Param('index', ParseIntPipe) index: number,
@@ -206,6 +241,12 @@ export class BriefController {
    * Trigger an action (write message, remind, prepare brief)
    */
   @Post(':briefId/action/:index')
+  @ApiOperation({ summary: 'Trigger action', description: 'Triggers an action for the item (write, remind, prepare)' })
+  @ApiParam({ name: 'briefId', description: 'Brief ID' })
+  @ApiParam({ name: 'index', description: 'Item index (0-based)' })
+  @ApiResponse({ status: 200, description: 'Action triggered successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid action type' })
+  @ApiResponse({ status: 404, description: 'Item not found' })
   async triggerAction(
     @Param('briefId') briefId: string,
     @Param('index', ParseIntPipe) index: number,
@@ -233,13 +274,48 @@ export class BriefController {
   // ─────────────────────────────────────────────────────────────────
 
   /**
-   * Update status of the source entity
+   * Update status of the source entity based on sourceType.
+   *
+   * - entity_event: Update EventStatus
+   * - extracted_event: Update ExtractedEventStatus (CONFIRMED for done, REJECTED for dismissed)
+   * - entity_fact: Set validUntil to now (mark as no longer valid)
+   * - entity: No status update needed (just removes from brief)
    */
   private async updateSourceStatus(item: BriefItem, status: EventStatus): Promise<void> {
-    if (item.sourceType === 'entity_event') {
-      await this.entityEventRepo.update(item.sourceId, { status });
+    switch (item.sourceType) {
+      case 'entity_event':
+        await this.entityEventRepo.update(item.sourceId, { status });
+        break;
+
+      case 'extracted_event': {
+        // Map EventStatus to ExtractedEventStatus
+        const extractedStatus =
+          status === EventStatus.COMPLETED
+            ? ExtractedEventStatus.CONFIRMED
+            : ExtractedEventStatus.REJECTED;
+        await this.extractedEventRepo.update(item.sourceId, {
+          status: extractedStatus,
+          userResponseAt: new Date(),
+        });
+        break;
+      }
+
+      case 'entity_fact':
+        // Mark fact as no longer valid by setting validUntil
+        await this.entityFactRepo.update(item.sourceId, {
+          validUntil: new Date(),
+        });
+        break;
+
+      case 'entity':
+        // Entity items don't have a status to update
+        // They are informational only (e.g., birthdays)
+        this.logger.debug(`Skipping status update for entity source: ${item.sourceId}`);
+        break;
+
+      default:
+        this.logger.warn(`Unknown sourceType: ${item.sourceType}`);
     }
-    // Note: extracted_event and entity_fact handling can be added here
   }
 
   /**
