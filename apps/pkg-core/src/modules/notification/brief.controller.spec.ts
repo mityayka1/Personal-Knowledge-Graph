@@ -355,4 +355,121 @@ describe('BriefController', () => {
       expect(buttons).toEqual([]);
     });
   });
+
+  describe('sanitizeUrl', () => {
+    it('should allow https:// URLs', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'https://t.me/c/123/456',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).toContain('href="https://t.me/c/123/456"');
+    });
+
+    it('should allow tg:// URLs', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'tg://resolve?domain=test',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).toContain('href="tg://resolve?domain=test"');
+    });
+
+    it('should block javascript: URLs (XSS prevention)', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'javascript:alert("xss")',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).not.toContain('javascript:');
+      expect(message).not.toContain('href=');
+    });
+
+    it('should block http:// URLs (only https allowed)', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'http://insecure.com',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).not.toContain('http://insecure.com');
+      expect(message).not.toContain('Перейти к сообщению');
+    });
+
+    it('should block data: URLs', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'data:text/html,<script>alert(1)</script>',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).not.toContain('data:');
+    });
+
+    it('should block file:// URLs', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'file:///etc/passwd',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).not.toContain('file://');
+    });
+
+    it('should escape quotes in valid URLs', () => {
+      const state = createMockState(
+        [
+          {
+            ...createMockItem(1),
+            sourceMessageLink: 'https://t.me/c/123/456?a="test"',
+          },
+        ],
+        0,
+      );
+
+      const message = controller.formatBriefMessage(state);
+
+      expect(message).toContain('&quot;test&quot;');
+      expect(message).not.toContain('="test"');
+    });
+  });
 });

@@ -217,6 +217,28 @@ describe('BriefCallbackHandler', () => {
 
       expect(ctx.answerCbQuery).toHaveBeenCalledWith('Элемент не найден');
     });
+
+    it('should handle API error in write action', async () => {
+      const ctx = mockContext('br_w:b_test123456ab:0') as Context;
+      pkgCoreApi.briefAction.mockRejectedValue(new Error('Network error'));
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Ошибка');
+    });
+
+    it('should handle success: false response in write action', async () => {
+      const ctx = mockContext('br_w:b_test123456ab:0') as Context;
+      pkgCoreApi.briefAction.mockResolvedValue({
+        success: false,
+        error: 'Brief expired',
+      });
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Brief expired');
+      expect(ctx.reply).not.toHaveBeenCalled();
+    });
   });
 
   describe('handle - remind action', () => {
@@ -229,6 +251,28 @@ describe('BriefCallbackHandler', () => {
       expect(pkgCoreApi.briefAction).toHaveBeenCalledWith('b_test123456ab', 0, 'remind');
       expect(ctx.reply).toHaveBeenCalled();
     });
+
+    it('should handle API error in remind action', async () => {
+      const ctx = mockContext('br_r:b_test123456ab:0') as Context;
+      pkgCoreApi.briefAction.mockRejectedValue(new Error('Network error'));
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Ошибка');
+    });
+
+    it('should handle success: false response in remind action', async () => {
+      const ctx = mockContext('br_r:b_test123456ab:0') as Context;
+      pkgCoreApi.briefAction.mockResolvedValue({
+        success: false,
+        error: 'Item not found',
+      });
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Item not found');
+      expect(ctx.reply).not.toHaveBeenCalled();
+    });
   });
 
   describe('handle - prepare action', () => {
@@ -240,6 +284,48 @@ describe('BriefCallbackHandler', () => {
 
       expect(pkgCoreApi.briefAction).toHaveBeenCalledWith('b_test123456ab', 0, 'prepare');
       expect(ctx.reply).toHaveBeenCalled();
+    });
+
+    it('should handle API error in prepare action', async () => {
+      const ctx = mockContext('br_p:b_test123456ab:0') as Context;
+      pkgCoreApi.briefAction.mockRejectedValue(new Error('Network error'));
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Ошибка');
+    });
+
+    it('should handle success: false response in prepare action', async () => {
+      const ctx = mockContext('br_p:b_test123456ab:0') as Context;
+      pkgCoreApi.briefAction.mockResolvedValue({
+        success: false,
+        error: 'Brief expired',
+      });
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Brief expired');
+      expect(ctx.reply).not.toHaveBeenCalled();
+    });
+
+    it('should handle item not found in prepare action', async () => {
+      const ctx = mockContext('br_p:b_test123456ab:5') as Context;
+      pkgCoreApi.briefAction.mockResolvedValue(
+        createMockBriefResponse({
+          state: {
+            id: 'b_test123456ab',
+            chatId: '123456',
+            messageId: 789,
+            items: [], // No items
+            expandedIndex: null,
+            createdAt: Date.now(),
+          },
+        }),
+      );
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Элемент не найден');
     });
   });
 

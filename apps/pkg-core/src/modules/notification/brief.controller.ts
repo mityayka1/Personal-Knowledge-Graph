@@ -8,6 +8,8 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -47,6 +49,7 @@ export interface BriefResponse {
  * - Trigger actions (write, remind, prepare)
  */
 @Controller('brief')
+@UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
 export class BriefController {
   private readonly logger = new Logger(BriefController.name);
 

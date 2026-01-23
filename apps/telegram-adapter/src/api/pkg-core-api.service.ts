@@ -172,6 +172,12 @@ export interface ApprovalResponse {
 // Brief API Types (Morning Brief Accordion)
 // ============================================
 
+/** Type of brief item */
+export type BriefItemType = 'meeting' | 'task' | 'followup' | 'overdue' | 'birthday';
+
+/** Type of source for a brief item */
+export type BriefSourceType = 'entity_event' | 'extracted_event' | 'entity_fact' | 'entity';
+
 export interface BriefResponse {
   success: boolean;
   state?: {
@@ -179,10 +185,10 @@ export interface BriefResponse {
     chatId: string;
     messageId: number;
     items: Array<{
-      type: string;
+      type: BriefItemType;
       title: string;
       entityName: string;
-      sourceType: string;
+      sourceType: BriefSourceType;
       sourceId: string;
       details: string;
       entityId?: string;

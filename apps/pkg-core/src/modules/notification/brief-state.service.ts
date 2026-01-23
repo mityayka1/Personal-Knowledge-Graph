@@ -130,7 +130,9 @@ export class BriefStateService {
     try {
       return JSON.parse(data) as BriefState;
     } catch (error) {
-      this.logger.error(`Failed to parse brief state: ${briefId}`);
+      this.logger.error(`Failed to parse brief state: ${briefId}`, error);
+      // Delete corrupted data to prevent repeated parse errors
+      await this.redis.del(key);
       return null;
     }
   }
