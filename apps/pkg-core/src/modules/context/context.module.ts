@@ -24,7 +24,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
       EntityFact,
       TranscriptSegment,
     ]),
-    EntityModule,
+    forwardRef(() => EntityModule),
     forwardRef(() => InteractionModule),
     SearchModule,
     EmbeddingModule,

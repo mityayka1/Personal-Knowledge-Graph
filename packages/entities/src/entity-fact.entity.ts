@@ -111,6 +111,29 @@ export class EntityFact {
   @JoinColumn({ name: 'source_interaction_id' })
   sourceInteraction: Interaction | null;
 
+  // Ranking (Wikidata-style): preferred > normal > deprecated
+  @Column({ type: 'varchar', length: 20, default: 'normal' })
+  rank: 'preferred' | 'normal' | 'deprecated';
+
+  // Fact linking - points to newer version of this fact
+  @Column({ name: 'superseded_by', type: 'uuid', nullable: true })
+  supersededById: string | null;
+
+  @ManyToOne(() => EntityFact, { nullable: true })
+  @JoinColumn({ name: 'superseded_by' })
+  supersededBy: EntityFact | null;
+
+  // Conflict tracking
+  @Column({ name: 'needs_review', type: 'boolean', default: false })
+  needsReview: boolean;
+
+  @Column({ name: 'review_reason', type: 'text', nullable: true })
+  reviewReason: string | null;
+
+  // Confirmation tracking - how many times this fact was confirmed from different sources
+  @Column({ name: 'confirmation_count', type: 'integer', default: 1 })
+  confirmationCount: number;
+
   @Column({ name: 'valid_from', type: 'date', nullable: true })
   validFrom: Date | null;
 

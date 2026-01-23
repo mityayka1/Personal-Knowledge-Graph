@@ -337,6 +337,7 @@ ${JSON.stringify(schema, null, 2)}`;
       profile_aggregation: 'You aggregate information about a person from multiple interactions to build a relationship profile.',
       context_synthesis: 'You synthesize context from multiple sources to prepare for an interaction.',
       fact_extraction: 'You extract structured facts (like job title, company, contact info) from messages.',
+      fact_fusion: 'You analyze two facts about the same entity and decide how to merge them: confirm, enrich, supersede, coexist, or flag as conflict.',
     };
     return prompts[taskType] || '';
   }

@@ -53,10 +53,13 @@ export class FactExtractionProcessor extends WorkerHost {
       }
 
       // Map messages to the format expected by extractFactsBatch
+      // Include context (isOutgoing, senderName) for better extraction accuracy
       const formattedMessages = messages.map((m) => ({
         id: m.id,
         content: m.content,
         interactionId,
+        isOutgoing: m.isOutgoing,
+        senderName: m.senderEntityName,
       }));
 
       // Extract facts using Claude CLI
@@ -64,6 +67,7 @@ export class FactExtractionProcessor extends WorkerHost {
         entityId,
         entityName: entity.name,
         messages: formattedMessages,
+        // TODO: Get chatType from interaction when available
       });
 
       // Extract events (meetings, deadlines, commitments) - creates EntityEvent directly

@@ -7,9 +7,17 @@
 
 /**
  * Default threshold for semantic similarity.
- * Values above this are considered duplicates.
+ * Values above this are considered candidates for fusion.
+ *
+ * Note: This is intentionally set lower (0.70) to catch more candidates.
+ * The LLM fusion service makes the final decision whether to merge.
+ *
+ * Examples of similarities:
+ * - "родился 15 марта 1985 года" vs "день рождения 15.03.1985" = 0.786 ✅ (same info)
+ * - "работает в Сбере" vs "работает в Сбербанке" = 0.86 ✅ (same info)
+ * - "работает в Сбере" vs "работает в Тинькофф" = 0.43 ❌ (different)
  */
-export const SEMANTIC_SIMILARITY_THRESHOLD = 0.85;
+export const SEMANTIC_SIMILARITY_THRESHOLD = 0.70;
 
 /**
  * Calculate cosine similarity between two embedding vectors.

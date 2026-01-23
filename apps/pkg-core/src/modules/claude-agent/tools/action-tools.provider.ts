@@ -37,6 +37,7 @@ export class ActionToolsProvider {
   private cachedTools: ToolDefinition[] | null = null;
 
   constructor(
+    @Inject(forwardRef(() => EntityService))
     private readonly entityService: EntityService,
     private readonly entityEventService: EntityEventService,
     @Optional()

@@ -20,6 +20,8 @@ import { BriefStateService } from './brief-state.service';
 import { BriefService } from './brief.service';
 import { BriefController } from './brief.controller';
 import { TelegramSendService } from './telegram-send.service';
+import { FactConflictService } from './fact-conflict.service';
+import { FactConflictController } from './fact-conflict.controller';
 import { SettingsModule } from '../settings/settings.module';
 import { EntityModule } from '../entity/entity.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
@@ -42,7 +44,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => EntityModule),
     forwardRef(() => ClaudeAgentModule),
   ],
-  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController, BriefController],
+  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController, BriefController, FactConflictController],
   providers: [
     TelegramNotifierService,
     NotificationService,
@@ -55,6 +57,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     TelegramSendService,
     BriefStateService,
     BriefService,
+    FactConflictService,
   ],
   exports: [
     TelegramNotifierService,
@@ -66,6 +69,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     TelegramSendService,
     BriefStateService,
     BriefService,
+    FactConflictService,
   ],
 })
 export class NotificationModule {}

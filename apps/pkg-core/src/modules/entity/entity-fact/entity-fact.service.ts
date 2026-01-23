@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { EntityFact, FactSource } from '@pkg/entities';
@@ -8,12 +8,17 @@ import {
   SEMANTIC_SIMILARITY_THRESHOLD,
   formatEmbeddingForQuery,
 } from '../../../common/utils/similarity.utils';
+import { FactFusionService } from './fact-fusion.service';
 
 export interface CreateFactResult {
   fact: EntityFact;
   action: 'created' | 'skipped' | 'updated';
   reason?: string;
   existingFactId?: string;
+  /** For CONFLICT action - fact needs human review */
+  needsReview?: boolean;
+  /** For CONFLICT action - new fact data to create after resolution */
+  newFactData?: CreateFactDto;
 }
 
 @Injectable()
@@ -24,7 +29,11 @@ export class EntityFactService {
     @InjectRepository(EntityFact)
     private factRepo: Repository<EntityFact>,
     @Optional()
+    @Inject(EmbeddingService)
     private embeddingService: EmbeddingService | null,
+    @Optional()
+    @Inject(forwardRef(() => FactFusionService))
+    private factFusionService: FactFusionService | null,
   ) {}
 
   /**
@@ -43,7 +52,11 @@ export class EntityFactService {
   async createWithDedup(
     entityId: string,
     dto: CreateFactDto,
-    options?: { skipSemanticCheck?: boolean },
+    options?: {
+      skipSemanticCheck?: boolean;
+      skipFusion?: boolean;
+      messageContext?: string;
+    },
   ): Promise<CreateFactResult> {
     // If we have a text value and embedding service, check for semantic duplicates
     if (dto.value && this.embeddingService && !options?.skipSemanticCheck) {
@@ -54,8 +67,28 @@ export class EntityFactService {
           `Semantic duplicate found for "${dto.value}" - existing fact: ${dupResult.existingFact.id}`,
         );
 
-        // If new source has higher confidence potential (e.g., EXTRACTED), we might want to update
-        // For now, just skip and return existing
+        // Use LLM to decide fusion strategy
+        if (!options?.skipFusion && this.factFusionService) {
+          const decision = await this.factFusionService.decideFusion(
+            dupResult.existingFact,
+            dto.value,
+            dto.source || FactSource.EXTRACTED,
+            { messageContent: options?.messageContext },
+          );
+
+          this.logger.log(
+            `Fusion decision for "${dto.value}": ${decision.action} (confidence: ${decision.confidence})`,
+          );
+
+          return this.factFusionService.applyDecision(
+            dupResult.existingFact,
+            dto,
+            decision,
+            entityId,
+          );
+        }
+
+        // Fallback: simple skip (backward compatible)
         return {
           fact: dupResult.existingFact,
           action: 'skipped',
@@ -79,15 +112,23 @@ export class EntityFactService {
 
     // Generate embedding for the fact value
     let hasEmbedding = false;
+    this.logger.debug(
+      `Embedding generation check: value="${dto.value?.slice(0, 50)}", embeddingService=${!!this.embeddingService}`,
+    );
     if (dto.value && this.embeddingService) {
       try {
         const embedding = await this.embeddingService.generate(dto.value);
+        this.logger.debug(`Embedding generated: length=${embedding?.length}`);
         fact.embedding = embedding;
         hasEmbedding = true;
       } catch (error: any) {
         this.logger.warn(`Failed to generate embedding for fact: ${error.message}`);
         // Continue without embedding - fact will still be created
       }
+    } else {
+      this.logger.warn(
+        `Skipping embedding: value=${!!dto.value}, embeddingService=${!!this.embeddingService}`,
+      );
     }
 
     const savedFact = await this.factRepo.save(fact);
@@ -185,6 +226,59 @@ export class EntityFactService {
     return this.factRepo.find({
       where,
       order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Find facts for an entity with rank-based ordering.
+   * Returns preferred facts first, then normal, deprecated last (if included).
+   */
+  async findByEntityWithRanking(
+    entityId: string,
+    options: { includeDeprecated?: boolean; includeHistory?: boolean } = {},
+  ): Promise<EntityFact[]> {
+    const queryBuilder = this.factRepo
+      .createQueryBuilder('fact')
+      .where('fact.entityId = :entityId', { entityId });
+
+    // Exclude deprecated unless requested
+    if (!options.includeDeprecated) {
+      queryBuilder.andWhere("fact.rank != 'deprecated'");
+    }
+
+    // Exclude historical facts unless requested
+    if (!options.includeHistory) {
+      queryBuilder.andWhere('fact.validUntil IS NULL');
+    }
+
+    // Order by rank priority: preferred > normal > deprecated
+    queryBuilder.orderBy(
+      `CASE fact.rank
+        WHEN 'preferred' THEN 1
+        WHEN 'normal' THEN 2
+        WHEN 'deprecated' THEN 3
+        ELSE 4
+      END`,
+      'ASC',
+    );
+    queryBuilder.addOrderBy('fact.factType', 'ASC');
+    queryBuilder.addOrderBy('fact.createdAt', 'DESC');
+
+    return queryBuilder.getMany();
+  }
+
+  /**
+   * Find facts that need human review (conflicts).
+   */
+  async findPendingReview(options: { limit?: number } = {}): Promise<EntityFact[]> {
+    return this.factRepo.find({
+      where: {
+        needsReview: true,
+        validUntil: IsNull(),
+      },
+      relations: ['entity'],
+      order: { createdAt: 'DESC' },
+      take: options.limit || 50,
     });
   }
 

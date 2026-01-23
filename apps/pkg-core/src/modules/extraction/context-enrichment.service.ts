@@ -51,21 +51,23 @@ interface EnrichmentSynthesisResult {
  */
 const ENRICHMENT_CONFIG = {
   /** Number of days to search back for related messages */
-  SEARCH_DAYS: 7,
+  SEARCH_DAYS: 14,
   /** Maximum number of keywords to extract */
-  MAX_KEYWORDS: 10,
+  MAX_KEYWORDS: 15,
   /** Minimum word length to consider as keyword */
   MIN_WORD_LENGTH: 3,
   /** Maximum number of related messages to fetch */
-  MAX_RELATED_MESSAGES: 10,
+  MAX_RELATED_MESSAGES: 20,
   /** Maximum number of candidate events to fetch */
-  MAX_CANDIDATE_EVENTS: 10,
+  MAX_CANDIDATE_EVENTS: 20,
   /** Maximum content length for messages in context */
-  MAX_CONTENT_LENGTH: 500,
+  MAX_CONTENT_LENGTH: 1000,
   /** Confidence threshold below which event needs user context */
-  CONFIDENCE_THRESHOLD: 0.5,
+  CONFIDENCE_THRESHOLD: 0.4,
   /** Timeout for synthesis LLM call in ms */
-  SYNTHESIS_TIMEOUT_MS: 30000,
+  SYNTHESIS_TIMEOUT_MS: 60000,
+  /** LLM model to use for synthesis */
+  MODEL: 'sonnet' as const,
 } as const;
 
 /**
@@ -387,7 +389,7 @@ export class ContextEnrichmentService {
         taskType: 'context_enrichment',
         prompt,
         schema: ENRICHMENT_SYNTHESIS_SCHEMA,
-        model: 'haiku', // Use cheaper model for synthesis
+        model: ENRICHMENT_CONFIG.MODEL,
         referenceType: 'extracted_event',
         referenceId: event.id,
         timeout: ENRICHMENT_CONFIG.SYNTHESIS_TIMEOUT_MS,

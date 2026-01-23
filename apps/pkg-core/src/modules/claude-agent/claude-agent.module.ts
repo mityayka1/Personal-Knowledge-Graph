@@ -44,7 +44,7 @@ import { NotificationModule } from '../notification/notification.module';
     // ContextModule imports ClaudeAgentModule, so we use forwardRef here
     forwardRef(() => ContextModule),
     EntityEventModule,
-    EntityModule,
+    forwardRef(() => EntityModule),
     // NotificationModule for ApprovalService (action tools)
     forwardRef(() => NotificationModule),
   ],

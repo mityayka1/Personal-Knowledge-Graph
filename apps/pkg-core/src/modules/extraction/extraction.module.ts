@@ -38,7 +38,7 @@ import { EmbeddingModule } from '../embedding/embedding.module';
     forwardRef(() => InteractionModule),
     forwardRef(() => EntityModule),
     EntityEventModule,
-    ClaudeAgentModule,
+    forwardRef(() => ClaudeAgentModule),
     SettingsModule,
     SearchModule,
     EmbeddingModule,

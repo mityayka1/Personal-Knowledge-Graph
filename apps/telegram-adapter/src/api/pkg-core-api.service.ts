@@ -200,6 +200,17 @@ export interface ActResponse {
   error?: string;
 }
 
+// ============================================
+// Fact Conflict API Types
+// ============================================
+
+export interface FactConflictResolutionResult {
+  success: boolean;
+  action: 'used_new' | 'kept_old' | 'created_both';
+  factId?: string;
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -704,6 +715,27 @@ export class PkgCoreApiService {
         `/brief/${briefId}/action/${index}`,
         { actionType },
         { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Fact Conflict API Methods
+  // ============================================
+
+  /**
+   * Resolve a fact conflict.
+   * @param shortId Short ID from callback_data
+   * @param resolution Resolution type: 'new' | 'old' | 'both'
+   */
+  async resolveFactConflict(
+    shortId: string,
+    resolution: 'new' | 'old' | 'both',
+  ): Promise<FactConflictResolutionResult> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<FactConflictResolutionResult>(
+        `/fact-conflicts/${shortId}/${resolution}`,
       );
       return response.data;
     });

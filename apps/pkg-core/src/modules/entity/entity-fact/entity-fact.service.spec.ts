@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { EntityFact, FactType, FactCategory, FactSource } from '@pkg/entities';
 import { EntityFactService, CreateFactResult } from './entity-fact.service';
 import { EmbeddingService } from '../../embedding/embedding.service';
+import { FactFusionService } from './fact-fusion.service';
+import { FusionAction } from './fact-fusion.constants';
 
 /** Create a mock embedding (normalized random vector for testing) */
 const createMockEmbedding = (seed = 0): number[] => {
@@ -16,6 +18,7 @@ describe('EntityFactService', () => {
   let service: EntityFactService;
   let factRepo: jest.Mocked<Repository<EntityFact>>;
   let embeddingService: jest.Mocked<EmbeddingService>;
+  let factFusionService: jest.Mocked<FactFusionService>;
 
   const mockFactRepo = {
     create: jest.fn(),
@@ -31,6 +34,11 @@ describe('EntityFactService', () => {
     generateBatch: jest.fn(),
   };
 
+  const mockFactFusionService = {
+    decideFusion: jest.fn(),
+    applyDecision: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -43,15 +51,21 @@ describe('EntityFactService', () => {
           provide: EmbeddingService,
           useValue: mockEmbeddingService,
         },
+        {
+          provide: FactFusionService,
+          useValue: mockFactFusionService,
+        },
       ],
     }).compile();
 
     service = module.get<EntityFactService>(EntityFactService);
     factRepo = module.get(getRepositoryToken(EntityFact));
     embeddingService = module.get(EmbeddingService);
+    factFusionService = module.get(FactFusionService);
 
-    // Ensure embeddingService is available
+    // Ensure services are available
     (service as any).embeddingService = mockEmbeddingService;
+    (service as any).factFusionService = mockFactFusionService;
 
     jest.clearAllMocks();
   });
@@ -117,7 +131,61 @@ describe('EntityFactService', () => {
   describe('createWithDedup', () => {
     const entityId = 'entity-123';
 
-    it('should skip creation when semantic duplicate found', async () => {
+    it('should use fusion service when semantic duplicate found', async () => {
+      const dto = {
+        type: FactType.POSITION,
+        category: FactCategory.PROFESSIONAL,
+        value: 'Работает в Сбере',
+      };
+
+      const existingFact = {
+        id: 'existing-fact-1',
+        entityId,
+        factType: FactType.POSITION,
+        value: 'Сотрудник Сбербанка',
+        embedding: createMockEmbedding(2),
+        source: FactSource.EXTRACTED,
+        confidence: 0.8,
+        createdAt: new Date(),
+        confirmationCount: 1,
+      };
+
+      const mockEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(mockEmbedding);
+
+      // Mock the similarity query to return a duplicate
+      mockFactRepo.query.mockResolvedValue([
+        { id: 'existing-fact-1', similarity: 0.92 },
+      ]);
+      mockFactRepo.findOne.mockResolvedValue(existingFact);
+
+      // Mock fusion decision - CONFIRM
+      const fusionDecision = {
+        action: FusionAction.CONFIRM,
+        explanation: 'Та же информация о работе в Сбербанке',
+        confidence: 0.95,
+      };
+      mockFactFusionService.decideFusion.mockResolvedValue(fusionDecision);
+      mockFactFusionService.applyDecision.mockResolvedValue({
+        fact: { ...existingFact, confirmationCount: 2 },
+        action: 'updated',
+        reason: 'CONFIRM: Та же информация. Подтверждений: 2',
+        existingFactId: existingFact.id,
+      });
+
+      const result = await service.createWithDedup(entityId, dto);
+
+      expect(mockFactFusionService.decideFusion).toHaveBeenCalledWith(
+        existingFact,
+        dto.value,
+        FactSource.EXTRACTED,
+        { messageContent: undefined },
+      );
+      expect(mockFactFusionService.applyDecision).toHaveBeenCalled();
+      expect(result.action).toBe('updated');
+    });
+
+    it('should skip creation when skipFusion option is true', async () => {
       const dto = {
         type: FactType.POSITION,
         category: FactCategory.PROFESSIONAL,
@@ -135,17 +203,17 @@ describe('EntityFactService', () => {
       const mockEmbedding = createMockEmbedding(1);
       mockEmbeddingService.generate.mockResolvedValue(mockEmbedding);
 
-      // Mock the similarity query to return a duplicate
       mockFactRepo.query.mockResolvedValue([
         { id: 'existing-fact-1', similarity: 0.92 },
       ]);
       mockFactRepo.findOne.mockResolvedValue(existingFact);
 
-      const result = await service.createWithDedup(entityId, dto);
+      const result = await service.createWithDedup(entityId, dto, { skipFusion: true });
 
       expect(result.action).toBe('skipped');
       expect(result.existingFactId).toBe('existing-fact-1');
       expect(result.reason).toContain('Semantic duplicate');
+      expect(mockFactFusionService.decideFusion).not.toHaveBeenCalled();
       expect(mockFactRepo.save).not.toHaveBeenCalled();
     });
 
