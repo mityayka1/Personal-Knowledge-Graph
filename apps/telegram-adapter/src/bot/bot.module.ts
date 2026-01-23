@@ -9,6 +9,7 @@ import { DigestHandler } from './handlers/digest.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
+import { BriefCallbackHandler } from './handlers/brief-callback.handler';
 import { NotificationController } from './notification.controller';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
 
@@ -24,6 +25,7 @@ import { ApiKeyGuard } from '../common/guards/api-key.guard';
     EventCallbackHandler,
     CarouselCallbackHandler,
     ApprovalCallbackHandler,
+    BriefCallbackHandler,
     ApiKeyGuard,
   ],
   exports: [BotService],

@@ -16,6 +16,8 @@ import { DigestActionController } from './digest-action.controller';
 import { CarouselController } from './carousel.controller';
 import { ApprovalService } from './approval.service';
 import { ApprovalController } from './approval.controller';
+import { BriefStateService } from './brief-state.service';
+import { BriefController } from './brief.controller';
 import { TelegramSendService } from './telegram-send.service';
 import { SettingsModule } from '../settings/settings.module';
 import { EntityModule } from '../entity/entity.module';
@@ -39,7 +41,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => EntityModule),
     forwardRef(() => ClaudeAgentModule),
   ],
-  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController],
+  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController, BriefController],
   providers: [
     TelegramNotifierService,
     NotificationService,
@@ -50,6 +52,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     NotificationProcessor,
     ApprovalService,
     TelegramSendService,
+    BriefStateService,
   ],
   exports: [
     TelegramNotifierService,
@@ -59,6 +62,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     CarouselStateService,
     ApprovalService,
     TelegramSendService,
+    BriefStateService,
   ],
 })
 export class NotificationModule {}

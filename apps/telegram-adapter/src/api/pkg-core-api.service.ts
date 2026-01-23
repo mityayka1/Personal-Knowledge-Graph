@@ -169,6 +169,35 @@ export interface ApprovalResponse {
 }
 
 // ============================================
+// Brief API Types (Morning Brief Accordion)
+// ============================================
+
+export interface BriefResponse {
+  success: boolean;
+  state?: {
+    id: string;
+    chatId: string;
+    messageId: number;
+    items: Array<{
+      type: string;
+      title: string;
+      entityName: string;
+      sourceType: string;
+      sourceId: string;
+      details: string;
+      entityId?: string;
+      sourceMessageLink?: string;
+    }>;
+    expandedIndex: number | null;
+    createdAt: number;
+  };
+  message?: string;
+  formattedMessage?: string;
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  error?: string;
+}
+
+// ============================================
 // Act API Types (Phase A: Act command)
 // ============================================
 
@@ -593,6 +622,85 @@ export class PkgCoreApiService {
     return this.withRetry(async () => {
       const response = await this.client.post<{ success: boolean; message: string }>(
         '/notifications/trigger/daily-digest',
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Brief API Methods (Morning Brief Accordion)
+  // ============================================
+
+  /**
+   * Get brief state
+   */
+  async getBrief(briefId: string): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<BriefResponse>(`/brief/${briefId}`);
+      return response.data;
+    });
+  }
+
+  /**
+   * Expand an item in the brief
+   */
+  async briefExpand(briefId: string, index: number): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/expand/${index}`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Collapse all items in the brief
+   */
+  async briefCollapse(briefId: string): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/collapse`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Mark item as done (completed)
+   */
+  async briefMarkDone(briefId: string, index: number): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/done/${index}`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Mark item as dismissed (not going to do)
+   */
+  async briefMarkDismissed(briefId: string, index: number): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/dismiss/${index}`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Trigger action for an item (write, remind, prepare)
+   */
+  async briefAction(
+    briefId: string,
+    index: number,
+    actionType: 'write' | 'remind' | 'prepare',
+  ): Promise<BriefResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<BriefResponse>(
+        `/brief/${briefId}/action/${index}`,
+        { actionType },
       );
       return response.data;
     });

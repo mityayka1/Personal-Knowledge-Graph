@@ -22,6 +22,7 @@ export enum EventStatus {
   SCHEDULED = 'scheduled',
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
+  DISMISSED = 'dismissed',
 }
 
 @Entity('entity_events')
