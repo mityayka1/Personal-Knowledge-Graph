@@ -38,6 +38,7 @@ describe('ExtractedEventController', () => {
     enrichmentData: null,
     sourceQuote: null,
     entityId: null,
+    promiseToEntityId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     sourceMessage: null as any,

@@ -119,8 +119,27 @@ export class SecondBrainExtractionService {
     replyToContent?: string;
     /** Forum topic name (if message is from a forum topic) */
     topicName?: string;
+    /** Name of the sender of the replied-to message */
+    replyToSenderName?: string;
+    /**
+     * Entity ID of who the promise was made to.
+     * For private chats: the other participant.
+     * For group chats with reply: sender of replied message.
+     */
+    promiseToEntityId?: string;
   }): Promise<SecondBrainExtractionResult> {
-    const { messageId, messageContent, interactionId, entityId, entityName, isOutgoing, replyToContent, topicName } = params;
+    const {
+      messageId,
+      messageContent,
+      interactionId,
+      entityId,
+      entityName,
+      isOutgoing,
+      replyToContent,
+      topicName,
+      replyToSenderName,
+      promiseToEntityId,
+    } = params;
 
     // Get settings for extraction
     const settings = await this.settingsService.getExtractionSettings();
@@ -130,7 +149,15 @@ export class SecondBrainExtractionService {
       return { sourceMessageId: messageId, extractedEvents: [], tokensUsed: 0 };
     }
 
-    const prompt = this.buildPrompt(entityName, messageContent, isOutgoing, settings.maxContentLength, replyToContent, topicName);
+    const prompt = this.buildPrompt(
+      entityName,
+      messageContent,
+      isOutgoing,
+      settings.maxContentLength,
+      replyToContent,
+      topicName,
+      replyToSenderName,
+    );
 
     try {
       const { data, usage } = await this.claudeAgentService.call<ExtractionResponse>({
@@ -171,10 +198,27 @@ export class SecondBrainExtractionService {
               }
             : null;
 
+          // Determine promiseToEntityId for promise_by_me events from outgoing messages
+          // Note: PROMISE_BY_THEM should never appear in outgoing messages (isOutgoing=true)
+          // because promise type is determined by message author, not message content
+          const shouldSetPromiseTo =
+            isOutgoing &&
+            promiseToEntityId &&
+            eventType === ExtractedEventType.PROMISE_BY_ME;
+
+          // Log warning if LLM incorrectly returns PROMISE_BY_THEM for outgoing message
+          if (isOutgoing && eventType === ExtractedEventType.PROMISE_BY_THEM) {
+            this.logger.warn(
+              `LLM bug: PROMISE_BY_THEM extracted from outgoing message ${messageId}. ` +
+                `Promise type should be determined by isOutgoing flag, not message content.`,
+            );
+          }
+
           const event = this.extractedEventRepo.create({
             sourceMessageId: messageId,
             sourceInteractionId: interactionId || null,
             entityId: entityId || null,
+            promiseToEntityId: shouldSetPromiseTo ? promiseToEntityId : null,
             eventType,
             extractedData,
             sourceQuote: rawEvent.sourceQuote?.substring(0, settings.maxQuoteLength) || null,
@@ -232,6 +276,9 @@ export class SecondBrainExtractionService {
       isOutgoing: boolean;
       replyToContent?: string;
       topicName?: string;
+      replyToSenderName?: string;
+      replyToSenderId?: string;
+      promiseToEntityId?: string;
     }>,
   ): Promise<SecondBrainExtractionResult[]> {
     const results: SecondBrainExtractionResult[] = [];
@@ -481,6 +528,7 @@ export class SecondBrainExtractionService {
     maxContentLength: number = 1000,
     replyToContent?: string,
     topicName?: string,
+    replyToSenderName?: string,
   ): string {
     const sender = isOutgoing ? 'я (пользователь)' : entityName;
     const cleanContent = content.replace(/\n/g, ' ').substring(0, maxContentLength);
@@ -500,10 +548,19 @@ export class SecondBrainExtractionService {
     let replyContext = '';
     if (replyToContent) {
       const cleanReplyContent = replyToContent.replace(/\n/g, ' ').substring(0, 500);
+      const replyAuthor = replyToSenderName || 'неизвестно';
       replyContext = `
 КОНТЕКСТ (сообщение на которое отвечают):
+Автор: ${replyAuthor}
 "${cleanReplyContent}"
 
+`;
+    }
+
+    // Build recipient context for outgoing messages
+    let recipientContext = '';
+    if (isOutgoing && replyToSenderName) {
+      recipientContext = `Адресат (кому отвечаю): ${replyToSenderName}
 `;
     }
 
@@ -511,18 +568,35 @@ export class SecondBrainExtractionService {
 ${topicContext}${replyContext}
 Собеседник: ${entityName}
 Автор сообщения: ${sender}
-Сегодня: ${today}
+${recipientContext}Сегодня: ${today}
 
 Сообщение: "${cleanContent}"
+
+═══════════════════════════════════════════════════════════════
+КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ ОБЕЩАНИЙ (promise_by_me / promise_by_them):
+═══════════════════════════════════════════════════════════════
+Тип обещания определяется ТОЛЬКО по автору сообщения, НЕ по тексту!
+
+• Автор = "я (пользователь)" → ВСЕ обещания в сообщении = promise_by_me
+• Автор = "${entityName}" → ВСЕ обещания в сообщении = promise_by_them
+
+НЕ АНАЛИЗИРУЙ текст для определения типа! Даже если в тексте написано
+"я сделаю" или "напишу" — тип зависит ТОЛЬКО от того, кто автор сообщения.
+
+Примеры:
+- Автор: я (пользователь), текст: "сделаю завтра" → promise_by_me ✓
+- Автор: Марина, текст: "напишу инструкцию" → promise_by_them ✓
+- Автор: Марина, текст: "я пришлю документы" → promise_by_them ✓ (НЕ promise_by_me!)
+═══════════════════════════════════════════════════════════════
 
 Извлеки:
 1. **meeting** — планируемые встречи/созвоны с датой/временем
    data: { datetime?: ISO, dateText?: "завтра в 15:00", topic?, participants?: [] }
 
-2. **promise_by_me** — если я (пользователь) обещаю что-то сделать
+2. **promise_by_me** — обещание в сообщении от меня (пользователя)
    data: { what: "что обещано", deadline?: ISO, deadlineText?: "до пятницы" }
 
-3. **promise_by_them** — если собеседник обещает что-то сделать
+3. **promise_by_them** — обещание в сообщении от собеседника
    data: { what: "что обещано", deadline?, deadlineText? }
 
 4. **task** — просьба/задача от собеседника ко мне
@@ -538,7 +612,6 @@ ${topicContext}${replyContext}
 - confidence 0.0-1.0 (высокий если явно указано, низкий если домыслы)
 - sourceQuote — оригинальный фрагмент текста
 - Не извлекай события из сообщений-шуток или гипотетических ситуаций
-- Различай "promise_by_me" (я обещаю) и "promise_by_them" (мне обещают)
 - ЕСЛИ ЕСТЬ КОНТЕКСТ (сообщение на которое отвечают) — используй его для понимания смысла!
   Пример: контекст "Подготовь отчёт до пятницы", сообщение "Ок, сделаю" → promise_by_me с what="подготовить отчёт"
 

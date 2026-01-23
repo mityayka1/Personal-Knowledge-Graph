@@ -28,6 +28,7 @@ describe('EntityService', () => {
 
   const mockQueryBuilder = {
     leftJoinAndSelect: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
@@ -103,7 +104,11 @@ describe('EntityService', () => {
     it('should filter by search', async () => {
       await service.findAll({ search: 'John' });
 
-      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('entity.name ILIKE :search', { search: '%John%' });
+      expect(mockQueryBuilder.leftJoin).toHaveBeenCalledWith('entity.identifiers', 'identifier');
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+        '(entity.name ILIKE :search OR identifier.identifierValue ILIKE :search)',
+        { search: '%John%' },
+      );
     });
   });
 

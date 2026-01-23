@@ -1,12 +1,10 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, forwardRef, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
 import { Job as BullJob } from 'bullmq';
-import { Message } from '@pkg/entities';
 import { FactExtractionService } from '../../extraction/fact-extraction.service';
 import { EventExtractionService } from '../../extraction/event-extraction.service';
 import { SecondBrainExtractionService } from '../../extraction/second-brain-extraction.service';
+import { PromiseRecipientService } from '../../extraction/promise-recipient.service';
 import { EntityService } from '../../entity/entity.service';
 import { ExtractionJobData } from '../job.service';
 
@@ -21,10 +19,10 @@ export class FactExtractionProcessor extends WorkerHost {
     private eventExtractionService: EventExtractionService,
     @Inject(forwardRef(() => SecondBrainExtractionService))
     private secondBrainExtractionService: SecondBrainExtractionService,
+    @Inject(forwardRef(() => PromiseRecipientService))
+    private promiseRecipientService: PromiseRecipientService,
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
-    @InjectRepository(Message)
-    private messageRepo: Repository<Message>,
   ) {
     super();
   }
@@ -62,21 +60,41 @@ export class FactExtractionProcessor extends WorkerHost {
       });
 
       // Second Brain extraction - creates ExtractedEvent (pending confirmation)
-      // Load reply-to message content for context
-      const replyToContents = await this.loadReplyToContents(messages);
-
-      const secondBrainMessages = messages.map((m) => ({
-        messageId: m.id,
-        messageContent: m.content,
+      // Load reply-to message info (content + sender) for context
+      const replyToInfoMap = await this.promiseRecipientService.loadReplyToInfo(
+        messages,
         interactionId,
-        entityId,
-        entityName: entity.name,
-        isOutgoing: m.isOutgoing ?? false,
-        replyToContent: m.replyToSourceMessageId
-          ? replyToContents.get(m.replyToSourceMessageId)
-          : undefined,
-        topicName: m.topicName,
-      }));
+      );
+
+      // Build messages for second brain extraction
+      const secondBrainMessages = await Promise.all(
+        messages.map(async (m) => {
+          const replyToInfo = m.replyToSourceMessageId
+            ? replyToInfoMap.get(m.replyToSourceMessageId)
+            : undefined;
+
+          // Determine promiseToEntityId using the dedicated service
+          const promiseToEntityId = await this.promiseRecipientService.resolveRecipient({
+            interactionId,
+            entityId,
+            isOutgoing: m.isOutgoing ?? false,
+            replyToSenderEntityId: replyToInfo?.senderEntityId,
+          });
+
+          return {
+            messageId: m.id,
+            messageContent: m.content,
+            interactionId,
+            entityId,
+            entityName: entity.name,
+            isOutgoing: m.isOutgoing ?? false,
+            replyToContent: replyToInfo?.content,
+            replyToSenderName: replyToInfo?.senderName,
+            promiseToEntityId,
+            topicName: m.topicName,
+          };
+        }),
+      );
 
       const secondBrainResults =
         await this.secondBrainExtractionService.extractFromMessages(secondBrainMessages);
@@ -101,40 +119,5 @@ export class FactExtractionProcessor extends WorkerHost {
       this.logger.error(`Extraction job ${job.id} failed: ${error.message}`, error.stack);
       throw error;
     }
-  }
-
-  /**
-   * Load content of messages that are being replied to.
-   * Returns a map of sourceMessageId -> content
-   */
-  private async loadReplyToContents(
-    messages: ExtractionJobData['messages'],
-  ): Promise<Map<string, string>> {
-    const replyToIds = messages
-      .map((m) => m.replyToSourceMessageId)
-      .filter((id): id is string => !!id);
-
-    if (replyToIds.length === 0) {
-      return new Map();
-    }
-
-    // Find messages by their source_message_id (Telegram message ID)
-    const replyToMessages = await this.messageRepo.find({
-      where: { sourceMessageId: In(replyToIds) },
-      select: ['sourceMessageId', 'content'],
-    });
-
-    const contentMap = new Map<string, string>();
-    for (const msg of replyToMessages) {
-      if (msg.sourceMessageId && msg.content) {
-        contentMap.set(msg.sourceMessageId, msg.content);
-      }
-    }
-
-    this.logger.debug(
-      `Loaded ${contentMap.size} reply-to messages for ${replyToIds.length} replies`,
-    );
-
-    return contentMap;
   }
 }
