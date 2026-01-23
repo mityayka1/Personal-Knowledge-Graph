@@ -418,6 +418,227 @@ describe('JobService', () => {
         expect(mockSettingsService.getValue).toHaveBeenCalledWith('extraction.extractDelayTime');
       });
     });
+
+    describe('sender attribution for group chats', () => {
+      it('should include senderEntityId and senderEntityName in new job', async () => {
+        mockExtractionQueue.getJob.mockResolvedValue(null);
+
+        await service.scheduleExtraction({
+          interactionId,
+          entityId,
+          messageId,
+          messageContent,
+          senderEntityId: 'sender-entity-123',
+          senderEntityName: 'Лёха Перформанс',
+        });
+
+        expect(mockExtractionQueue.add).toHaveBeenCalledWith(
+          'extract',
+          expect.objectContaining({
+            messages: expect.arrayContaining([
+              expect.objectContaining({
+                id: messageId,
+                senderEntityId: 'sender-entity-123',
+                senderEntityName: 'Лёха Перформанс',
+              }),
+            ]),
+          }),
+          expect.anything(),
+        );
+      });
+
+      it('should preserve senderEntityId when updating delayed job with new message', async () => {
+        const existingData: ExtractionJobData = {
+          interactionId,
+          entityId: 'first-entity',
+          messageIds: ['msg-1'],
+          messages: [
+            {
+              id: 'msg-1',
+              content: 'First message',
+              timestamp: '2026-01-10T10:00:00Z',
+              isOutgoing: false,
+              senderEntityId: 'entity-alice',
+              senderEntityName: 'Alice',
+            },
+          ],
+        };
+
+        const mockJob = {
+          data: existingData,
+          getState: jest.fn().mockResolvedValue('delayed'),
+          updateData: jest.fn().mockResolvedValue(undefined),
+          changeDelay: jest.fn().mockResolvedValue(undefined),
+        };
+
+        mockExtractionQueue.getJob.mockResolvedValue(mockJob as unknown as Job);
+
+        // Add message from different sender
+        await service.scheduleExtraction({
+          interactionId,
+          entityId: 'second-entity',
+          messageId: 'msg-2',
+          messageContent: 'Second message from Bob',
+          senderEntityId: 'entity-bob',
+          senderEntityName: 'Bob',
+        });
+
+        expect(mockJob.updateData).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messages: [
+              expect.objectContaining({
+                id: 'msg-1',
+                senderEntityId: 'entity-alice',
+                senderEntityName: 'Alice',
+              }),
+              expect.objectContaining({
+                id: 'msg-2',
+                senderEntityId: 'entity-bob',
+                senderEntityName: 'Bob',
+              }),
+            ],
+          }),
+        );
+      });
+
+      it('should handle mixed senders in group chat batch (A, B, A, C)', async () => {
+        const existingData: ExtractionJobData = {
+          interactionId,
+          entityId: 'entity-a',
+          messageIds: ['msg-1'],
+          messages: [
+            {
+              id: 'msg-1',
+              content: 'Message from A',
+              timestamp: '2026-01-10T10:00:00Z',
+              isOutgoing: false,
+              senderEntityId: 'entity-a',
+              senderEntityName: 'User A',
+            },
+          ],
+        };
+
+        const mockJob = {
+          data: existingData,
+          getState: jest.fn().mockResolvedValue('delayed'),
+          updateData: jest.fn().mockResolvedValue(undefined),
+          changeDelay: jest.fn().mockResolvedValue(undefined),
+        };
+
+        mockExtractionQueue.getJob.mockResolvedValue(mockJob as unknown as Job);
+
+        // Add message from B
+        await service.scheduleExtraction({
+          interactionId,
+          entityId: 'entity-b',
+          messageId: 'msg-2',
+          messageContent: 'Message from B',
+          senderEntityId: 'entity-b',
+          senderEntityName: 'User B',
+        });
+
+        // Update mock data for next call
+        const dataAfterB = mockJob.updateData.mock.calls[0][0];
+        mockJob.data = dataAfterB;
+
+        // Add another message from A
+        await service.scheduleExtraction({
+          interactionId,
+          entityId: 'entity-a',
+          messageId: 'msg-3',
+          messageContent: 'Another from A',
+          senderEntityId: 'entity-a',
+          senderEntityName: 'User A',
+        });
+
+        // Update mock data for next call
+        const dataAfterA2 = mockJob.updateData.mock.calls[1][0];
+        mockJob.data = dataAfterA2;
+
+        // Add message from C
+        await service.scheduleExtraction({
+          interactionId,
+          entityId: 'entity-c',
+          messageId: 'msg-4',
+          messageContent: 'Message from C',
+          senderEntityId: 'entity-c',
+          senderEntityName: 'User C',
+        });
+
+        const finalData = mockJob.updateData.mock.calls[2][0];
+
+        // Verify all 4 messages have correct attribution
+        expect(finalData.messages).toHaveLength(4);
+        expect(finalData.messages[0].senderEntityId).toBe('entity-a');
+        expect(finalData.messages[1].senderEntityId).toBe('entity-b');
+        expect(finalData.messages[2].senderEntityId).toBe('entity-a');
+        expect(finalData.messages[3].senderEntityId).toBe('entity-c');
+      });
+
+      it('should handle messages without senderEntityId (backward compatibility)', async () => {
+        mockExtractionQueue.getJob.mockResolvedValue(null);
+
+        await service.scheduleExtraction({
+          interactionId,
+          entityId,
+          messageId,
+          messageContent,
+          // No senderEntityId or senderEntityName
+        });
+
+        expect(mockExtractionQueue.add).toHaveBeenCalledWith(
+          'extract',
+          expect.objectContaining({
+            messages: expect.arrayContaining([
+              expect.objectContaining({
+                id: messageId,
+                // senderEntityId and senderEntityName should be undefined
+              }),
+            ]),
+          }),
+          expect.anything(),
+        );
+
+        const addCall = mockExtractionQueue.add.mock.calls[0];
+        const jobData = addCall[1] as ExtractionJobData;
+        expect(jobData.messages[0].senderEntityId).toBeUndefined();
+        expect(jobData.messages[0].senderEntityName).toBeUndefined();
+      });
+
+      it('should include optional fields (replyToSourceMessageId, topicName) alongside sender info', async () => {
+        mockExtractionQueue.getJob.mockResolvedValue(null);
+
+        await service.scheduleExtraction({
+          interactionId,
+          entityId,
+          messageId,
+          messageContent,
+          isOutgoing: true,
+          replyToSourceMessageId: 'reply-to-123',
+          topicName: 'Рабочие вопросы',
+          senderEntityId: 'sender-entity-456',
+          senderEntityName: 'Иван Петров',
+        });
+
+        expect(mockExtractionQueue.add).toHaveBeenCalledWith(
+          'extract',
+          expect.objectContaining({
+            messages: expect.arrayContaining([
+              expect.objectContaining({
+                id: messageId,
+                content: messageContent,
+                isOutgoing: true,
+                replyToSourceMessageId: 'reply-to-123',
+                topicName: 'Рабочие вопросы',
+                senderEntityId: 'sender-entity-456',
+                senderEntityName: 'Иван Петров',
+              }),
+            ]),
+          }),
+          expect.anything(),
+        );
+      });
+    });
   });
 
   describe('createEmbeddingJob', () => {
