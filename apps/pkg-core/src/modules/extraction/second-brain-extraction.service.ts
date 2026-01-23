@@ -121,8 +121,6 @@ export class SecondBrainExtractionService {
     topicName?: string;
     /** Name of the sender of the replied-to message */
     replyToSenderName?: string;
-    /** Entity ID of the sender of the replied-to message (for promiseToEntityId) */
-    replyToSenderId?: string;
     /**
      * Entity ID of who the promise was made to.
      * For private chats: the other participant.
@@ -200,12 +198,21 @@ export class SecondBrainExtractionService {
               }
             : null;
 
-          // Determine promiseToEntityId for promise events from outgoing messages
+          // Determine promiseToEntityId for promise_by_me events from outgoing messages
+          // Note: PROMISE_BY_THEM should never appear in outgoing messages (isOutgoing=true)
+          // because promise type is determined by message author, not message content
           const shouldSetPromiseTo =
             isOutgoing &&
             promiseToEntityId &&
-            (eventType === ExtractedEventType.PROMISE_BY_ME ||
-              eventType === ExtractedEventType.PROMISE_BY_THEM);
+            eventType === ExtractedEventType.PROMISE_BY_ME;
+
+          // Log warning if LLM incorrectly returns PROMISE_BY_THEM for outgoing message
+          if (isOutgoing && eventType === ExtractedEventType.PROMISE_BY_THEM) {
+            this.logger.warn(
+              `LLM bug: PROMISE_BY_THEM extracted from outgoing message ${messageId}. ` +
+                `Promise type should be determined by isOutgoing flag, not message content.`,
+            );
+          }
 
           const event = this.extractedEventRepo.create({
             sourceMessageId: messageId,

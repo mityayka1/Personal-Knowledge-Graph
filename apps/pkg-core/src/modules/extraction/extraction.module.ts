@@ -1,13 +1,14 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { EntityFact, EntityEvent, ExtractedEvent, Message } from '@pkg/entities';
+import { EntityFact, EntityEvent, ExtractedEvent, Message, Interaction } from '@pkg/entities';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelevanceFilterService } from './relevance-filter.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
 import { EventExtractionService } from './event-extraction.service';
 import { SecondBrainExtractionService } from './second-brain-extraction.service';
 import { ContextEnrichmentService } from './context-enrichment.service';
+import { PromiseRecipientService } from './promise-recipient.service';
 import { EnrichmentProcessor } from './enrichment.processor';
 import { EnrichmentQueueService } from './enrichment-queue.service';
 import { ExtractionController } from './extraction.controller';
@@ -22,7 +23,7 @@ import { SearchModule } from '../search/search.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent, Message]),
+    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent, Message, Interaction]),
     BullModule.registerQueue({
       name: 'enrichment',
       defaultJobOptions: {
@@ -48,6 +49,7 @@ import { SearchModule } from '../search/search.module';
     EventExtractionService,
     SecondBrainExtractionService,
     ContextEnrichmentService,
+    PromiseRecipientService,
     EnrichmentProcessor,
     EnrichmentQueueService,
   ],
@@ -58,6 +60,7 @@ import { SearchModule } from '../search/search.module';
     EventExtractionService,
     SecondBrainExtractionService,
     ContextEnrichmentService,
+    PromiseRecipientService,
     EnrichmentQueueService,
   ],
 })

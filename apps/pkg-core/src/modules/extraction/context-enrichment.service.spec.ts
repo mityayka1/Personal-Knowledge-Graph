@@ -5,6 +5,7 @@ import {
   ExtractedEvent,
   ExtractedEventType,
   ExtractedEventStatus,
+  Message,
 } from '@pkg/entities';
 import { ContextEnrichmentService } from './context-enrichment.service';
 
@@ -80,6 +81,12 @@ describe('ContextEnrichmentService', () => {
             find: jest.fn(),
             findOne: jest.fn(),
             update: jest.fn(),
+          },
+        },
+        {
+          provide: getRepositoryToken(Message),
+          useValue: {
+            findOne: jest.fn(),
           },
         },
         {
