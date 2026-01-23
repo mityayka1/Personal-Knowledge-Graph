@@ -500,9 +500,12 @@ describe('NotificationService', () => {
 
       await service.getPendingEventsForDigest('low', 10);
 
-      // Verify the query includes bot filter
+      // Verify the query includes bot filter using NOT EXISTS subquery
       expect(mockQb.andWhere).toHaveBeenCalledWith(
-        '(entity.is_bot = false OR entity.is_bot IS NULL OR event.entity_id IS NULL)',
+        `NOT EXISTS (
+          SELECT 1 FROM entities e
+          WHERE e.id = event.entity_id AND e.is_bot = true
+        )`,
       );
     });
   });
