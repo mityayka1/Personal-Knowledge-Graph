@@ -1,7 +1,6 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { PkgCoreApiService, BriefResponse } from '../../api/pkg-core-api.service';
-import { BotService } from '../bot.service';
 
 /**
  * Handles callback queries from Morning Brief accordion buttons.
@@ -19,11 +18,7 @@ import { BotService } from '../bot.service';
 export class BriefCallbackHandler {
   private readonly logger = new Logger(BriefCallbackHandler.name);
 
-  constructor(
-    private readonly pkgCoreApi: PkgCoreApiService,
-    @Inject(forwardRef(() => BotService))
-    private readonly botService: BotService,
-  ) {}
+  constructor(private readonly pkgCoreApi: PkgCoreApiService) {}
 
   /**
    * Check if this handler can process the callback
@@ -61,7 +56,25 @@ export class BriefCallbackHandler {
     const parts = callbackData.split(':');
     const action = parts[0]; // br_e, br_c, br_d, br_x, br_w, br_r, br_p
     const briefId = parts[1];
-    const index = parts[2] ? parseInt(parts[2], 10) : undefined;
+
+    // Validate briefId
+    if (!briefId || briefId.trim() === '') {
+      this.logger.warn(`Invalid callback data: empty briefId in "${callbackData}"`);
+      await ctx.answerCbQuery('Invalid request');
+      return;
+    }
+
+    // Parse and validate index
+    let index: number | undefined;
+    if (parts[2]) {
+      const parsedIndex = parseInt(parts[2], 10);
+      if (Number.isNaN(parsedIndex) || parsedIndex < 0) {
+        this.logger.warn(`Invalid callback data: invalid index "${parts[2]}" in "${callbackData}"`);
+        await ctx.answerCbQuery('Invalid index');
+        return;
+      }
+      index = parsedIndex;
+    }
 
     this.logger.log(`Brief action: ${action}, briefId=${briefId}, index=${index}`);
 
@@ -309,6 +322,8 @@ export class BriefCallbackHandler {
     return text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 }

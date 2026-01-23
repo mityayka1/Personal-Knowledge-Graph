@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BriefCallbackHandler } from './brief-callback.handler';
 import { PkgCoreApiService, BriefResponse } from '../../api/pkg-core-api.service';
-import { BotService } from '../bot.service';
 import { Context } from 'telegraf';
 
 describe('BriefCallbackHandler', () => {
@@ -59,10 +58,6 @@ describe('BriefCallbackHandler', () => {
         {
           provide: PkgCoreApiService,
           useValue: pkgCoreApi,
-        },
-        {
-          provide: BotService,
-          useValue: {},
         },
       ],
     }).compile();
@@ -256,8 +251,32 @@ describe('BriefCallbackHandler', () => {
       // Should not throw
     });
 
-    it('should handle invalid index', async () => {
+    it('should handle missing index for expand', async () => {
       const ctx = mockContext('br_e:b_test123456ab') as Context; // Missing index
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid index');
+    });
+
+    it('should handle empty briefId', async () => {
+      const ctx = mockContext('br_e::0') as Context; // Empty briefId
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid request');
+    });
+
+    it('should handle NaN index', async () => {
+      const ctx = mockContext('br_e:b_test123456ab:abc') as Context; // Non-numeric index
+
+      await handler.handle(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Invalid index');
+    });
+
+    it('should handle negative index', async () => {
+      const ctx = mockContext('br_e:b_test123456ab:-1') as Context; // Negative index
 
       await handler.handle(ctx);
 

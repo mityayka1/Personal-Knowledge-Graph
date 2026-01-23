@@ -165,7 +165,7 @@ export class DigestService {
         type: 'birthday',
         title: `День рождения`,
         entityName: birthday.name,
-        sourceType: 'entity_fact',
+        sourceType: 'entity',
         sourceId: birthday.id,
         details: `День рождения у ${birthday.name}`,
         entityId: birthday.id,
@@ -227,7 +227,10 @@ export class DigestService {
           parts.push(`📝 ${this.escapeHtml(item.details)}`);
         }
         if (item.sourceMessageLink) {
-          parts.push(`🔗 <a href="${item.sourceMessageLink}">Перейти к сообщению</a>`);
+          const safeUrl = this.sanitizeUrl(item.sourceMessageLink);
+          if (safeUrl) {
+            parts.push(`🔗 <a href="${safeUrl}">Перейти к сообщению</a>`);
+          }
         }
         parts.push('━━━━━━━━━━━━━━━━━━━━━━━━━━');
       } else {
@@ -635,7 +638,22 @@ export class DigestService {
     return text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Validate and escape URL for use in href attribute
+   */
+  private sanitizeUrl(url: string): string | null {
+    // Only allow https:// or tg:// protocols
+    if (!url.startsWith('https://') && !url.startsWith('tg://')) {
+      this.logger.warn(`Invalid URL protocol: ${url}`);
+      return null;
+    }
+    // Escape quotes for attribute context
+    return url.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   private getDaysOverdue(eventDate: Date | null): number {

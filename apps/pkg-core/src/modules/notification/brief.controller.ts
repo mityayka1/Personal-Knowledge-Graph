@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { IsOptional, IsIn } from 'class-validator';
 import { EntityEvent, EventStatus } from '@pkg/entities';
 import { BriefStateService, BriefState, BriefItem } from './brief-state.service';
 
@@ -18,6 +19,8 @@ import { BriefStateService, BriefState, BriefItem } from './brief-state.service'
  * DTO for action requests
  */
 export class BriefActionDto {
+  @IsOptional()
+  @IsIn(['write', 'remind', 'prepare'])
   actionType?: 'write' | 'remind' | 'prepare';
 }
 
@@ -256,7 +259,10 @@ export class BriefController {
           parts.push(`   📝 ${this.escapeHtml(item.details)}`);
         }
         if (item.sourceMessageLink) {
-          parts.push(`   🔗 <a href="${item.sourceMessageLink}">Перейти к сообщению</a>`);
+          const safeUrl = this.sanitizeUrl(item.sourceMessageLink);
+          if (safeUrl) {
+            parts.push(`   🔗 <a href="${safeUrl}">Перейти к сообщению</a>`);
+          }
         }
         parts.push('   ━━━━━━━━━━━━━━━━━━━━━━━━━━');
         parts.push('');
@@ -382,12 +388,27 @@ export class BriefController {
   }
 
   /**
-   * Escape HTML special characters
+   * Escape HTML special characters for text content
    */
   private escapeHtml(text: string): string {
     return text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Validate and escape URL for use in href attribute
+   */
+  private sanitizeUrl(url: string): string | null {
+    // Only allow https:// or tg:// protocols
+    if (!url.startsWith('https://') && !url.startsWith('tg://')) {
+      this.logger.warn(`Invalid URL protocol: ${url}`);
+      return null;
+    }
+    // Escape quotes for attribute context
+    return url.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 }
