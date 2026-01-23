@@ -469,7 +469,9 @@ ${candidateEvents.map((e, i) => {
 4. Если контекст понятен${replyContext ? ' из КОНТЕКСТА ОТВЕТА или' : ''} из СООБЩЕНИЙ, опиши его в synthesis
 5. Если контекст не найден, установи contextFound=false
 
-ВАЖНО: linkedEventId должен быть точным UUID из списка выше или null`;
+ВАЖНО:
+- linkedEventId должен быть точным UUID из списка выше или null
+- synthesis ВСЕГДА пиши на РУССКОМ ЯЗЫКЕ, даже если исходные сообщения на английском`;
 
     return prompt;
   }
