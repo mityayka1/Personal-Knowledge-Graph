@@ -99,6 +99,11 @@ export class EntityFact {
   @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
   confidence: number | null;
 
+  // pgvector column - 1536 dimensions for OpenAI text-embedding-3-small
+  // Used for semantic deduplication of facts
+  @Column({ type: 'vector', length: 1536, nullable: true })
+  embedding: number[] | null;
+
   @Column({ name: 'source_interaction_id', type: 'uuid', nullable: true })
   sourceInteractionId: string | null;
 

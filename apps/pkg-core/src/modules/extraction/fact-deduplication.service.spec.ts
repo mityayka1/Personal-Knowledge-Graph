@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { EntityFact } from '@pkg/entities';
 import { FactDeduplicationService } from './fact-deduplication.service';
 import { ExtractedFact } from './fact-extraction.service';
+import { EmbeddingService } from '../embedding/embedding.service';
 
 /** Helper to create test ExtractedFact */
 const createFact = (
@@ -18,13 +19,27 @@ const createFact = (
   sourceQuote,
 });
 
+/** Create a mock embedding (normalized random vector for testing) */
+const createMockEmbedding = (seed = 0): number[] => {
+  const vector = Array.from({ length: 1536 }, (_, i) => Math.sin(seed + i) * 0.1);
+  const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
+  return vector.map(v => v / magnitude);
+};
+
 describe('FactDeduplicationService', () => {
   let service: FactDeduplicationService;
   let repo: jest.Mocked<Repository<EntityFact>>;
+  let embeddingService: jest.Mocked<EmbeddingService>;
 
   const mockRepo = {
     find: jest.fn(),
     update: jest.fn(),
+    query: jest.fn(),
+  };
+
+  const mockEmbeddingService = {
+    generate: jest.fn(),
+    generateBatch: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -35,11 +50,16 @@ describe('FactDeduplicationService', () => {
           provide: getRepositoryToken(EntityFact),
           useValue: mockRepo,
         },
+        {
+          provide: EmbeddingService,
+          useValue: mockEmbeddingService,
+        },
       ],
     }).compile();
 
     service = module.get<FactDeduplicationService>(FactDeduplicationService);
     repo = module.get(getRepositoryToken(EntityFact));
+    embeddingService = module.get(EmbeddingService);
 
     jest.clearAllMocks();
   });
@@ -415,6 +435,206 @@ describe('FactDeduplicationService', () => {
 
       // Birthday shouldn't be superseded, should be create/update
       expect(result.action).not.toBe('supersede');
+    });
+  });
+
+  describe('checkSemanticDuplicate', () => {
+    const entityId = 'entity-123';
+
+    beforeEach(() => {
+      // Ensure embeddingService is available for semantic tests
+      // @Optional() can cause issues with DI in tests
+      (service as any).embeddingService = mockEmbeddingService;
+    });
+
+    it('should return skip action when semantic duplicate found', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+
+      mockRepo.query.mockResolvedValue([
+        {
+          id: 'fact-1',
+          value: 'Сотрудник Сбербанка',
+          fact_type: 'position',
+          similarity: 0.92,
+        },
+      ]);
+
+      const result = await service.checkSemanticDuplicate(
+        entityId,
+        'Работает в Сбере',
+        'position',
+      );
+
+      expect(result.action).toBe('skip');
+      expect(result.existingFactId).toBe('fact-1');
+      expect(result.reason).toContain('Semantic duplicate');
+      expect(result.reason).toContain('0.92');
+    });
+
+    it('should return create action when no semantic duplicate found', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+
+      mockRepo.query.mockResolvedValue([]);
+
+      const result = await service.checkSemanticDuplicate(
+        entityId,
+        'Completely unique fact',
+      );
+
+      expect(result.action).toBe('create');
+      expect(result.reason).toContain('No semantic duplicates');
+    });
+
+    it('should filter by factType when provided', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([]);
+
+      await service.checkSemanticDuplicate(entityId, 'test value', 'position');
+
+      expect(mockRepo.query).toHaveBeenCalled();
+      const queryCall = mockRepo.query.mock.calls[0];
+      expect(queryCall[0]).toContain('AND fact_type = $4');
+      expect(queryCall[1]).toContain('position');
+    });
+
+    it('should not filter by factType when not provided', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([]);
+
+      await service.checkSemanticDuplicate(entityId, 'test value');
+
+      expect(mockRepo.query).toHaveBeenCalled();
+      const queryCall = mockRepo.query.mock.calls[0];
+      expect(queryCall[0]).not.toContain('AND fact_type = $4');
+    });
+
+    it('should handle embedding service errors gracefully', async () => {
+      mockEmbeddingService.generate.mockRejectedValue(new Error('OpenAI API error'));
+
+      const result = await service.checkSemanticDuplicate(entityId, 'test value');
+
+      expect(result.action).toBe('create');
+      expect(result.reason).toContain('error');
+    });
+
+    it('should handle database query errors gracefully', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockRejectedValue(new Error('DB error'));
+
+      const result = await service.checkSemanticDuplicate(entityId, 'test value');
+
+      expect(result.action).toBe('create');
+      expect(result.reason).toContain('error');
+    });
+
+    it('should return create with unavailable message when embeddingService is null', async () => {
+      // Simulate no embedding service available
+      (service as any).embeddingService = null;
+
+      const result = await service.checkSemanticDuplicate(entityId, 'test value');
+
+      expect(result.action).toBe('create');
+      expect(result.reason).toBe('Semantic dedup unavailable');
+    });
+  });
+
+  describe('checkDuplicateHybrid', () => {
+    const entityId = 'entity-123';
+
+    beforeEach(() => {
+      // Ensure embeddingService is available for hybrid tests
+      (service as any).embeddingService = mockEmbeddingService;
+    });
+
+    it('should use text-based result if found', async () => {
+      // Text-based check finds exact match
+      mockRepo.find.mockResolvedValue([
+        {
+          id: 'fact-1',
+          entityId,
+          factType: 'email',
+          value: 'test@example.com',
+          validUntil: null,
+        },
+      ]);
+
+      const newFact = createFact('email', 'test@example.com', 0.9);
+
+      const result = await service.checkDuplicateHybrid(entityId, newFact);
+
+      expect(result.action).toBe('skip');
+      expect(result.existingFactId).toBe('fact-1');
+      // Should not call embedding service
+      expect(mockEmbeddingService.generate).not.toHaveBeenCalled();
+    });
+
+    it('should fallback to semantic check when text-based finds no match', async () => {
+      // Text-based check finds no match
+      mockRepo.find.mockResolvedValue([]);
+
+      // Semantic check finds match
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([
+        {
+          id: 'fact-2',
+          value: 'Сотрудник Сбербанка',
+          fact_type: 'position',
+          similarity: 0.90,
+        },
+      ]);
+
+      const newFact = createFact('position', 'Работает в Сбере', 0.9);
+
+      const result = await service.checkDuplicateHybrid(entityId, newFact);
+
+      expect(result.action).toBe('skip');
+      expect(result.existingFactId).toBe('fact-2');
+      expect(result.reason).toContain('Semantic duplicate');
+      expect(mockEmbeddingService.generate).toHaveBeenCalled();
+    });
+
+    it('should return create when neither text nor semantic finds match', async () => {
+      // Text-based check finds no match
+      mockRepo.find.mockResolvedValue([]);
+
+      // Semantic check finds no match
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([]);
+
+      const newFact = createFact('position', 'Unique position', 0.9);
+
+      const result = await service.checkDuplicateHybrid(entityId, newFact);
+
+      expect(result.action).toBe('create');
+    });
+
+    it('should return text-based supersede without calling semantic', async () => {
+      // Text-based check finds similar temporal fact
+      mockRepo.find.mockResolvedValue([
+        {
+          id: 'fact-1',
+          entityId,
+          factType: 'position',
+          value: 'Junior Developer',
+          validUntil: null,
+        },
+      ]);
+
+      const newFact = createFact('position', 'Senior Developer', 0.9);
+
+      const result = await service.checkDuplicateHybrid(entityId, newFact);
+
+      expect(result.action).toBe('supersede');
+      expect(result.existingFactId).toBe('fact-1');
+      // Should not call embedding service since text-based found a match
+      expect(mockEmbeddingService.generate).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,8 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { EntityFact } from '@pkg/entities';
 import { ExtractedFact } from './fact-extraction.service';
+import { EmbeddingService } from '../embedding/embedding.service';
+import {
+  SEMANTIC_SIMILARITY_THRESHOLD,
+  formatEmbeddingForQuery,
+} from '../../common/utils/similarity.utils';
 
 export interface DeduplicationResult {
   action: 'create' | 'update' | 'skip' | 'supersede';
@@ -27,6 +32,8 @@ export class FactDeduplicationService {
   constructor(
     @InjectRepository(EntityFact)
     private factRepo: Repository<EntityFact>,
+    @Optional()
+    private embeddingService: EmbeddingService | null,
   ) {}
 
   /**
@@ -93,6 +100,107 @@ export class FactDeduplicationService {
 
     // No match - create new
     return { action: 'create', reason: 'No similar facts found' };
+  }
+
+  /**
+   * Check for semantic duplicate using embeddings.
+   * More accurate than Levenshtein for semantically similar but differently worded facts.
+   *
+   * Example: "Работает в Сбере" vs "Сотрудник Сбербанка"
+   * - Levenshtein: ~20% similar (fails)
+   * - Semantic: ~95% similar (detects duplicate)
+   *
+   * @returns DeduplicationResult with action and optional existing fact ID
+   */
+  async checkSemanticDuplicate(
+    entityId: string,
+    newFactValue: string,
+    factType?: string,
+  ): Promise<DeduplicationResult> {
+    if (!this.embeddingService) {
+      this.logger.warn('EmbeddingService not available, falling back to text-based dedup');
+      return { action: 'create', reason: 'Semantic dedup unavailable' };
+    }
+
+    try {
+      // 1. Generate embedding for new fact value
+      const embedding = await this.embeddingService.generate(newFactValue);
+      const embeddingStr = formatEmbeddingForQuery(embedding);
+
+      // 2. Build query to find similar facts using pgvector cosine distance
+      // Note: pgvector <=> returns distance (0 = identical), we convert to similarity
+      let query = `
+        SELECT id, value, fact_type, 1 - (embedding <=> $1::vector) as similarity
+        FROM entity_facts
+        WHERE entity_id = $2
+          AND valid_until IS NULL
+          AND embedding IS NOT NULL
+          AND 1 - (embedding <=> $1::vector) > $3
+      `;
+      const params: (string | number)[] = [
+        embeddingStr,
+        entityId,
+        SEMANTIC_SIMILARITY_THRESHOLD,
+      ];
+
+      // Optionally filter by fact type
+      if (factType) {
+        query += ` AND fact_type = $4`;
+        params.push(factType);
+      }
+
+      query += ` ORDER BY similarity DESC LIMIT 1`;
+
+      const similar = await this.factRepo.query(query, params);
+
+      // 3. Return result
+      if (similar.length > 0) {
+        const match = similar[0];
+        const similarity = parseFloat(match.similarity);
+
+        this.logger.debug(
+          `Semantic duplicate found: "${newFactValue}" ≈ "${match.value}" (similarity: ${similarity.toFixed(3)})`,
+        );
+
+        return {
+          action: 'skip',
+          existingFactId: match.id,
+          reason: `Semantic duplicate (similarity: ${similarity.toFixed(2)})`,
+        };
+      }
+
+      return { action: 'create', reason: 'No semantic duplicates found' };
+    } catch (error: any) {
+      this.logger.error(`Semantic dedup failed: ${error.message}`, error.stack);
+      // Fallback to allowing creation on error
+      return { action: 'create', reason: 'Semantic dedup error, allowing creation' };
+    }
+  }
+
+  /**
+   * Hybrid deduplication: first check text-based, then semantic if needed.
+   * This is more efficient as text-based check is cheaper.
+   */
+  async checkDuplicateHybrid(
+    entityId: string,
+    newFact: ExtractedFact,
+  ): Promise<DeduplicationResult> {
+    // First, quick text-based check
+    const textResult = await this.checkDuplicate(entityId, newFact);
+
+    // If text-based found a match, use it
+    if (textResult.action !== 'create') {
+      return textResult;
+    }
+
+    // If no text match found, try semantic check
+    const semanticResult = await this.checkSemanticDuplicate(
+      entityId,
+      newFact.value,
+      newFact.factType,
+    );
+
+    return semanticResult;
   }
 
   /**
