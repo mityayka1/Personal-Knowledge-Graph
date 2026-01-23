@@ -557,4 +557,44 @@ export class PkgCoreApiService {
       return response.data;
     });
   }
+
+  // ============================================
+  // Notification Trigger API Methods
+  // ============================================
+
+  /**
+   * Trigger morning brief
+   */
+  async triggerMorningBrief(): Promise<{ success: boolean; message: string }> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<{ success: boolean; message: string }>(
+        '/notifications/trigger/morning-brief',
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Trigger hourly digest (pending events)
+   */
+  async triggerHourlyDigest(): Promise<{ success: boolean; message: string }> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<{ success: boolean; message: string }>(
+        '/notifications/trigger/hourly-digest',
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Trigger daily digest
+   */
+  async triggerDailyDigest(): Promise<{ success: boolean; message: string }> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<{ success: boolean; message: string }>(
+        '/notifications/trigger/daily-digest',
+      );
+      return response.data;
+    });
+  }
 }
