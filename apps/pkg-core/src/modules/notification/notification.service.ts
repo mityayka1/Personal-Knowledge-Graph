@@ -146,14 +146,20 @@ export class NotificationService {
     // Load all pending events without notification (up to reasonable max)
     // This ensures we find events of requested priority even if
     // there are many lower-priority events created earlier
-    const all = await this.extractedEventRepo.find({
-      where: {
-        status: ExtractedEventStatus.PENDING,
-        notificationSentAt: IsNull(),
-      },
-      order: { createdAt: 'ASC' },
-      take: 200, // Reasonable max to scan
-    });
+    // Also excludes events from bot entities (e.g. automated notifications)
+    const all = await this.extractedEventRepo
+      .createQueryBuilder('event')
+      .where('event.status = :status', { status: ExtractedEventStatus.PENDING })
+      .andWhere('event.notification_sent_at IS NULL')
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM entities e
+          WHERE e.id = event.entity_id AND e.is_bot = true
+        )`,
+      )
+      .orderBy('event.created_at', 'ASC')
+      .take(200) // Reasonable max to scan
+      .getMany();
 
     // Get settings once for batch filtering
     const settings = await this.settingsService.getNotificationSettings();
@@ -934,9 +940,7 @@ export class NotificationService {
       case ExtractedEventType.FACT: {
         const factData = event.extractedData as FactData;
         lines.push(`📝 ${esc(factData.factType)}: ${esc(factData.value)}`);
-        if (factData.quote) {
-          lines.push(`💬 <i>"${esc(factData.quote.slice(0, 100))}${factData.quote.length > 100 ? '...' : ''}"</i>`);
-        }
+        // Quote is handled by formatCarouselCard via messageLinkInfo.sourceQuote
         break;
       }
 

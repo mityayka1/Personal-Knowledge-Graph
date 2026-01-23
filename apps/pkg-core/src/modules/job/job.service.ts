@@ -8,6 +8,7 @@ import { SettingsService } from '../settings/settings.service';
 
 export interface ExtractionJobData {
   interactionId: string;
+  /** @deprecated Use message-level senderEntityId instead. Kept for backward compatibility. */
   entityId: string;
   messageIds: string[];
   messages: Array<{
@@ -19,6 +20,10 @@ export interface ExtractionJobData {
     replyToSourceMessageId?: string;
     /** Forum topic name for context (if message is from a forum) */
     topicName?: string;
+    /** Entity ID of the message sender (for proper attribution in group chats) */
+    senderEntityId?: string;
+    /** Name of the message sender */
+    senderEntityName?: string;
   }>;
 }
 
@@ -84,8 +89,12 @@ export class JobService {
     isOutgoing?: boolean;
     replyToSourceMessageId?: string;
     topicName?: string;
+    /** Entity ID of the message sender (for proper attribution in group chats) */
+    senderEntityId?: string;
+    /** Name of the message sender */
+    senderEntityName?: string;
   }): Promise<void> {
-    const { interactionId, entityId, messageId, messageContent, isOutgoing = false, replyToSourceMessageId, topicName } = params;
+    const { interactionId, entityId, messageId, messageContent, isOutgoing = false, replyToSourceMessageId, topicName, senderEntityId, senderEntityName } = params;
     // BullMQ doesn't allow colons in custom job IDs, use underscore instead
     const jobId = `extraction_${interactionId}`;
 
@@ -111,6 +120,8 @@ export class JobService {
             isOutgoing,
             replyToSourceMessageId,
             topicName,
+            senderEntityId,
+            senderEntityName,
           }],
         });
         await existingJob.changeDelay(delayMs); // Reset delay
@@ -133,6 +144,8 @@ export class JobService {
             isOutgoing,
             replyToSourceMessageId,
             topicName,
+            senderEntityId,
+            senderEntityName,
           }],
         } as ExtractionJobData, {
           jobId,
@@ -155,6 +168,8 @@ export class JobService {
           isOutgoing,
           replyToSourceMessageId,
           topicName,
+          senderEntityId,
+          senderEntityName,
         }],
       } as ExtractionJobData, {
         jobId: uniqueJobId,
@@ -176,6 +191,8 @@ export class JobService {
         isOutgoing,
         replyToSourceMessageId,
         topicName,
+        senderEntityId,
+        senderEntityName,
       }],
     } as ExtractionJobData, {
       jobId,

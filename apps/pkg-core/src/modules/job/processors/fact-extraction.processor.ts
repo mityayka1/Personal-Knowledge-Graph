@@ -35,8 +35,22 @@ export class FactExtractionProcessor extends WorkerHost {
     );
 
     try {
-      // Get entity name
+      // Get entity info
       const entity = await this.entityService.findOne(entityId);
+
+      // Skip extraction for bot messages - they don't contain useful personal information
+      if (entity.isBot) {
+        this.logger.debug(
+          `Skipping extraction for bot entity ${entityId} (${entity.name})`,
+        );
+        return {
+          success: true,
+          factsExtracted: 0,
+          eventsExtracted: 0,
+          pendingEventsExtracted: 0,
+          skipped: 'bot',
+        };
+      }
 
       // Map messages to the format expected by extractFactsBatch
       const formattedMessages = messages.map((m) => ({
@@ -67,16 +81,22 @@ export class FactExtractionProcessor extends WorkerHost {
       );
 
       // Build messages for second brain extraction
+      // Use message-level senderEntityId for proper attribution in group chats
       const secondBrainMessages = await Promise.all(
         messages.map(async (m) => {
           const replyToInfo = m.replyToSourceMessageId
             ? replyToInfoMap.get(m.replyToSourceMessageId)
             : undefined;
 
+          // Use message-level senderEntityId if available, fallback to job-level entityId
+          const messageEntityId = m.senderEntityId || entityId;
+          // Use message-level senderEntityName if available, fallback to loaded entity.name
+          const messageEntityName = m.senderEntityName || entity.name;
+
           // Determine promiseToEntityId using the dedicated service
           const promiseToEntityId = await this.promiseRecipientService.resolveRecipient({
             interactionId,
-            entityId,
+            entityId: messageEntityId,
             isOutgoing: m.isOutgoing ?? false,
             replyToSenderEntityId: replyToInfo?.senderEntityId,
           });
@@ -85,8 +105,8 @@ export class FactExtractionProcessor extends WorkerHost {
             messageId: m.id,
             messageContent: m.content,
             interactionId,
-            entityId,
-            entityName: entity.name,
+            entityId: messageEntityId,
+            entityName: messageEntityName,
             isOutgoing: m.isOutgoing ?? false,
             replyToContent: replyToInfo?.content,
             replyToSenderName: replyToInfo?.senderName,

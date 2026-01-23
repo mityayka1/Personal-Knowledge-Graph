@@ -65,6 +65,7 @@ export class MessageService {
 
     // 3. Resolve entity based on category
     let entityId: string | null = null;
+    let senderEntityName: string | null = null; // For proper attribution in group chats
     let resolutionStatus = 'resolved';
     let pendingResolutionId: string | null = null;
     let autoCreatedEntity = false;
@@ -77,6 +78,10 @@ export class MessageService {
     if (identifier) {
       // Known contact - use existing entity
       entityId = identifier.entityId;
+
+      // Load entity name for extraction attribution
+      const existingEntity = await this.entityService.findOne(entityId);
+      senderEntityName = existingEntity?.name || dto.telegram_display_name || null;
 
       // Update missing identifiers (e.g., username became available)
       await this.updateMissingIdentifiers(entityId, dto);
@@ -94,6 +99,7 @@ export class MessageService {
         identifiers,
       });
       entityId = entity.id;
+      senderEntityName = entityName;
       autoCreatedEntity = true;
       this.logger.log(
         `Auto-created Entity "${entityName}" for private chat contact ${dto.telegram_user_id} with ${identifiers.length} identifiers (isBot: ${entity.isBot})`,
@@ -112,6 +118,7 @@ export class MessageService {
         identifiers,
       });
       entityId = entity.id;
+      senderEntityName = entityName;
       autoCreatedEntity = true;
       this.logger.log(
         `Auto-created Entity "${entityName}" for working group participant ${dto.telegram_user_id} with ${identifiers.length} identifiers (isBot: ${entity.isBot})`,
@@ -127,6 +134,8 @@ export class MessageService {
         metadata: dto.telegram_user_info,
       });
       pendingResolutionId = pending.id;
+      // Use display name as fallback for pending entities
+      senderEntityName = dto.telegram_display_name || dto.telegram_username || null;
     }
 
     // 3b. Resolve RECIPIENT entity for outgoing messages in private chats
@@ -263,6 +272,9 @@ export class MessageService {
           isOutgoing: dto.is_outgoing,
           replyToSourceMessageId: dto.reply_to_message_id,
           topicName: dto.topic_name,
+          // For proper attribution in group chats
+          senderEntityId: entityId,
+          senderEntityName: senderEntityName || undefined,
         });
       } catch (error) {
         // Don't fail message creation if extraction scheduling fails

@@ -67,6 +67,11 @@ describe('NotificationService', () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      // For SELECT queries (getPendingEventsForDigest)
+      leftJoin: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -439,7 +444,16 @@ describe('NotificationService', () => {
         extractedData: { factType: 'test', value: 'test' },
       });
 
-      extractedEventRepo.find.mockResolvedValue([taskEvent, factEvent]);
+      // Mock query builder chain for getPendingEventsForDigest
+      const mockQb = {
+        leftJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([taskEvent, factEvent]),
+      };
+      extractedEventRepo.createQueryBuilder.mockReturnValue(mockQb as any);
 
       const mediumEvents = await service.getPendingEventsForDigest('medium', 10);
 
@@ -456,11 +470,40 @@ describe('NotificationService', () => {
         }),
       );
 
-      extractedEventRepo.find.mockResolvedValue(events);
+      // Mock query builder chain for getPendingEventsForDigest
+      const mockQb = {
+        leftJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(events),
+      };
+      extractedEventRepo.createQueryBuilder.mockReturnValue(mockQb as any);
 
       const result = await service.getPendingEventsForDigest('medium', 3);
 
       expect(result).toHaveLength(3);
+    });
+
+    it('should exclude events from bot entities', async () => {
+      // This test verifies that the query includes the bot filter condition
+      const mockQb = {
+        leftJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      extractedEventRepo.createQueryBuilder.mockReturnValue(mockQb as any);
+
+      await service.getPendingEventsForDigest('low', 10);
+
+      // Verify the query includes bot filter
+      expect(mockQb.andWhere).toHaveBeenCalledWith(
+        '(entity.is_bot = false OR entity.is_bot IS NULL OR event.entity_id IS NULL)',
+      );
     });
   });
 
