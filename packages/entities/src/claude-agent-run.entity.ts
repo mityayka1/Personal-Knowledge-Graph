@@ -13,6 +13,7 @@ export type ClaudeTaskType =
   | 'fact_extraction'
   | 'event_extraction'
   | 'context_enrichment'
+  | 'fact_fusion'
   | 'recall'
   | 'meeting_prep'
   | 'daily_brief'

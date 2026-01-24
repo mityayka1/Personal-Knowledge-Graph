@@ -9,6 +9,7 @@ import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
 import { BriefCallbackHandler } from './handlers/brief-callback.handler';
+import { FactCallbackHandler } from './handlers/fact-callback.handler';
 
 // Mock Telegraf
 jest.mock('telegraf', () => ({
@@ -48,6 +49,7 @@ describe('BotService', () => {
     handleTextMessage: jest.fn(),
   };
   const mockBriefCallbackHandler = { canHandle: jest.fn(), handle: jest.fn() };
+  const mockFactCallbackHandler = { canHandle: jest.fn(), handle: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -90,6 +92,10 @@ describe('BotService', () => {
         {
           provide: BriefCallbackHandler,
           useValue: mockBriefCallbackHandler,
+        },
+        {
+          provide: FactCallbackHandler,
+          useValue: mockFactCallbackHandler,
         },
       ],
     }).compile();

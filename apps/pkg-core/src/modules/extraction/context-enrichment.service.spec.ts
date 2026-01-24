@@ -144,7 +144,7 @@ describe('ContextEnrichmentService', () => {
           query: expect.any(String),
           entityId: 'entity-456',
           searchType: 'hybrid',
-          limit: 10,
+          limit: 20, // ENRICHMENT_CONFIG.MAX_RELATED_MESSAGES
         }),
       );
 
@@ -156,7 +156,7 @@ describe('ContextEnrichmentService', () => {
         expect.objectContaining({
           mode: 'oneshot',
           taskType: 'context_enrichment',
-          model: 'haiku',
+          model: 'sonnet', // ENRICHMENT_CONFIG.MODEL
         }),
       );
 

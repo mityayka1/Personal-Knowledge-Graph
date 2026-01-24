@@ -423,6 +423,77 @@ export class ExtractedEventController {
   }
 
   /**
+   * Queue batch of events for context enrichment
+   * POST /extracted-events/enrich-batch
+   *
+   * Queues multiple events for asynchronous enrichment processing.
+   * Events are staggered to avoid overwhelming the LLM.
+   */
+  @Post('enrich-batch')
+  @ApiOperation({
+    summary: 'Queue batch of events for enrichment',
+    description: 'Queues multiple pending events for asynchronous context enrichment',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum number of events to queue (default: 50, max: 200)',
+          example: 50,
+        },
+        eventType: {
+          type: 'string',
+          enum: ['task', 'meeting', 'promise_by_me', 'promise_by_them', 'fact'],
+          description: 'Filter by event type (optional)',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Events queued for enrichment' })
+  async enrichBatch(
+    @Body() body: { limit?: number; eventType?: ExtractedEventType },
+  ) {
+    const limit = Math.min(body.limit || 50, 200);
+
+    // Find pending events that haven't been enriched yet
+    const qb = this.extractedEventRepo
+      .createQueryBuilder('event')
+      .where('event.status = :status', { status: ExtractedEventStatus.PENDING })
+      .andWhere('event.enrichmentData IS NULL')
+      .orderBy('event.createdAt', 'ASC')
+      .take(limit);
+
+    if (body.eventType) {
+      qb.andWhere('event.eventType = :type', { type: body.eventType });
+    }
+
+    const events = await qb.getMany();
+
+    if (events.length === 0) {
+      return {
+        queued: 0,
+        message: 'No events found that need enrichment',
+      };
+    }
+
+    // Queue for enrichment with 1s stagger between events
+    await this.enrichmentQueueService.queueBatchForEnrichment(
+      events.map(e => e.id),
+      0, // No initial delay, just stagger
+    );
+
+    this.logger.log(`Queued ${events.length} events for batch enrichment`);
+
+    return {
+      queued: events.length,
+      eventIds: events.map(e => e.id),
+      message: `Queued ${events.length} events for enrichment. Check /queue/stats for progress.`,
+    };
+  }
+
+  /**
    * Manually trigger enrichment for an extracted event
    * POST /extracted-events/:id/enrich
    *

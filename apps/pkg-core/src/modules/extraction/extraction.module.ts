@@ -20,6 +20,7 @@ import { EntityEventModule } from '../entity-event/entity-event.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 import { SettingsModule } from '../settings/settings.module';
 import { SearchModule } from '../search/search.module';
+import { EmbeddingModule } from '../embedding/embedding.module';
 
 @Module({
   imports: [
@@ -37,9 +38,10 @@ import { SearchModule } from '../search/search.module';
     forwardRef(() => InteractionModule),
     forwardRef(() => EntityModule),
     EntityEventModule,
-    ClaudeAgentModule,
+    forwardRef(() => ClaudeAgentModule),
     SettingsModule,
     SearchModule,
+    EmbeddingModule,
   ],
   controllers: [ExtractionController, ExtractedEventController],
   providers: [

@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { toolSuccess, toolEmptyResult, handleToolError, type ToolDefinition } from './tool.types';
@@ -14,7 +14,10 @@ export class EntityToolsProvider {
   private readonly logger = new Logger(EntityToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
-  constructor(private readonly entityService: EntityService) {}
+  constructor(
+    @Inject(forwardRef(() => EntityService))
+    private readonly entityService: EntityService,
+  ) {}
 
   /**
    * Get entity tools (cached)

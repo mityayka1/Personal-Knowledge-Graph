@@ -58,8 +58,17 @@ export class FactExtractionService {
     messageContent: string;
     messageId?: string;
     interactionId?: string;
+    /** Message context for better extraction accuracy */
+    context?: {
+      /** Is this an outgoing message (from user to contact)? */
+      isOutgoing?: boolean;
+      /** Chat type: private, group, supergroup, channel */
+      chatType?: string;
+      /** Name of message sender */
+      senderName?: string;
+    };
   }): Promise<ExtractionResult> {
-    const { entityId, entityName, messageContent, messageId, interactionId } = params;
+    const { entityId, entityName, messageContent, messageId, interactionId, context } = params;
 
     // Skip very short messages
     if (messageContent.length < 20) {
@@ -71,7 +80,7 @@ export class FactExtractionService {
       ? messageContent.substring(0, 1500) + '...'
       : messageContent;
 
-    const prompt = this.buildCompactPrompt(entityName, truncatedContent);
+    const prompt = this.buildCompactPrompt(entityName, truncatedContent, context);
 
     try {
       const { data, usage } = await this.claudeAgentService.call<FactsExtractionResponse>({
@@ -135,17 +144,32 @@ export class FactExtractionService {
   async extractFactsBatch(params: {
     entityId: string;
     entityName: string;
-    messages: Array<{ id: string; content: string; interactionId?: string }>;
+    messages: Array<{
+      id: string;
+      content: string;
+      interactionId?: string;
+      /** Is this an outgoing message (from user to contact)? */
+      isOutgoing?: boolean;
+      /** Name of message sender (for group chats) */
+      senderName?: string;
+    }>;
+    /** Chat type for context */
+    chatType?: string;
   }): Promise<ExtractionResult> {
-    const { entityId, entityName, messages } = params;
+    const { entityId, entityName, messages, chatType } = params;
 
-    // Combine messages into single context
+    // Combine messages into single context with direction markers
     const combined = messages
-      .map((m, i) => `[${i + 1}] ${m.content}`)
+      .map((m, i) => {
+        const direction = m.isOutgoing !== undefined
+          ? (m.isOutgoing ? '[Я]' : `[${m.senderName || entityName}]`)
+          : `[${i + 1}]`;
+        return `${direction} ${m.content}`;
+      })
       .join('\n---\n')
       .substring(0, 3000); // Limit total size
 
-    const prompt = this.buildBatchPrompt(entityName, combined);
+    const prompt = this.buildBatchPrompt(entityName, combined, chatType);
 
     try {
       const { data, usage } = await this.claudeAgentService.call<FactsExtractionResponse>({
@@ -194,12 +218,48 @@ export class FactExtractionService {
   }
 
   /**
-   * Compact prompt for single message
+   * Compact prompt for single message with context
    */
-  private buildCompactPrompt(name: string, text: string): string {
+  private buildCompactPrompt(
+    name: string,
+    text: string,
+    context?: { isOutgoing?: boolean; chatType?: string; senderName?: string },
+  ): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 500);
-    return `Извлеки факты о ${name}. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram.
-ВАЖНО: Все значения фактов должны быть на русском языке.
+
+    // Build context description
+    let contextDesc = '';
+    if (context) {
+      const parts: string[] = [];
+
+      if (context.isOutgoing !== undefined) {
+        parts.push(context.isOutgoing ? 'Я написал собеседнику' : 'Собеседник написал мне');
+      }
+
+      if (context.chatType) {
+        const chatTypeMap: Record<string, string> = {
+          private: 'личный диалог',
+          group: 'групповой чат',
+          supergroup: 'супергруппа',
+          channel: 'канал',
+          forum: 'форум',
+        };
+        parts.push(`чат: ${chatTypeMap[context.chatType] || context.chatType}`);
+      }
+
+      if (context.senderName) {
+        parts.push(`автор: ${context.senderName}`);
+      }
+
+      if (parts.length > 0) {
+        contextDesc = `\nКонтекст: ${parts.join(', ')}`;
+      }
+    }
+
+    return `Извлеки факты о ${name}. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram, birthday (день рождения).
+ВАЖНО:
+- Все значения фактов должны быть на русском языке
+- Извлекай факты ТОЛЬКО о ${name}, не о других людях${contextDesc}
 
 Текст: ${cleanText}`;
   }
@@ -207,10 +267,27 @@ export class FactExtractionService {
   /**
    * Batch prompt for multiple messages
    */
-  private buildBatchPrompt(name: string, text: string): string {
+  private buildBatchPrompt(name: string, text: string, chatType?: string): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 1000);
-    return `Извлеки факты о ${name}. Удали дубликаты. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram.
-ВАЖНО: Все значения фактов должны быть на русском языке.
+
+    // Build context description
+    let contextDesc = '';
+    if (chatType) {
+      const chatTypeMap: Record<string, string> = {
+        private: 'личный диалог',
+        group: 'групповой чат',
+        supergroup: 'супергруппа',
+        channel: 'канал',
+        forum: 'форум',
+      };
+      contextDesc = `\nЭто ${chatTypeMap[chatType] || chatType}.`;
+    }
+
+    return `Извлеки факты о ${name}. Удали дубликаты. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram, birthday (день рождения).
+ВАЖНО:
+- Все значения фактов должны быть на русском языке
+- Извлекай факты ТОЛЬКО о ${name}, не о других людях
+- [Я] — это сообщения пользователя, [${name}] — сообщения собеседника${contextDesc}
 
 Сообщения: ${cleanText}`;
   }

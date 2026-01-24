@@ -10,6 +10,7 @@ import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
 import { BriefCallbackHandler } from './handlers/brief-callback.handler';
+import { FactCallbackHandler } from './handlers/fact-callback.handler';
 
 export interface SendNotificationOptions {
   chatId: number | string;
@@ -38,6 +39,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly approvalCallbackHandler: ApprovalCallbackHandler,
     @Inject(forwardRef(() => BriefCallbackHandler))
     private readonly briefCallbackHandler: BriefCallbackHandler,
+    @Inject(forwardRef(() => FactCallbackHandler))
+    private readonly factCallbackHandler: FactCallbackHandler,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -240,6 +243,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await this.carouselCallbackHandler.handle(ctx);
       } else if (this.briefCallbackHandler.canHandle(callbackData)) {
         await this.briefCallbackHandler.handle(ctx);
+      } else if (this.factCallbackHandler.canHandle(callbackData)) {
+        await this.factCallbackHandler.handle(ctx);
       } else if (this.eventCallbackHandler.canHandle(callbackData)) {
         await this.eventCallbackHandler.handle(ctx);
       } else {

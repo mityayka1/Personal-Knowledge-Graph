@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
@@ -105,6 +105,7 @@ export class ApprovalService implements OnModuleDestroy {
   constructor(
     @InjectRedis()
     private readonly redis: Redis,
+    @Inject(forwardRef(() => EntityService))
     private readonly entityService: EntityService,
     private readonly telegramNotifier: TelegramNotifierService,
   ) {

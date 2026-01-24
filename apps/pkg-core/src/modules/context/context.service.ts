@@ -36,6 +36,7 @@ export class ContextService {
     private factRepo: Repository<EntityFact>,
     @InjectRepository(TranscriptSegment)
     private segmentRepo: Repository<TranscriptSegment>,
+    @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
     private vectorService: VectorService,
     private embeddingService: EmbeddingService,

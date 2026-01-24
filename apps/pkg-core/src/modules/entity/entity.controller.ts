@@ -64,6 +64,26 @@ export class EntityController {
   }
 
   // Facts management
+
+  /**
+   * Get facts for an entity with rank-based ordering.
+   * Returns preferred facts first, then normal.
+   * Deprecated facts excluded by default.
+   */
+  @Get(':id/facts')
+  async getFacts(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('includeDeprecated') includeDeprecated?: string,
+    @Query('includeHistory') includeHistory?: string,
+  ) {
+    // Verify entity exists
+    await this.entityService.findOne(id);
+    return this.factService.findByEntityWithRanking(id, {
+      includeDeprecated: includeDeprecated === 'true',
+      includeHistory: includeHistory === 'true',
+    });
+  }
+
   @Post(':id/facts')
   async addFact(
     @Param('id', ParseUUIDPipe) id: string,
