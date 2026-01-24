@@ -122,4 +122,101 @@ describe('ExtractionToolsProvider', () => {
       }
     });
   });
+
+  describe('cross-entity routing', () => {
+    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456' };
+
+    /**
+     * Cross-entity routing allows facts to be created for ANY entity, not just the "current" contact.
+     * Example: "Маша перешла в Сбер" → create fact for Маша's entity, not current chat contact.
+     */
+
+    it('create_fact should route to specified entityId', async () => {
+      const tools = provider.getTools(testContext);
+      const createFactTool = tools.find((t) => t.name === 'create_fact');
+      expect(createFactTool).toBeDefined();
+
+      // Target entity is different from chat contact - this is the cross-entity routing
+      const targetEntityId = 'different-entity-uuid';
+
+      // Invoke the tool handler with explicit entityId
+      const result = await (createFactTool as any).handler({
+        entityId: targetEntityId,
+        factType: 'company',
+        value: 'Сбер',
+        confidence: 0.9,
+        sourceQuote: 'Маша перешла в Сбер',
+      });
+
+      // Verify fact was created for the TARGET entity, not any default
+      expect(mockEntityFactService.createWithDedup).toHaveBeenCalledWith(
+        targetEntityId, // First arg is entityId - confirms routing
+        expect.objectContaining({
+          type: 'company',
+          value: 'Сбер',
+        }),
+        expect.any(Object),
+      );
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('find_entity_by_name should enable discovery for routing', async () => {
+      const tools = provider.getTools(testContext);
+      const findTool = tools.find((t) => t.name === 'find_entity_by_name');
+      expect(findTool).toBeDefined();
+
+      // Mock returns entity that LLM can route facts to
+      mockEntityService.findAll.mockResolvedValueOnce({
+        items: [
+          { id: 'masha-entity-uuid', name: 'Маша', type: 'person', organization: null },
+        ],
+        total: 1,
+      });
+
+      // LLM uses this tool to find the entity to route the fact to
+      const result = await (findTool as any).handler({
+        name: 'Маша',
+        limit: 5,
+      });
+
+      // Tool returns entity ID that can be used in create_fact
+      expect(result.isError).toBeFalsy();
+      const resultData = JSON.parse(result.content[0].text);
+      expect(resultData.entities[0].id).toBe('masha-entity-uuid');
+    });
+
+    it('full routing flow: find entity then create fact for it', async () => {
+      const tools = provider.getTools(testContext);
+      const findTool = tools.find((t) => t.name === 'find_entity_by_name');
+      const createFactTool = tools.find((t) => t.name === 'create_fact');
+
+      // Step 1: LLM finds Маша's entity
+      mockEntityService.findAll.mockResolvedValueOnce({
+        items: [
+          { id: 'masha-uuid', name: 'Мария Иванова', type: 'person', organization: null },
+        ],
+        total: 1,
+      });
+
+      const findResult = await (findTool as any).handler({ name: 'Маша', limit: 1 });
+      const foundEntity = JSON.parse(findResult.content[0].text).entities[0];
+
+      // Step 2: LLM creates fact for that entity (not current contact)
+      await (createFactTool as any).handler({
+        entityId: foundEntity.id,
+        factType: 'company',
+        value: 'Сбербанк',
+        confidence: 0.85,
+        sourceQuote: 'Маша перешла в Сбер',
+      });
+
+      // Verify routing: fact created for Маша, not for chat contact
+      expect(mockEntityFactService.createWithDedup).toHaveBeenCalledWith(
+        'masha-uuid', // Маша's entity, not current contact
+        expect.objectContaining({ type: 'company', value: 'Сбербанк' }),
+        expect.any(Object),
+      );
+    });
+  });
 });

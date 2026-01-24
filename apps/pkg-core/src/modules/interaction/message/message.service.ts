@@ -131,7 +131,8 @@ export class MessageService {
         identifierValue: dto.telegram_user_id,
         displayName: dto.telegram_display_name || dto.telegram_username,
         messageTimestamp: new Date(dto.timestamp),
-        metadata: dto.telegram_user_info,
+        // Spread to convert class instance to plain object for index signature compatibility
+        metadata: dto.telegram_user_info ? { ...dto.telegram_user_info } : undefined,
       });
       pendingResolutionId = pending.id;
       // Use display name as fallback for pending entities

@@ -128,6 +128,8 @@ export class EntityRelationService {
     const relations = await this.findByEntity(entityId);
 
     return relations.map((relation) => {
+      // LIMITATION: If entity has multiple roles in the same relation (e.g., both 'parent' and 'employer'),
+      // find() returns only the first one. For full multi-role support, change to filter() and return roles[].
       const currentMember = relation.members.find((m) => m.entityId === entityId);
       const otherMembers = relation.members.filter((m) => m.entityId !== entityId);
 

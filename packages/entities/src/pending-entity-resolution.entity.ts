@@ -17,6 +17,35 @@ export enum ResolutionStatus {
   IGNORED = 'ignored',
 }
 
+/**
+ * Metadata for pending entity resolution.
+ * Base fields are Telegram-specific, extraction-specific fields are added
+ * for context-aware extraction workflow.
+ * Index signature allows additional fields for future extensions.
+ */
+export interface PendingResolutionMetadata {
+  // Telegram-specific fields
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  about?: string;
+  isBot?: boolean;
+  isVerified?: boolean;
+  isPremium?: boolean;
+  photoBase64?: string;
+  birthday?: string;
+
+  // Extraction-specific fields
+  mentionedAs?: string;
+  relatedToEntityId?: string;
+  sourceMessageId?: string | null;
+  sourceInteractionId?: string | null;
+
+  // Allow additional fields for future extensions
+  [key: string]: unknown;
+}
+
 @Entity('pending_entity_resolutions')
 @Unique(['identifierType', 'identifierValue'])
 export class PendingEntityResolution {
@@ -34,17 +63,7 @@ export class PendingEntityResolution {
   displayName: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  metadata: {
-    username?: string;
-    firstName?: string;
-    lastName?: string;
-    phone?: string;
-    about?: string;
-    isBot?: boolean;
-    isVerified?: boolean;
-    isPremium?: boolean;
-    photoBase64?: string;
-  } | null;
+  metadata: PendingResolutionMetadata | null;
 
   @Column({ length: 20, default: ResolutionStatus.PENDING })
   @Index()

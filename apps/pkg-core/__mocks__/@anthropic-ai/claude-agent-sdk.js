@@ -27,12 +27,12 @@ module.exports = {
       },
     };
   }),
-  tool: jest.fn().mockReturnValue({
-    name: 'mock_tool',
-    description: 'Mock tool',
-    inputSchema: {},
-    handler: jest.fn(),
-  }),
+  tool: jest.fn().mockImplementation((name, description, schema, handler) => ({
+    name: name, // Preserve actual tool name for tests
+    description: description || 'Mock tool',
+    inputSchema: schema || {},
+    handler: handler || jest.fn(),
+  })),
   createSdkMcpServer: jest.fn().mockReturnValue({
     name: 'mock-server',
     version: '1.0.0',

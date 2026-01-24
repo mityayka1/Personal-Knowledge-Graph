@@ -83,6 +83,23 @@ const AGENT_EXTRACTION_SCHEMA = {
   required: ['factsCreated', 'relationsCreated', 'pendingEntitiesCreated'],
 };
 
+// Extraction limits
+const MIN_MESSAGE_LENGTH = 20;
+const ONESHOT_CONTENT_LIMIT = 1500;
+const AGENT_CONTENT_LIMIT = 2000;
+const CONTEXT_SIZE_LIMIT = 3000;
+const SOURCE_QUOTE_MAX_LENGTH = 200;
+const SEARCH_TEXT_MAX_LENGTH = 500;
+
+// Chat type Russian localization
+const CHAT_TYPE_MAP: Record<string, string> = {
+  private: 'личный диалог',
+  group: 'групповой чат',
+  supergroup: 'супергруппа',
+  channel: 'канал',
+  forum: 'форум',
+};
+
 @Injectable()
 export class FactExtractionService {
   private readonly logger = new Logger(FactExtractionService.name);
@@ -120,13 +137,13 @@ export class FactExtractionService {
     const { entityId, entityName, messageContent, messageId, interactionId, context } = params;
 
     // Skip very short messages
-    if (messageContent.length < 20) {
+    if (messageContent.length < MIN_MESSAGE_LENGTH) {
       return { entityId, facts: [] };
     }
 
     // Truncate very long messages to save tokens
-    const truncatedContent = messageContent.length > 1500
-      ? messageContent.substring(0, 1500) + '...'
+    const truncatedContent = messageContent.length > ONESHOT_CONTENT_LIMIT
+      ? messageContent.substring(0, ONESHOT_CONTENT_LIMIT) + '...'
       : messageContent;
 
     // Get entity memory context for context-aware extraction
@@ -163,7 +180,7 @@ export class FactExtractionService {
           factType: f.factType.toLowerCase(),
           value: String(f.value).trim(),
           confidence: Math.min(1, Math.max(0, f.confidence)),
-          sourceQuote: String(f.sourceQuote || '').substring(0, 200),
+          sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
         }));
 
       // Try to save extracted facts as pending (don't fail if save fails)
@@ -236,7 +253,7 @@ export class FactExtractionService {
         return `${direction} ${m.content}`;
       })
       .join('\n---\n')
-      .substring(0, 3000); // Limit total size
+      .substring(0, CONTEXT_SIZE_LIMIT); // Limit total size
 
     const prompt = this.buildBatchPrompt(entityName, combined, chatType, entityMemory);
 
@@ -260,7 +277,7 @@ export class FactExtractionService {
           factType: f.factType.toLowerCase(),
           value: String(f.value).trim(),
           confidence: Math.min(1, Math.max(0, f.confidence)),
-          sourceQuote: String(f.sourceQuote || '').substring(0, 200),
+          sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
         }));
 
       for (const fact of validFacts) {
@@ -295,7 +312,7 @@ export class FactExtractionService {
     context?: { isOutgoing?: boolean; chatType?: string; senderName?: string },
     entityMemory?: string,
   ): string {
-    const cleanText = text.replace(/\n/g, ' ').substring(0, 500);
+    const cleanText = text.replace(/\n/g, ' ').substring(0, SEARCH_TEXT_MAX_LENGTH);
 
     // Build context description
     let contextDesc = '';
@@ -307,14 +324,7 @@ export class FactExtractionService {
       }
 
       if (context.chatType) {
-        const chatTypeMap: Record<string, string> = {
-          private: 'личный диалог',
-          group: 'групповой чат',
-          supergroup: 'супергруппа',
-          channel: 'канал',
-          forum: 'форум',
-        };
-        parts.push(`чат: ${chatTypeMap[context.chatType] || context.chatType}`);
+        parts.push(`чат: ${CHAT_TYPE_MAP[context.chatType] || context.chatType}`);
       }
 
       if (context.senderName) {
@@ -355,14 +365,7 @@ ${memorySection}
     // Build context description
     let contextDesc = '';
     if (chatType) {
-      const chatTypeMap: Record<string, string> = {
-        private: 'личный диалог',
-        group: 'групповой чат',
-        supergroup: 'супергруппа',
-        channel: 'канал',
-        forum: 'форум',
-      };
-      contextDesc = `\nЭто ${chatTypeMap[chatType] || chatType}.`;
+      contextDesc = `\nЭто ${CHAT_TYPE_MAP[chatType] || chatType}.`;
     }
 
     // Build memory section
@@ -424,7 +427,7 @@ ${memorySection}
     }
 
     // Skip very short messages
-    if (messageContent.length < 20) {
+    if (messageContent.length < MIN_MESSAGE_LENGTH) {
       return {
         entityId,
         factsCreated: 0,
@@ -435,7 +438,7 @@ ${memorySection}
 
     // Truncate very long messages to save tokens
     const truncatedContent =
-      messageContent.length > 2000 ? messageContent.substring(0, 2000) + '...' : messageContent;
+      messageContent.length > AGENT_CONTENT_LIMIT ? messageContent.substring(0, AGENT_CONTENT_LIMIT) + '...' : messageContent;
 
     // Get base context for primary entity
     let baseContext = '';
@@ -536,14 +539,7 @@ ${memorySection}
         parts.push(context.isOutgoing ? 'Я написал собеседнику' : 'Собеседник написал мне');
       }
       if (context.chatType) {
-        const chatTypeMap: Record<string, string> = {
-          private: 'личный диалог',
-          group: 'групповой чат',
-          supergroup: 'супергруппа',
-          channel: 'канал',
-          forum: 'форум',
-        };
-        parts.push(`чат: ${chatTypeMap[context.chatType] || context.chatType}`);
+        parts.push(`чат: ${CHAT_TYPE_MAP[context.chatType] || context.chatType}`);
       }
       if (context.senderName) {
         parts.push(`автор: ${context.senderName}`);

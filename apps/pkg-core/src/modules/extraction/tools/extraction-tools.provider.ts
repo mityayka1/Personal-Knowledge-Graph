@@ -380,7 +380,6 @@ Pending entity будет ожидать ручного связывания с 
           const identifierValue = `${args.suggestedName}::${uniqueSuffix}`;
 
           // Create pending resolution with context from mention
-          // Using 'as any' because metadata schema doesn't include extraction-specific fields
           const pending = await this.pendingResolutionService.findOrCreate({
             identifierType: 'mentioned_name',
             identifierValue,
@@ -390,7 +389,7 @@ Pending entity будет ожидать ручного связывания с 
               relatedToEntityId: args.relatedToEntityId,
               sourceMessageId: context.messageId,
               sourceInteractionId: context.interactionId,
-            } as any,
+            },
           });
 
           this.logger.log(
