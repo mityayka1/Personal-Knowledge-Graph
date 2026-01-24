@@ -1,6 +1,6 @@
 # Context-Aware Extraction — Implementation Plan
 
-> **Статус:** В разработке
+> **Статус:** ✅ Завершено
 > **Дизайн:** [2025-01-24-context-aware-extraction-design.md](./2025-01-24-context-aware-extraction-design.md)
 > **Дата:** 2025-01-24
 
