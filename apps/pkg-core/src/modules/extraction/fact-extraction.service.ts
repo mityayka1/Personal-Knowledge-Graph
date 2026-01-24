@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { PendingFactService } from '../resolution/pending-fact/pending-fact.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 
 export interface ExtractedFact {
   factType: string;
@@ -47,6 +48,9 @@ export class FactExtractionService {
   constructor(
     private pendingFactService: PendingFactService,
     private claudeAgentService: ClaudeAgentService,
+    @Optional()
+    @Inject(forwardRef(() => EntityFactService))
+    private entityFactService: EntityFactService | null,
   ) {}
 
   /**
@@ -80,7 +84,17 @@ export class FactExtractionService {
       ? messageContent.substring(0, 1500) + '...'
       : messageContent;
 
-    const prompt = this.buildCompactPrompt(entityName, truncatedContent, context);
+    // Get entity memory context for context-aware extraction
+    let entityMemory = '';
+    if (this.entityFactService) {
+      try {
+        entityMemory = await this.entityFactService.getContextForExtraction(entityId);
+      } catch (error) {
+        this.logger.warn(`Failed to get entity context: ${error}`);
+      }
+    }
+
+    const prompt = this.buildCompactPrompt(entityName, truncatedContent, context, entityMemory);
 
     try {
       const { data, usage } = await this.claudeAgentService.call<FactsExtractionResponse>({
@@ -158,6 +172,16 @@ export class FactExtractionService {
   }): Promise<ExtractionResult> {
     const { entityId, entityName, messages, chatType } = params;
 
+    // Get entity memory context for context-aware extraction
+    let entityMemory = '';
+    if (this.entityFactService) {
+      try {
+        entityMemory = await this.entityFactService.getContextForExtraction(entityId);
+      } catch (error) {
+        this.logger.warn(`Failed to get entity context for batch: ${error}`);
+      }
+    }
+
     // Combine messages into single context with direction markers
     const combined = messages
       .map((m, i) => {
@@ -169,7 +193,7 @@ export class FactExtractionService {
       .join('\n---\n')
       .substring(0, 3000); // Limit total size
 
-    const prompt = this.buildBatchPrompt(entityName, combined, chatType);
+    const prompt = this.buildBatchPrompt(entityName, combined, chatType, entityMemory);
 
     try {
       const { data, usage } = await this.claudeAgentService.call<FactsExtractionResponse>({
@@ -224,6 +248,7 @@ export class FactExtractionService {
     name: string,
     text: string,
     context?: { isOutgoing?: boolean; chatType?: string; senderName?: string },
+    entityMemory?: string,
   ): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 500);
 
@@ -256,18 +281,30 @@ export class FactExtractionService {
       }
     }
 
+    // Build memory section
+    const memorySection = entityMemory
+      ? `\n═══════════════════════════════════════════════════════════\n${entityMemory}\n═══════════════════════════════════════════════════════════\n`
+      : '';
+
     return `Извлеки факты о ${name}. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram, birthday (день рождения).
 ВАЖНО:
 - Все значения фактов должны быть на русском языке
-- Извлекай факты ТОЛЬКО о ${name}, не о других людях${contextDesc}
-
+- Извлекай факты ТОЛЬКО о ${name}, не о других людях
+- Если факт уже известен из памяти — не дублируй его
+- Извлекай ТОЛЬКО НОВЫЕ факты, которых нет в памяти${contextDesc}
+${memorySection}
 Текст: ${cleanText}`;
   }
 
   /**
    * Batch prompt for multiple messages
    */
-  private buildBatchPrompt(name: string, text: string, chatType?: string): string {
+  private buildBatchPrompt(
+    name: string,
+    text: string,
+    chatType?: string,
+    entityMemory?: string,
+  ): string {
     const cleanText = text.replace(/\n/g, ' ').substring(0, 1000);
 
     // Build context description
@@ -283,12 +320,19 @@ export class FactExtractionService {
       contextDesc = `\nЭто ${chatTypeMap[chatType] || chatType}.`;
     }
 
+    // Build memory section
+    const memorySection = entityMemory
+      ? `\n═══════════════════════════════════════════════════════════\n${entityMemory}\n═══════════════════════════════════════════════════════════\n`
+      : '';
+
     return `Извлеки факты о ${name}. Удали дубликаты. Типы фактов: position (должность), company (компания), department (отдел), phone, email, telegram, birthday (день рождения).
 ВАЖНО:
 - Все значения фактов должны быть на русском языке
 - Извлекай факты ТОЛЬКО о ${name}, не о других людях
+- Если факт уже известен из памяти — не дублируй его
+- Извлекай ТОЛЬКО НОВЫЕ факты, которых нет в памяти
 - [Я] — это сообщения пользователя, [${name}] — сообщения собеседника${contextDesc}
-
+${memorySection}
 Сообщения: ${cleanText}`;
   }
 }

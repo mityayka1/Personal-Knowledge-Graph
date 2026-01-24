@@ -1,7 +1,8 @@
 import { Injectable, Logger, Optional, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
-import { EntityFact, FactSource, FactCategory } from '@pkg/entities';
+import { Repository, IsNull, Not } from 'typeorm';
+import { EntityFact, FactSource, FactCategory, EntityRecord } from '@pkg/entities';
+import { EntityService } from '../entity.service';
 import { CreateFactDto } from '../dto/create-entity.dto';
 import { EmbeddingService } from '../../embedding/embedding.service';
 import {
@@ -34,6 +35,9 @@ export class EntityFactService {
     @Optional()
     @Inject(forwardRef(() => FactFusionService))
     private factFusionService: FactFusionService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityService))
+    private entityService: EntityService | null,
   ) {}
 
   /**
@@ -295,5 +299,111 @@ export class EntityFactService {
       validUntil: new Date(),
     });
     return result.affected === 1;
+  }
+
+  /**
+   * Find historical facts for an entity (facts with validUntil set).
+   * Returns facts ordered by validUntil DESC (most recently expired first).
+   */
+  async findHistory(
+    entityId: string,
+    options?: { limit?: number },
+  ): Promise<EntityFact[]> {
+    return this.factRepo.find({
+      where: {
+        entityId,
+        validUntil: Not(IsNull()),
+      },
+      order: { validUntil: 'DESC' },
+      take: options?.limit ?? 10,
+    });
+  }
+
+  /**
+   * Get structured context for extraction.
+   * Returns a formatted string with current facts and history.
+   */
+  async getContextForExtraction(entityId: string): Promise<string> {
+    if (!this.entityService) {
+      this.logger.warn('EntityService not available for context extraction');
+      return '';
+    }
+
+    const entity = await this.entityService.findOne(entityId);
+    if (!entity) {
+      return '';
+    }
+
+    const currentFacts = await this.findByEntityWithRanking(entityId);
+    const historyFacts = await this.findHistory(entityId, { limit: 10 });
+
+    return this.formatStructuredContext(entity, currentFacts, historyFacts);
+  }
+
+  /**
+   * Format entity facts into structured context for LLM.
+   */
+  private formatStructuredContext(
+    entity: EntityRecord,
+    current: EntityFact[],
+    history: EntityFact[],
+  ): string {
+    const lines: string[] = [
+      `ПАМЯТЬ О ${entity.name}:`,
+      '━━━━━━━━━━━━━━━━━━━━━━',
+      '',
+    ];
+
+    // Current facts (preferred rank)
+    const preferredFacts = current.filter((f) => f.rank === 'preferred');
+    if (preferredFacts.length > 0) {
+      lines.push('ФАКТЫ (текущие):');
+      for (const fact of preferredFacts) {
+        const since = fact.validFrom
+          ? ` (с ${this.formatDate(fact.validFrom)})`
+          : '';
+        lines.push(`• ${fact.factType}: ${fact.value}${since}`);
+      }
+      lines.push('');
+    }
+
+    // Normal facts
+    const normalFacts = current.filter((f) => f.rank === 'normal');
+    if (normalFacts.length > 0) {
+      if (preferredFacts.length === 0) {
+        lines.push('ФАКТЫ:');
+      }
+      for (const fact of normalFacts) {
+        const since = fact.validFrom
+          ? ` (с ${this.formatDate(fact.validFrom)})`
+          : '';
+        lines.push(`• ${fact.factType}: ${fact.value}${since}`);
+      }
+      lines.push('');
+    }
+
+    // History
+    if (history.length > 0) {
+      lines.push('ИСТОРИЯ:');
+      for (const fact of history) {
+        const from = fact.validFrom ? this.formatDate(fact.validFrom) : '?';
+        const until = fact.validUntil ? this.formatDate(fact.validUntil) : '?';
+        lines.push(`• ${fact.factType}: ${fact.value} (${from} — ${until})`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Format date for display in context.
+   */
+  private formatDate(date: Date | null): string {
+    if (!date) return '?';
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
   }
 }
