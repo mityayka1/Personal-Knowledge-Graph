@@ -42,16 +42,19 @@ function extractToolUses(content: unknown[]): ToolUseBlock[] {
 }
 
 /**
- * MCP server name used for our tools
+ * MCP server name used for our default tools
  */
 const MCP_SERVER_NAME = 'pkg-tools';
 
 /**
  * Clean tool name from MCP format
- * mcp__pkg-tools__tool_name -> tool_name
+ * mcp__server-name__tool_name -> tool_name
  */
 function cleanToolName(mcpName: string): string {
-  return mcpName.replace(new RegExp(`^mcp__${MCP_SERVER_NAME}__`), '');
+  // Match any MCP format: mcp__<server>__<tool>
+  // Server names can contain hyphens and alphanumerics
+  const match = mcpName.match(/^mcp__[\w-]+__(.+)$/);
+  return match ? match[1] : mcpName;
 }
 
 @Injectable()
@@ -160,11 +163,22 @@ export class ClaudeAgentService {
     try {
       const systemPrompt = this.buildAgentSystemPrompt(params.taskType);
 
-      // Create MCP server with requested tool categories
-      const mcpServer = this.toolsRegistry.createMcpServer(toolCategories as ToolCategory[]);
-      const allowedTools = this.toolsRegistry.getToolNames(toolCategories as ToolCategory[]);
+      // Use custom MCP server if provided, otherwise create from toolsRegistry
+      let mcpServerName: string;
+      let mcpServer: unknown;
+      let allowedTools: string[];
 
-      this.logger.log(`MCP server created with tools: ${allowedTools.join(', ')}`);
+      if (params.customMcp) {
+        mcpServerName = params.customMcp.name;
+        mcpServer = params.customMcp.server;
+        allowedTools = params.customMcp.toolNames;
+        this.logger.log(`Using custom MCP server '${mcpServerName}' with tools: ${allowedTools.join(', ')}`);
+      } else {
+        mcpServerName = MCP_SERVER_NAME;
+        mcpServer = this.toolsRegistry.createMcpServer(toolCategories as ToolCategory[]);
+        allowedTools = this.toolsRegistry.getToolNames(toolCategories as ToolCategory[]);
+        this.logger.log(`MCP server created with tools: ${allowedTools.join(', ')}`);
+      }
 
       // Build query options
       // Note: SDK automatically adds StructuredOutput tool when outputFormat is specified
@@ -175,7 +189,7 @@ export class ClaudeAgentService {
         systemPrompt,
         abortController,
         mcpServers: {
-          'pkg-tools': mcpServer,
+          [mcpServerName]: mcpServer,
         },
         allowedTools,
       };

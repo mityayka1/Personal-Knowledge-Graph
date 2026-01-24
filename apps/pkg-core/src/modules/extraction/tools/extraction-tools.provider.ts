@@ -1,5 +1,5 @@
 import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
-import { tool } from '@anthropic-ai/claude-agent-sdk';
+import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import {
   toolSuccess,
@@ -13,6 +13,9 @@ import { EntityService } from '../../entity/entity.service';
 import { EntityRelationService } from '../../entity/entity-relation/entity-relation.service';
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { FactSource, RelationType, RelationSource, FactCategory } from '@pkg/entities';
+
+/** MCP server name for extraction tools */
+export const EXTRACTION_MCP_NAME = 'extraction-tools';
 
 /**
  * Provider for extraction-specific tools used in agent mode fact extraction.
@@ -69,6 +72,26 @@ export class ExtractionToolsProvider {
    */
   hasRequiredServices(): boolean {
     return !!(this.entityFactService && this.entityService);
+  }
+
+  /**
+   * Get tool names for allowedTools configuration.
+   * Returns MCP-formatted names: mcp__extraction-tools__tool_name
+   */
+  getToolNames(): string[] {
+    return this.getTools().map((t) => `mcp__${EXTRACTION_MCP_NAME}__${t.name}`);
+  }
+
+  /**
+   * Create MCP server with extraction tools.
+   */
+  createMcpServer(): ReturnType<typeof createSdkMcpServer> {
+    const tools = this.getTools();
+    return createSdkMcpServer({
+      name: EXTRACTION_MCP_NAME,
+      version: '1.0.0',
+      tools,
+    });
   }
 
   /**
