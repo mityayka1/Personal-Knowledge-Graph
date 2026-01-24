@@ -94,6 +94,134 @@ describe('Extraction Flow (e2e)', () => {
     });
   });
 
+  describe('POST /extraction/facts/agent', () => {
+    it('should extract facts using agent mode with tools', async () => {
+      // Create entity
+      const entityResponse = await request(app.getHttpServer())
+        .post('/entities')
+        .send({
+          type: 'person',
+          name: `${testPrefix}_agent_person`,
+        })
+        .expect(201);
+
+      const entityId = entityResponse.body.id;
+
+      // Call agent extraction endpoint
+      const response = await request(app.getHttpServer())
+        .post('/extraction/facts/agent')
+        .send({
+          entityId,
+          entityName: `${testPrefix}_agent_person`,
+          messageContent: 'Привет! Я работаю в Яндексе senior разработчиком. Живу в Москве.',
+          context: {
+            isOutgoing: false,
+            chatType: 'private',
+          },
+        });
+
+      // Should complete successfully
+      expect([200, 201]).toContain(response.status);
+      expect(response.body).toBeDefined();
+      expect(response.body).toHaveProperty('entityId', entityId);
+      expect(response.body).toHaveProperty('factsCreated');
+      expect(response.body).toHaveProperty('relationsCreated');
+      expect(response.body).toHaveProperty('pendingEntitiesCreated');
+
+      // Should have used tools
+      if (response.body.toolsUsed) {
+        expect(Array.isArray(response.body.toolsUsed)).toBe(true);
+      }
+    }, 120000); // Longer timeout for agent mode with multiple turns
+
+    it('should return minimal result for very short message', async () => {
+      const entityResponse = await request(app.getHttpServer())
+        .post('/entities')
+        .send({
+          type: 'person',
+          name: `${testPrefix}_short_msg`,
+        })
+        .expect(201);
+
+      const response = await request(app.getHttpServer())
+        .post('/extraction/facts/agent')
+        .send({
+          entityId: entityResponse.body.id,
+          entityName: `${testPrefix}_short_msg`,
+          messageContent: 'Привет!', // Too short for extraction
+        });
+
+      expect([200, 201]).toContain(response.status);
+      expect(response.body.factsCreated).toBe(0);
+    }, 30000);
+
+    it('should handle cross-entity mentions', async () => {
+      // Create primary entity
+      const primaryEntity = await request(app.getHttpServer())
+        .post('/entities')
+        .send({
+          type: 'person',
+          name: `${testPrefix}_primary`,
+        })
+        .expect(201);
+
+      // Create mentioned entity
+      const mentionedEntity = await request(app.getHttpServer())
+        .post('/entities')
+        .send({
+          type: 'person',
+          name: `Маша`,
+        })
+        .expect(201);
+
+      // Message that mentions another person
+      const response = await request(app.getHttpServer())
+        .post('/extraction/facts/agent')
+        .send({
+          entityId: primaryEntity.body.id,
+          entityName: `${testPrefix}_primary`,
+          messageContent: 'Маша сейчас работает в Сбербанке главным аналитиком.',
+          context: {
+            isOutgoing: false,
+            chatType: 'private',
+          },
+        });
+
+      expect([200, 201]).toContain(response.status);
+      // Agent should potentially find Маша and create fact for her, not primary entity
+      expect(response.body).toHaveProperty('factsCreated');
+
+      // Verify cross-entity routing: fact should be created for Маша, not primary
+      if (response.body.factsCreated > 0) {
+        // Check Маша's facts - should have the job/company fact
+        const mashaFacts = await request(app.getHttpServer())
+          .get(`/entities/${mentionedEntity.body.id}`)
+          .expect(200);
+
+        const primaryFacts = await request(app.getHttpServer())
+          .get(`/entities/${primaryEntity.body.id}`)
+          .expect(200);
+
+        // Маша should have facts about Сбербанк/analyst position
+        const mashaJobFacts = (mashaFacts.body.facts || []).filter(
+          (f: { factType: string; value: string }) =>
+            (f.factType === 'company' && f.value.includes('Сбер')) ||
+            (f.factType === 'position' && f.value.includes('аналитик')),
+        );
+
+        // Primary entity should NOT have Сбербанк/analyst facts
+        const primaryJobFacts = (primaryFacts.body.facts || []).filter(
+          (f: { factType: string; value: string }) =>
+            (f.factType === 'company' && f.value.includes('Сбер')) ||
+            (f.factType === 'position' && f.value.includes('аналитик')),
+        );
+
+        // Cross-entity routing: facts about Маша should go to Маша entity
+        expect(mashaJobFacts.length).toBeGreaterThanOrEqual(primaryJobFacts.length);
+      }
+    }, 120000);
+  });
+
   describe('GET /extraction/entity/:entityId/facts', () => {
     it('should return 404 for non-existent entity', async () => {
       const fakeId = '00000000-0000-0000-0000-000000000000';

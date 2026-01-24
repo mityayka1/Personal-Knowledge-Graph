@@ -11,6 +11,19 @@ interface ExtractFactsDto {
   interactionId?: string;
 }
 
+interface ExtractFactsAgentDto {
+  entityId: string;
+  entityName: string;
+  messageContent: string;
+  messageId?: string;
+  interactionId?: string;
+  context?: {
+    isOutgoing?: boolean;
+    chatType?: string;
+    senderName?: string;
+  };
+}
+
 @Controller('extraction')
 export class ExtractionController {
   constructor(
@@ -24,6 +37,21 @@ export class ExtractionController {
   @Post('facts')
   async extractFacts(@Body() dto: ExtractFactsDto) {
     return this.extractionService.extractFacts(dto);
+  }
+
+  /**
+   * Agent mode extraction with tools for cross-entity routing.
+   * POST /extraction/facts/agent
+   *
+   * Features:
+   * - Uses MCP tools for lazy context loading
+   * - Creates facts for mentioned entities (not just primary)
+   * - Creates relations between entities
+   * - Creates pending entities for unknown people
+   */
+  @Post('facts/agent')
+  async extractFactsAgent(@Body() dto: ExtractFactsAgentDto) {
+    return this.extractionService.extractFactsAgent(dto);
   }
 
   /**

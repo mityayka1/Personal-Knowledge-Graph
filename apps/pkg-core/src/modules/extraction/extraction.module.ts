@@ -13,6 +13,7 @@ import { EnrichmentProcessor } from './enrichment.processor';
 import { EnrichmentQueueService } from './enrichment-queue.service';
 import { ExtractionController } from './extraction.controller';
 import { ExtractedEventController } from './extracted-event.controller';
+import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
@@ -54,6 +55,7 @@ import { EmbeddingModule } from '../embedding/embedding.module';
     PromiseRecipientService,
     EnrichmentProcessor,
     EnrichmentQueueService,
+    ExtractionToolsProvider,
   ],
   exports: [
     FactExtractionService,
@@ -64,6 +66,7 @@ import { EmbeddingModule } from '../embedding/embedding.module';
     ContextEnrichmentService,
     PromiseRecipientService,
     EnrichmentQueueService,
+    ExtractionToolsProvider,
   ],
 })
 export class ExtractionModule {}

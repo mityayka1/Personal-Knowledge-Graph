@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { PendingEntityResolution, ResolutionStatus, Message, IdentifierType, EntityIdentifier } from '@pkg/entities';
+import { PendingEntityResolution, ResolutionStatus, Message, IdentifierType, EntityIdentifier, PendingResolutionMetadata } from '@pkg/entities';
 import { AUTO_RESOLVE_CONFIDENCE_THRESHOLD } from '@pkg/shared';
 import { EntityIdentifierService } from '../entity/entity-identifier/entity-identifier.service';
 
@@ -48,16 +48,7 @@ export class PendingResolutionService {
     identifierValue: string;
     displayName?: string;
     messageTimestamp?: Date;
-    metadata?: {
-      username?: string;
-      firstName?: string;
-      lastName?: string;
-      phone?: string;
-      isBot?: boolean;
-      isVerified?: boolean;
-      isPremium?: boolean;
-      photoBase64?: string;
-    };
+    metadata?: PendingResolutionMetadata;
   }) {
     let resolution = await this.resolutionRepo.findOne({
       where: {

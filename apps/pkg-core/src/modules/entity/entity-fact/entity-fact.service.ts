@@ -1,7 +1,8 @@
-import { Injectable, Logger, Optional, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
-import { EntityFact, FactSource, FactCategory } from '@pkg/entities';
+import { Repository, IsNull, Not } from 'typeorm';
+import { EntityFact, FactSource, FactCategory, EntityRecord } from '@pkg/entities';
+import { EntityService } from '../entity.service';
 import { CreateFactDto } from '../dto/create-entity.dto';
 import { EmbeddingService } from '../../embedding/embedding.service';
 import {
@@ -9,6 +10,7 @@ import {
   formatEmbeddingForQuery,
 } from '../../../common/utils/similarity.utils';
 import { FactFusionService } from './fact-fusion.service';
+import { EntityRelationService, RelationWithContext } from '../entity-relation/entity-relation.service';
 
 export interface CreateFactResult {
   fact: EntityFact;
@@ -34,6 +36,12 @@ export class EntityFactService {
     @Optional()
     @Inject(forwardRef(() => FactFusionService))
     private factFusionService: FactFusionService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityService))
+    private entityService: EntityService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityRelationService))
+    private entityRelationService: EntityRelationService | null,
   ) {}
 
   /**
@@ -107,6 +115,7 @@ export class EntityFactService {
       valueDate: dto.valueDate,
       valueJson: dto.valueJson,
       source: dto.source || FactSource.MANUAL,
+      confidence: dto.confidence,
       validFrom: new Date(),
     });
 
@@ -295,5 +304,141 @@ export class EntityFactService {
       validUntil: new Date(),
     });
     return result.affected === 1;
+  }
+
+  /**
+   * Find historical facts for an entity (facts with validUntil set).
+   * Returns facts ordered by validUntil DESC (most recently expired first).
+   */
+  async findHistory(
+    entityId: string,
+    options?: { limit?: number },
+  ): Promise<EntityFact[]> {
+    return this.factRepo.find({
+      where: {
+        entityId,
+        validUntil: Not(IsNull()),
+      },
+      order: { validUntil: 'DESC' },
+      take: options?.limit ?? 10,
+    });
+  }
+
+  /**
+   * Get structured context for extraction.
+   * Returns a formatted string with current facts, history, and relations.
+   */
+  async getContextForExtraction(entityId: string): Promise<string> {
+    if (!this.entityService) {
+      this.logger.warn('EntityService not available for context extraction');
+      return '';
+    }
+
+    let entity: EntityRecord;
+    try {
+      entity = await this.entityService.findOne(entityId);
+    } catch {
+      // Entity not found - return empty context
+      return '';
+    }
+
+    const currentFacts = await this.findByEntityWithRanking(entityId);
+    const historyFacts = await this.findHistory(entityId, { limit: 10 });
+
+    // Fetch relations if service is available
+    let relations: RelationWithContext[] = [];
+    if (this.entityRelationService) {
+      try {
+        relations = await this.entityRelationService.findByEntityWithContext(entityId);
+      } catch (error) {
+        this.logger.warn(`Failed to get entity relations: ${error}`);
+      }
+    }
+
+    return this.formatStructuredContext(entity, currentFacts, historyFacts, relations);
+  }
+
+  /**
+   * Format entity facts into structured context for LLM.
+   */
+  private formatStructuredContext(
+    entity: EntityRecord,
+    current: EntityFact[],
+    history: EntityFact[],
+    relations: RelationWithContext[] = [],
+  ): string {
+    const lines: string[] = [
+      `ПАМЯТЬ О ${entity.name}:`,
+      '━━━━━━━━━━━━━━━━━━━━━━',
+      '',
+    ];
+
+    // Current facts (preferred rank)
+    const preferredFacts = current.filter((f) => f.rank === 'preferred');
+    if (preferredFacts.length > 0) {
+      lines.push('ФАКТЫ (текущие):');
+      for (const fact of preferredFacts) {
+        const since = fact.validFrom
+          ? ` (с ${this.formatDate(fact.validFrom)})`
+          : '';
+        lines.push(`• ${fact.factType}: ${fact.value}${since}`);
+      }
+      lines.push('');
+    }
+
+    // Normal facts
+    const normalFacts = current.filter((f) => f.rank === 'normal');
+    if (normalFacts.length > 0) {
+      if (preferredFacts.length === 0) {
+        lines.push('ФАКТЫ:');
+      }
+      for (const fact of normalFacts) {
+        const since = fact.validFrom
+          ? ` (с ${this.formatDate(fact.validFrom)})`
+          : '';
+        lines.push(`• ${fact.factType}: ${fact.value}${since}`);
+      }
+      lines.push('');
+    }
+
+    // Relations
+    if (relations.length > 0) {
+      lines.push('СВЯЗИ:');
+      for (const { otherMembers } of relations) {
+        for (const member of otherMembers) {
+          const entityName = member.entity?.name || member.label || 'Неизвестно';
+          const label = member.label ? ` — "${member.label}"` : '';
+          const entityIdHint = member.entityId
+            ? ` (entityId: ${member.entityId})`
+            : '';
+          lines.push(`• ${member.role}: ${entityName}${entityIdHint}${label}`);
+        }
+      }
+      lines.push('');
+    }
+
+    // History
+    if (history.length > 0) {
+      lines.push('ИСТОРИЯ:');
+      for (const fact of history) {
+        const from = fact.validFrom ? this.formatDate(fact.validFrom) : '?';
+        const until = fact.validUntil ? this.formatDate(fact.validUntil) : '?';
+        lines.push(`• ${fact.factType}: ${fact.value} (${from} — ${until})`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Format date for display in context.
+   */
+  private formatDate(date: Date | null): string {
+    if (!date) return '?';
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
   }
 }

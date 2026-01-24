@@ -74,12 +74,27 @@ export interface OutputFormat {
 }
 
 /**
+ * Custom MCP server configuration for agent mode.
+ * Used when specialized tools are needed instead of general toolRegistry.
+ */
+export interface CustomMcpConfig {
+  /** MCP server name */
+  name: string;
+  /** MCP server instance (from createSdkMcpServer) */
+  server: unknown;
+  /** Tool names for auto-approval */
+  toolNames: string[];
+}
+
+/**
  * Parameters for agent (multi-turn with tools) calls
  */
 export interface AgentParams extends BaseParams {
   mode: 'agent';
   /** Tool categories to enable (default: 'all'). Determines which PKG tools are available. */
   toolCategories?: ToolCategory[];
+  /** Custom MCP server config. When provided, uses this instead of toolRegistry. */
+  customMcp?: CustomMcpConfig;
   hooks?: AgentHooks;
   maxTurns?: number;
   budgetUsd?: number;
