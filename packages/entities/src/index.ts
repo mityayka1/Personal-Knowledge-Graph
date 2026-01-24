@@ -15,6 +15,9 @@ export * from './group-membership.entity';
 export * from './entity-event.entity';
 export * from './extracted-event.entity';
 export * from './entity-relationship-profile.entity';
+export * from './relation-type.enum';
+export * from './entity-relation.entity';
+export * from './entity-relation-member.entity';
 // ClaudeCliRun is deprecated, use ClaudeAgentRun instead
 // Keep the entity for backward compatibility with old migrations
 export { ClaudeCliRun } from './claude-cli-run.entity';
