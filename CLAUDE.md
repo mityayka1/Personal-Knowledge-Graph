@@ -245,6 +245,47 @@ const SCHEMA = {
 LOG_LEVEL=debug pnpm dev
 ```
 
+### ⚠️ КРИТИЧНО: outputFormat обязателен для structured data
+
+**Урок из production-бага:** Если agent mode не передаёт `outputFormat`, то `structured_output` будет `undefined`, и все поля с fallback (`data?.field ?? 0`) вернут значение по умолчанию.
+
+```typescript
+// ❌ БАГ: factsCreated всегда 0, хотя факты создаются
+const { data } = await claudeAgentService.call<MyResponse>({
+  mode: 'agent',
+  prompt,
+  // НЕТ outputFormat → data = undefined
+});
+const result = { factsCreated: data?.factsCreated ?? 0 }; // Всегда 0!
+
+// ✅ ИСПРАВЛЕНИЕ: добавить outputFormat
+const { data } = await claudeAgentService.call<MyResponse>({
+  mode: 'agent',
+  prompt,
+  outputFormat: {
+    type: 'json_schema',
+    schema: {
+      type: 'object',
+      properties: {
+        factsCreated: { type: 'number', description: 'Count of created facts' },
+      },
+      required: ['factsCreated'],
+    },
+    strict: true,
+  },
+});
+// Теперь data.factsCreated содержит реальное значение
+```
+
+**Правило:** Любой agent mode вызов, который должен вернуть структурированные данные, **ОБЯЗАН** передавать `outputFormat` с JSON Schema.
+
+**Как диагностировать:**
+1. E2E тесты с моками проходят ✅
+2. Реальные API вызовы возвращают нули/пустые значения ❌
+3. Причина: mock возвращает `structured_output`, а реальный Claude — нет (без schema)
+
+**См. также:** [docs/TESTING_REAL_DATA.md](docs/TESTING_REAL_DATA.md) — тестирование на реальных данных
+
 ## AI Team
 
 Команда AI-субагентов для проекта PKG. Каждый агент специализируется на своей области.
