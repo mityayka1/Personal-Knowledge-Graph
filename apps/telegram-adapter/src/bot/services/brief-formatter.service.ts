@@ -95,7 +95,7 @@ export class BriefFormatterService {
     if (state.expandedIndex === null) {
       // Collapsed state - show number buttons
       const numberRow: TelegramKeyboardButton[] = [];
-      state.items.forEach((_, index) => {
+      state.items.forEach((_: BriefItem, index: number) => {
         numberRow.push({
           text: `${index + 1}`,
           callback_data: makeBriefCallback(BRIEF_CALLBACKS.EXPAND, state.id, index),
@@ -108,7 +108,7 @@ export class BriefFormatterService {
 
       // Number buttons with current highlighted
       const numberRow: TelegramKeyboardButton[] = [];
-      state.items.forEach((_, index) => {
+      state.items.forEach((_: BriefItem, index: number) => {
         const isExpanded = index === state.expandedIndex;
         numberRow.push({
           text: isExpanded ? `${index + 1} ▼` : `${index + 1}`,
