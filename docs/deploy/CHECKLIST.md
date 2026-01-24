@@ -33,6 +33,15 @@
 
 ---
 
+## Сеть и IP
+
+- [ ] Внешний IP сервера задокументирован: `curl ifconfig.me`
+- [ ] IP статический (не за NAT/динамическим пулом)
+- [ ] Если используется Cloudflare — понимание что egress IP будет CF
+- [ ] Скрипт re-auth доступен: `scripts/remote-telegram-auth.sh`
+
+---
+
 ## Claude CLI (для LLM задач)
 
 - [ ] Claude CLI установлен (`npm install -g @anthropic-ai/claude-code`)
@@ -69,6 +78,14 @@
 - [ ] `nginx -t` проходит без ошибок
 - [ ] WebSocket для n8n работает (UI открывается без ошибок)
 
+### Проверка роутинга (критично!)
+
+- [ ] `/api/v1/health` → PKG Core (200 OK)
+- [ ] `/_nuxt/` → Dashboard (не 502/404)
+- [ ] `/` → Dashboard (200 или 401 Basic Auth)
+- [ ] `/n8n/` → n8n (WebSocket работает)
+- [ ] Нет конфликтов между `/api/` сервисами
+
 ---
 
 ## SSL
@@ -97,9 +114,26 @@
 
 ---
 
+## Управление пользователями
+
+- [ ] bcrypt работает в контейнере: `docker compose exec pkg-core node -e "require('bcrypt')"`
+- [ ] Скрипт создания пользователей доступен: `scripts/create-user.sh`
+- [ ] Начальный admin пользователь создан
+- [ ] Пароль admin сохранён в безопасном месте
+
+---
+
 ## Финальная проверка
 
 - [ ] Dashboard доступен через HTTPS
 - [ ] API отвечает с валидным API ключом
 - [ ] Telegram Adapter подключён и получает сообщения
 - [ ] Очереди обрабатываются (проверить Bull Board)
+
+---
+
+## Ссылки на документацию по проблемам
+
+При возникновении проблем смотри:
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — решение типичных проблем
+- [docs/solutions/deployment-issues/](../solutions/deployment-issues/) — детальный анализ и предотвращение

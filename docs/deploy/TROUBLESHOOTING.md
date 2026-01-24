@@ -69,6 +69,46 @@ docker compose logs telegram-adapter
 
 ---
 
+## Telegram сессия инвалидирована после смены IP
+
+**Симптомы:**
+- В логах: `AUTH_KEY_UNREGISTERED`, `SESSION_REVOKED`
+- Telegram Adapter постоянно переподключается
+- Ошибка "The session has been terminated"
+
+**Причина:** MTProto сессии привязаны к IP. Смена IP (миграция сервера, изменение Cloudflare туннеля) инвалидирует сессию.
+
+**Решение:**
+
+```bash
+# 1. Проверить текущий IP
+curl ifconfig.me
+
+# 2. Если IP изменился — нужна реавторизация
+cd ~/PKG
+
+# 3. Остановить adapter
+docker compose stop telegram-adapter
+
+# 4. Запустить реавторизацию (с локальной машины)
+./scripts/remote-telegram-auth.sh deploy@server
+
+# 5. Запустить adapter
+docker compose start telegram-adapter
+
+# 6. Проверить подключение
+docker logs pkg-telegram-adapter -f
+```
+
+**Предотвращение:**
+- Используйте статический IP
+- Документируйте IP при деплое
+- При смене сети — планируйте реавторизацию
+
+См. детали: [docs/solutions/deployment-issues/prevention-strategies-20260125.md](../solutions/deployment-issues/prevention-strategies-20260125.md)
+
+---
+
 ## Защита Telegram сессии от коллизий
 
 **⚠️ ВАЖНО:** Одновременный запуск одной Telegram сессии с разных машин может привести к бану аккаунта!
@@ -210,3 +250,96 @@ grep CLAUDE_CREDENTIALS_PATH docker/.env
 # Тест из контейнера
 docker compose exec pkg-core claude whoami
 ```
+
+---
+
+## Nginx перехватывает роуты Nuxt Dashboard
+
+**Симптомы:**
+- Dashboard статика (`/_nuxt/`) возвращает 404 или 502
+- API вызовы Dashboard идут на PKG Core вместо Nuxt
+- В браузере broken chunks, белый экран
+
+**Причина:** Конфликт между `location /api/` для PKG Core и внутренними роутами Nuxt.
+
+**Диагностика:**
+
+```bash
+# Проверить куда уходит запрос
+curl -I https://domain.com/_nuxt/
+# Должен вернуть 200 от Dashboard, не 502/404
+
+curl -I https://domain.com/api/v1/health
+# Должен вернуть 200 от PKG Core
+
+# Проверить конфигурацию
+sudo nginx -T | grep -A10 "location /"
+```
+
+**Решение:**
+
+1. Используйте версионированные пути: `/api/v1/` вместо `/api/`
+2. Убедитесь что Dashboard location `/` включает `/_nuxt/`:
+
+```nginx
+# Correct nginx config
+location / {
+    proxy_pass http://pkg_dashboard;
+    # ... headers
+}
+
+location /api/v1/ {
+    proxy_pass http://pkg_core;
+    # ... headers
+}
+```
+
+3. Перезагрузите nginx:
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+См. детали: [docs/solutions/deployment-issues/prevention-strategies-20260125.md](../solutions/deployment-issues/prevention-strategies-20260125.md)
+
+---
+
+## Не удаётся создать пользователя в контейнере (bcrypt)
+
+**Симптомы:**
+- Ошибка `Cannot find module 'bcrypt'`
+- Seed скрипты падают в production контейнере
+- `node-pre-gyp ERR! build error`
+
+**Причина:** bcrypt — нативный модуль, требует компиляции. Production образы могут не содержать build tools.
+
+**Диагностика:**
+
+```bash
+# Проверить работает ли bcrypt
+docker compose exec pkg-core node -e "require('bcrypt')"
+```
+
+**Решение — используйте скрипт с хоста:**
+
+```bash
+# Создать/обновить пользователя (запускать с ХОСТА, не из контейнера)
+./scripts/create-user.sh admin secure-password
+
+# Или вручную с pre-hashed паролем:
+# 1. Сгенерировать хэш локально
+HASH=$(node -e "require('bcrypt').hash('password', 12).then(console.log)")
+
+# 2. Вставить в БД напрямую
+docker compose exec postgres psql -U pkg -d pkg -c "
+  INSERT INTO users (id, username, password_hash, role, status)
+  VALUES (gen_random_uuid(), 'admin', '\$HASH', 'admin', 'active')
+  ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash;
+"
+```
+
+**Предотвращение:**
+- Создавайте admin пользователя ДО деплоя
+- Используйте management скрипты с хоста
+- Проверяйте bcrypt в checklist
+
+См. детали: [docs/solutions/deployment-issues/prevention-strategies-20260125.md](../solutions/deployment-issues/prevention-strategies-20260125.md)
