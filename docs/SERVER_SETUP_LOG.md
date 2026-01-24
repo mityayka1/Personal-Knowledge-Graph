@@ -4,14 +4,24 @@
 
 | Parameter | Value |
 |-----------|-------|
-| **IP** | 150.241.230.206 |
+| **IP** | 82.22.23.59 |
 | **Hostname** | assistant.mityayka.ru |
 | **User** | mityayka |
-| **SSH** | `ssh mityayka@150.241.230.206` |
+| **SSH** | `ssh mityayka@82.22.23.59` |
 | **sudo** | Yes (NOPASSWD) |
 | **OS** | Ubuntu 24.04.3 LTS |
 | **RAM** | 4GB |
 | **Disk** | 96GB (93GB free) |
+| **DNS** | Direct A-record (no proxy) |
+
+### Network History
+
+| Date | Change |
+|------|--------|
+| 2025-01 | Cloudflare proxy tunnel (IP hidden behind CF) |
+| 2025-01-25 | **Direct A-record** → `82.22.23.59` (no Cloudflare proxy) |
+
+> **Note:** При прямой A-записи IP сервера виден публично. SSL терминируется на Nginx (Let's Encrypt), не на Cloudflare.
 
 ---
 
@@ -112,7 +122,7 @@ pkg-redis              healthy
 ## Remaining Tasks
 
 1. **Claude CLI Authorization**
-   - SSH with port forwarding: `ssh -L 8080:localhost:8080 mityayka@150.241.230.206`
+   - SSH with port forwarding: `ssh -L 8080:localhost:8080 mityayka@82.22.23.59`
    - Run: `claude login`
    - Open http://localhost:8080/... in local browser
    - Credentials will be saved to ~/.claude

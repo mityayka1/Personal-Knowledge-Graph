@@ -9,6 +9,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pkg-redis
+    restart: unless-stopped
     # No ports exposed - only accessible within Docker network
     volumes:
       - redis-data:/data
@@ -24,6 +25,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.pkg-core
     container_name: pkg-core
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
@@ -76,6 +78,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.telegram-adapter
     container_name: pkg-telegram-adapter
+    restart: unless-stopped
     ports:
       - "3001:3001"
     environment:
@@ -103,6 +106,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.bull-board
     container_name: pkg-bull-board
+    restart: unless-stopped
     ports:
       - "3004:3004"
     environment:
@@ -125,6 +129,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.dashboard
     container_name: pkg-dashboard
+    restart: unless-stopped
     ports:
       - "3003:3003"
     environment:
@@ -146,6 +151,7 @@ services:
   n8n:
     image: n8nio/n8n:latest
     container_name: pkg-n8n
+    restart: unless-stopped
     ports:
       - "5678:5678"
     environment:
