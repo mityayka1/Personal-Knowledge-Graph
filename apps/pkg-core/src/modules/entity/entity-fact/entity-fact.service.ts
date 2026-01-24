@@ -115,6 +115,7 @@ export class EntityFactService {
       valueDate: dto.valueDate,
       valueJson: dto.valueJson,
       source: dto.source || FactSource.MANUAL,
+      confidence: dto.confidence,
       validFrom: new Date(),
     });
 
@@ -333,8 +334,11 @@ export class EntityFactService {
       return '';
     }
 
-    const entity = await this.entityService.findOne(entityId);
-    if (!entity) {
+    let entity: EntityRecord;
+    try {
+      entity = await this.entityService.findOne(entityId);
+    } catch {
+      // Entity not found - return empty context
       return '';
     }
 
@@ -400,12 +404,12 @@ export class EntityFactService {
     // Relations
     if (relations.length > 0) {
       lines.push('СВЯЗИ:');
-      for (const { relation, otherMembers, currentRole } of relations) {
+      for (const { otherMembers } of relations) {
         for (const member of otherMembers) {
           const entityName = member.entity?.name || member.label || 'Неизвестно';
           const label = member.label ? ` — "${member.label}"` : '';
           const entityIdHint = member.entityId
-            ? ` (entityId: ${member.entityId.slice(0, 8)}...)`
+            ? ` (entityId: ${member.entityId})`
             : '';
           lines.push(`• ${member.role}: ${entityName}${entityIdHint}${label}`);
         }

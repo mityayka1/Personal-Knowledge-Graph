@@ -107,7 +107,8 @@ export class EntityRelationService {
       return [];
     }
 
-    const relationIds = memberRecords.map((m) => m.relationId);
+    // Use Set to avoid duplicate IDs (entity may have multiple roles in same relation)
+    const relationIds = [...new Set(memberRecords.map((m) => m.relationId))];
 
     // Fetch full relations with members
     return this.relationRepo
@@ -282,11 +283,11 @@ export class EntityRelationService {
 
     const lines: string[] = ['СВЯЗИ:'];
 
-    for (const { relation, otherMembers, currentRole } of relations) {
+    for (const { otherMembers } of relations) {
       for (const member of otherMembers) {
         const entityName = member.entity?.name || member.label || 'Неизвестно';
         const label = member.label ? ` — "${member.label}"` : '';
-        const entityIdHint = member.entityId ? ` (entityId: ${member.entityId.slice(0, 8)}...)` : '';
+        const entityIdHint = member.entityId ? ` (entityId: ${member.entityId})` : '';
 
         lines.push(`• ${member.role}: ${entityName}${entityIdHint}${label}`);
       }

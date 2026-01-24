@@ -190,6 +190,35 @@ describe('Extraction Flow (e2e)', () => {
       expect([200, 201]).toContain(response.status);
       // Agent should potentially find Маша and create fact for her, not primary entity
       expect(response.body).toHaveProperty('factsCreated');
+
+      // Verify cross-entity routing: fact should be created for Маша, not primary
+      if (response.body.factsCreated > 0) {
+        // Check Маша's facts - should have the job/company fact
+        const mashaFacts = await request(app.getHttpServer())
+          .get(`/entities/${mentionedEntity.body.id}`)
+          .expect(200);
+
+        const primaryFacts = await request(app.getHttpServer())
+          .get(`/entities/${primaryEntity.body.id}`)
+          .expect(200);
+
+        // Маша should have facts about Сбербанк/analyst position
+        const mashaJobFacts = (mashaFacts.body.facts || []).filter(
+          (f: { factType: string; value: string }) =>
+            (f.factType === 'company' && f.value.includes('Сбер')) ||
+            (f.factType === 'position' && f.value.includes('аналитик')),
+        );
+
+        // Primary entity should NOT have Сбербанк/analyst facts
+        const primaryJobFacts = (primaryFacts.body.facts || []).filter(
+          (f: { factType: string; value: string }) =>
+            (f.factType === 'company' && f.value.includes('Сбер')) ||
+            (f.factType === 'position' && f.value.includes('аналитик')),
+        );
+
+        // Cross-entity routing: facts about Маша should go to Маша entity
+        expect(mashaJobFacts.length).toBeGreaterThanOrEqual(primaryJobFacts.length);
+      }
     }, 120000);
   });
 

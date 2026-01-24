@@ -54,27 +54,37 @@ describe('ExtractionToolsProvider', () => {
   });
 
   describe('getTools', () => {
+    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456' };
+
     it('should return array of 5 tools', () => {
-      const tools = provider.getTools();
+      const tools = provider.getTools(testContext);
 
       expect(Array.isArray(tools)).toBe(true);
       expect(tools.length).toBe(5);
     });
 
-    it('should cache tools on subsequent calls', () => {
-      const tools1 = provider.getTools();
-      const tools2 = provider.getTools();
+    it('should create new tools for each context (no singleton caching)', () => {
+      const tools1 = provider.getTools(testContext);
+      const tools2 = provider.getTools(testContext);
 
-      expect(tools1).toBe(tools2); // Same reference (cached)
+      // Tools are created fresh per context to avoid race conditions
+      expect(tools1).not.toBe(tools2);
     });
 
     it('should return tools with name property', () => {
-      const tools = provider.getTools();
+      const tools = provider.getTools(testContext);
 
       for (const tool of tools) {
         expect(tool.name).toBeDefined();
         expect(typeof tool.name).toBe('string');
       }
+    });
+
+    it('should work with empty context', () => {
+      const tools = provider.getTools();
+
+      expect(Array.isArray(tools)).toBe(true);
+      expect(tools.length).toBe(5);
     });
   });
 
@@ -91,7 +101,7 @@ describe('ExtractionToolsProvider', () => {
 
   describe('createMcpServer', () => {
     it('should create MCP server with tools', () => {
-      const server = provider.createMcpServer();
+      const server = provider.createMcpServer({ messageId: 'msg-123', interactionId: 'interaction-456' });
 
       expect(server).toBeDefined();
     });
@@ -103,23 +113,9 @@ describe('ExtractionToolsProvider', () => {
     });
   });
 
-  describe('setMessageContext', () => {
-    it('should set message context without throwing', () => {
-      expect(() => {
-        provider.setMessageContext('msg-123', 'interaction-456');
-      }).not.toThrow();
-    });
-
-    it('should accept null values', () => {
-      expect(() => {
-        provider.setMessageContext(null, null);
-      }).not.toThrow();
-    });
-  });
-
   describe('tool structure', () => {
     it('each tool should have description defined', () => {
-      const tools = provider.getTools();
+      const tools = provider.getTools({ messageId: 'msg-123', interactionId: 'interaction-456' });
 
       for (const tool of tools) {
         expect(tool.description).toBeDefined();

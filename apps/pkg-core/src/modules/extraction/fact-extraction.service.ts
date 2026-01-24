@@ -414,9 +414,11 @@ ${memorySection}
       const result = await this.extractFacts(params);
       return {
         entityId,
-        factsCreated: result.facts.length,
+        // Note: result.facts are PENDING facts, not committed to DB in oneshot mode
+        // Return 0 to avoid misleading counts - facts are pending for review
+        factsCreated: 0,
         relationsCreated: 0,
-        pendingEntitiesCreated: 0,
+        pendingEntitiesCreated: result.facts.length, // These are pending, not created
         tokensUsed: result.tokensUsed,
       };
     }
@@ -445,11 +447,14 @@ ${memorySection}
       }
     }
 
-    // Set message context for tools
-    this.extractionToolsProvider.setMessageContext(messageId ?? null, interactionId);
+    // Create extraction context (passed to tools to avoid singleton state issues)
+    const extractionContext = {
+      messageId: messageId ?? null,
+      interactionId: interactionId ?? null,
+    };
 
-    // Create custom MCP config
-    const mcpServer = this.extractionToolsProvider.createMcpServer();
+    // Create custom MCP config with context
+    const mcpServer = this.extractionToolsProvider.createMcpServer(extractionContext);
     const toolNames = this.extractionToolsProvider.getToolNames();
 
     // Build agent prompt
@@ -503,9 +508,11 @@ ${memorySection}
       const result = await this.extractFacts(params);
       return {
         entityId,
-        factsCreated: result.facts.length,
+        // Note: result.facts are PENDING facts, not committed to DB in oneshot mode
+        // Return 0 to avoid misleading counts - facts are pending for review
+        factsCreated: 0,
         relationsCreated: 0,
-        pendingEntitiesCreated: 0,
+        pendingEntitiesCreated: result.facts.length, // These are pending, not created
         tokensUsed: result.tokensUsed,
       };
     }

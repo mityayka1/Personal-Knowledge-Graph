@@ -25,14 +25,18 @@ export const EXTRACTION_MCP_NAME = 'extraction-tools';
  * - Supports lazy loading of entity context
  * - Creates pending entities for unknown people
  */
+/**
+ * Context for extraction tools - passed through createMcpServer() to avoid singleton race condition.
+ * Each request gets its own context instance.
+ */
+export interface ExtractionContext {
+  messageId: string | null;
+  interactionId: string | null;
+}
+
 @Injectable()
 export class ExtractionToolsProvider {
   private readonly logger = new Logger(ExtractionToolsProvider.name);
-  private cachedTools: ToolDefinition[] | null = null;
-
-  /** Current message ID for source tracking - set before tool execution */
-  private currentMessageId: string | null = null;
-  private currentInteractionId: string | null = null;
 
   constructor(
     @Inject(forwardRef(() => EntityFactService))
@@ -48,23 +52,16 @@ export class ExtractionToolsProvider {
   ) {}
 
   /**
-   * Set message context for tool execution.
-   * Call before running extraction agent.
+   * Get extraction tools for a specific context.
+   * Tools are created fresh per context to avoid singleton state issues.
+   *
+   * @param context - Message/interaction context for source tracking
    */
-  setMessageContext(messageId: string | null, interactionId?: string | null): void {
-    this.currentMessageId = messageId;
-    this.currentInteractionId = interactionId ?? null;
-  }
-
-  /**
-   * Get extraction tools (cached).
-   */
-  getTools(): ToolDefinition[] {
-    if (!this.cachedTools) {
-      this.cachedTools = this.createTools();
-      this.logger.debug(`Created ${this.cachedTools.length} extraction tools`);
-    }
-    return this.cachedTools;
+  getTools(context?: ExtractionContext): ToolDefinition[] {
+    // Create tools fresh with context to avoid singleton race condition
+    const tools = this.createTools(context ?? { messageId: null, interactionId: null });
+    this.logger.debug(`Created ${tools.length} extraction tools`);
+    return tools;
   }
 
   /**
@@ -79,14 +76,17 @@ export class ExtractionToolsProvider {
    * Returns MCP-formatted names: mcp__extraction-tools__tool_name
    */
   getToolNames(): string[] {
+    // Use empty context just to get tool names (context not needed for names)
     return this.getTools().map((t) => `mcp__${EXTRACTION_MCP_NAME}__${t.name}`);
   }
 
   /**
-   * Create MCP server with extraction tools.
+   * Create MCP server with extraction tools for a specific context.
+   *
+   * @param context - Message/interaction context for source tracking
    */
-  createMcpServer(): ReturnType<typeof createSdkMcpServer> {
-    const tools = this.getTools();
+  createMcpServer(context: ExtractionContext): ReturnType<typeof createSdkMcpServer> {
+    const tools = this.getTools(context);
     return createSdkMcpServer({
       name: EXTRACTION_MCP_NAME,
       version: '1.0.0',
@@ -95,9 +95,9 @@ export class ExtractionToolsProvider {
   }
 
   /**
-   * Create tool definitions.
+   * Create tool definitions with context.
    */
-  private createTools(): ToolDefinition[] {
+  private createTools(context: ExtractionContext): ToolDefinition[] {
     return [
       // Read tools
       this.createGetEntityContextTool(),
@@ -106,7 +106,7 @@ export class ExtractionToolsProvider {
       // Write tools
       this.createFactTool(),
       this.createRelationTool(),
-      this.createPendingEntityTool(),
+      this.createPendingEntityTool(context),
     ] as ToolDefinition[];
   }
 
@@ -237,6 +237,7 @@ export class ExtractionToolsProvider {
               value: args.value.trim(),
               source: FactSource.EXTRACTED,
               category: args.category ? categoryMap[args.category] : undefined,
+              confidence: args.confidence,
             },
             {
               messageContext: args.sourceQuote,
@@ -244,7 +245,7 @@ export class ExtractionToolsProvider {
           );
 
           this.logger.log(
-            `Created fact ${args.factType}="${args.value}" for entity ${args.entityId.slice(0, 8)}... (action: ${result.action})`,
+            `Created fact ${args.factType}="${args.value}" for entity ${args.entityId} (action: ${result.action})`,
           );
 
           return toolSuccess({
@@ -332,7 +333,7 @@ export class ExtractionToolsProvider {
           });
 
           this.logger.log(
-            `Created relation ${args.relationType} with ${args.members.length} members (id: ${relation.id.slice(0, 8)}...)`,
+            `Created relation ${args.relationType} with ${args.members.length} members (id: ${relation.id})`,
           );
 
           return toolSuccess({
@@ -349,8 +350,10 @@ export class ExtractionToolsProvider {
 
   /**
    * create_pending_entity - Create a pending entity for mentioned unknown person.
+   *
+   * @param context - Message/interaction context for source tracking (avoids singleton state)
    */
-  private createPendingEntityTool() {
+  private createPendingEntityTool(context: ExtractionContext) {
     return tool(
       'create_pending_entity',
       `Создать ожидающую сущность для упомянутого человека, которого нет в системе.
@@ -371,22 +374,27 @@ Pending entity будет ожидать ручного связывания с 
         }
 
         try {
+          // Create unique identifierValue to avoid collision for same names
+          // Format: name::messageId or name::timestamp if no messageId
+          const uniqueSuffix = context.messageId || Date.now().toString();
+          const identifierValue = `${args.suggestedName}::${uniqueSuffix}`;
+
           // Create pending resolution with context from mention
           // Using 'as any' because metadata schema doesn't include extraction-specific fields
           const pending = await this.pendingResolutionService.findOrCreate({
             identifierType: 'mentioned_name',
-            identifierValue: args.suggestedName,
+            identifierValue,
             displayName: args.suggestedName,
             metadata: {
               mentionedAs: args.mentionedAs,
               relatedToEntityId: args.relatedToEntityId,
-              sourceMessageId: this.currentMessageId,
-              sourceInteractionId: this.currentInteractionId,
+              sourceMessageId: context.messageId,
+              sourceInteractionId: context.interactionId,
             } as any,
           });
 
           this.logger.log(
-            `Created pending entity for "${args.suggestedName}" (id: ${pending.id.slice(0, 8)}...)`,
+            `Created pending entity for "${args.suggestedName}" (id: ${pending.id})`,
           );
 
           return toolSuccess({
