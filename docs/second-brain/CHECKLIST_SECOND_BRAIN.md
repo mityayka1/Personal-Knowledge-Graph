@@ -1,6 +1,6 @@
 # PKG Second Brain — Implementation Checklist
 
-> Краткий чеклист для отслеживания прогресса. Детали в [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md)
+> Краткий чеклист для отслеживания прогресса. Детали в [INDEX.md](./INDEX.md)
 
 ## Pre-requisites
 
@@ -134,7 +134,7 @@
 
 ## Phase C+: UX Improvements ✅ COMPLETED
 
-> См. [ROADMAP_SECOND_BRAIN.md](./ROADMAP_SECOND_BRAIN.md#улучшения-phase-c-post-mvp)
+> См. [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md#улучшения-phase-c-post-mvp)
 
 #### Issue #61: Carousel UX ✅ (PR #63)
 - [x] Carousel state в Redis (CarouselStateService)
