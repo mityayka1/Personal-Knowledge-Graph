@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
 import { EntityFact, FactSource, FactCategory, EntityRecord } from '@pkg/entities';
@@ -10,6 +10,7 @@ import {
   formatEmbeddingForQuery,
 } from '../../../common/utils/similarity.utils';
 import { FactFusionService } from './fact-fusion.service';
+import { EntityRelationService, RelationWithContext } from '../entity-relation/entity-relation.service';
 
 export interface CreateFactResult {
   fact: EntityFact;
@@ -38,6 +39,9 @@ export class EntityFactService {
     @Optional()
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityRelationService))
+    private entityRelationService: EntityRelationService | null,
   ) {}
 
   /**
@@ -321,7 +325,7 @@ export class EntityFactService {
 
   /**
    * Get structured context for extraction.
-   * Returns a formatted string with current facts and history.
+   * Returns a formatted string with current facts, history, and relations.
    */
   async getContextForExtraction(entityId: string): Promise<string> {
     if (!this.entityService) {
@@ -337,7 +341,17 @@ export class EntityFactService {
     const currentFacts = await this.findByEntityWithRanking(entityId);
     const historyFacts = await this.findHistory(entityId, { limit: 10 });
 
-    return this.formatStructuredContext(entity, currentFacts, historyFacts);
+    // Fetch relations if service is available
+    let relations: RelationWithContext[] = [];
+    if (this.entityRelationService) {
+      try {
+        relations = await this.entityRelationService.findByEntityWithContext(entityId);
+      } catch (error) {
+        this.logger.warn(`Failed to get entity relations: ${error}`);
+      }
+    }
+
+    return this.formatStructuredContext(entity, currentFacts, historyFacts, relations);
   }
 
   /**
@@ -347,6 +361,7 @@ export class EntityFactService {
     entity: EntityRecord,
     current: EntityFact[],
     history: EntityFact[],
+    relations: RelationWithContext[] = [],
   ): string {
     const lines: string[] = [
       `ПАМЯТЬ О ${entity.name}:`,
@@ -378,6 +393,22 @@ export class EntityFactService {
           ? ` (с ${this.formatDate(fact.validFrom)})`
           : '';
         lines.push(`• ${fact.factType}: ${fact.value}${since}`);
+      }
+      lines.push('');
+    }
+
+    // Relations
+    if (relations.length > 0) {
+      lines.push('СВЯЗИ:');
+      for (const { relation, otherMembers, currentRole } of relations) {
+        for (const member of otherMembers) {
+          const entityName = member.entity?.name || member.label || 'Неизвестно';
+          const label = member.label ? ` — "${member.label}"` : '';
+          const entityIdHint = member.entityId
+            ? ` (entityId: ${member.entityId.slice(0, 8)}...)`
+            : '';
+          lines.push(`• ${member.role}: ${entityName}${entityIdHint}${label}`);
+        }
       }
       lines.push('');
     }
