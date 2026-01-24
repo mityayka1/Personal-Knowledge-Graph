@@ -39,6 +39,7 @@ Personal Knowledge Graph — система для интеллектуальн�
 | [docs/USER_STORIES.md](docs/USER_STORIES.md) | User Stories для MVP и Post-MVP |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Глоссарий терминов |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Руководство по деплою на сервер |
+| [docs/TESTING_REAL_DATA.md](docs/TESTING_REAL_DATA.md) | **Тестирование на реальных данных** — обязательно перед релизом |
 
 ## Схема БД (TypeORM Entities)
 

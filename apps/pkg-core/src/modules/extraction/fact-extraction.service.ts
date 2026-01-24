@@ -59,6 +59,30 @@ interface FactsExtractionResponse {
   facts: ExtractedFact[];
 }
 
+// JSON Schema for agent extraction response
+const AGENT_EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    factsCreated: {
+      type: 'number',
+      description: 'Number of facts created via create_fact tool',
+    },
+    relationsCreated: {
+      type: 'number',
+      description: 'Number of relations created via create_relation tool',
+    },
+    pendingEntitiesCreated: {
+      type: 'number',
+      description: 'Number of pending entities created via create_pending_entity tool',
+    },
+    summary: {
+      type: 'string',
+      description: 'Brief summary of what was extracted',
+    },
+  },
+  required: ['factsCreated', 'relationsCreated', 'pendingEntitiesCreated'],
+};
+
 @Injectable()
 export class FactExtractionService {
   private readonly logger = new Logger(FactExtractionService.name);
@@ -446,6 +470,11 @@ ${memorySection}
           server: mcpServer,
           toolNames,
         },
+        outputFormat: {
+          type: 'json_schema',
+          schema: AGENT_EXTRACTION_SCHEMA,
+          strict: true,
+        },
       });
 
       const result: AgentExtractionResult = {
@@ -550,7 +579,15 @@ ${contextDesc}
 ${messageContent}
 ═══════════════════════════════════════════════════════════
 
-Извлеки все факты и связи. После завершения верни итоговый отчёт.`;
+Извлеки все факты и связи. Используй инструменты для создания:
+- create_fact — для каждого факта
+- create_relation — для связей между сущностями
+- create_pending_entity — для новых упомянутых людей
+
+ВАЖНО: Посчитай сколько раз ты успешно вызвал каждый инструмент и верни:
+- factsCreated: количество успешных вызовов create_fact
+- relationsCreated: количество успешных вызовов create_relation
+- pendingEntitiesCreated: количество успешных вызовов create_pending_entity`;
   }
 }
 
