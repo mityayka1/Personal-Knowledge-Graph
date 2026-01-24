@@ -294,7 +294,8 @@ ${decisionsList || '  (нет)'}`);
           .filter(d => d.importance === 'high')
           .map(d => `  - [${d.importance}] ${d.description}`)
           .join('\n');
-        return `### ${s.createdAt.toISOString().split('T')[0]}
+        const dateStr = s.createdAt ? s.createdAt.toISOString().split('T')[0] : 'unknown';
+        return `### ${dateStr}
 Summary: ${s.summaryText}
 Key Points: ${(s.keyPoints || []).join(', ')}
 ${decisions ? `Decisions:\n${decisions}` : ''}`;
@@ -310,7 +311,7 @@ ${summariesSection}`);
         .slice(0, 20)
         .reverse()
         .map(m => {
-          const timestamp = m.timestamp.toISOString().split('T')[0];
+          const timestamp = m.timestamp ? m.timestamp.toISOString().split('T')[0] : 'unknown';
           const sender = m.isOutgoing ? 'Я' : entity.name;
           return `[${timestamp}] ${sender}: ${(m.content || '(медиа)').slice(0, 200)}`;
         })
@@ -326,7 +327,7 @@ ${messagesSection}`);
         .slice(0, 15)
         .reverse()
         .map(s => {
-          const timestamp = s.createdAt.toISOString().split('T')[0];
+          const timestamp = s.createdAt ? s.createdAt.toISOString().split('T')[0] : 'unknown';
           const speaker = s.speakerLabel === 'self' ? 'Я' : entity.name;
           return `[${timestamp}] ${speaker}: ${(s.content || '').slice(0, 200)}`;
         })
