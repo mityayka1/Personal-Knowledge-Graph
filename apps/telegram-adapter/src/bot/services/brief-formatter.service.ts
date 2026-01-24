@@ -30,7 +30,7 @@ export class BriefFormatterService {
   formatMessage(state: BriefState): string {
     const parts: string[] = ['<b>🌅 Доброе утро! Вот твой день:</b>', ''];
 
-    state.items.forEach((item, index) => {
+    state.items.forEach((item: BriefItem, index: number) => {
       const num = index + 1;
       const emoji = this.getItemEmoji(item.type);
       const isExpanded = state.expandedIndex === index;
