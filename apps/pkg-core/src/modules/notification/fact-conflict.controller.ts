@@ -8,6 +8,8 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+import { IsInt, IsOptional, IsString, Min, Max, MinLength } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
 import {
   FactConflictService,
   FactConflictResolution,
@@ -15,6 +17,28 @@ import {
 } from './fact-conflict.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { EntityFact } from '@pkg/entities';
+
+/**
+ * Query DTO for listing conflicts
+ */
+class ListConflictsQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 50;
+}
+
+/**
+ * Param DTO for conflict resolution
+ */
+class ResolveConflictParamsDto {
+  @IsString()
+  @MinLength(1)
+  @Transform(({ value }) => value?.trim())
+  shortId: string;
+}
 
 /**
  * Controller for fact conflict resolution and management.
@@ -39,13 +63,13 @@ export class FactConflictController {
    * Returns facts with needsReview=true, ordered by creation date.
    */
   @Get()
-  async listConflicts(@Query('limit') limit?: string): Promise<EntityFact[]> {
-    const parsedLimit = limit ? parseInt(limit, 10) : 50;
+  async listConflicts(@Query() query: ListConflictsQueryDto): Promise<EntityFact[]> {
+    const limit = query.limit ?? 50;
 
-    this.logger.log(`Fetching facts with pending review (limit: ${parsedLimit})`);
+    this.logger.log(`Fetching facts with pending review (limit: ${limit})`);
 
     return this.entityFactService.findPendingReview({
-      limit: parsedLimit,
+      limit,
     });
   }
 
@@ -53,24 +77,30 @@ export class FactConflictController {
    * Resolve conflict: use new fact
    */
   @Post(':shortId/new')
-  async resolveNew(@Param('shortId') shortId: string): Promise<FactConflictResolutionResult> {
-    return this.resolveConflict(shortId, 'new');
+  async resolveNew(
+    @Param() params: ResolveConflictParamsDto,
+  ): Promise<FactConflictResolutionResult> {
+    return this.resolveConflict(params.shortId, 'new');
   }
 
   /**
    * Resolve conflict: keep old fact
    */
   @Post(':shortId/old')
-  async resolveOld(@Param('shortId') shortId: string): Promise<FactConflictResolutionResult> {
-    return this.resolveConflict(shortId, 'old');
+  async resolveOld(
+    @Param() params: ResolveConflictParamsDto,
+  ): Promise<FactConflictResolutionResult> {
+    return this.resolveConflict(params.shortId, 'old');
   }
 
   /**
    * Resolve conflict: keep both facts
    */
   @Post(':shortId/both')
-  async resolveBoth(@Param('shortId') shortId: string): Promise<FactConflictResolutionResult> {
-    return this.resolveConflict(shortId, 'both');
+  async resolveBoth(
+    @Param() params: ResolveConflictParamsDto,
+  ): Promise<FactConflictResolutionResult> {
+    return this.resolveConflict(params.shortId, 'both');
   }
 
   /**
@@ -80,10 +110,7 @@ export class FactConflictController {
     shortId: string,
     resolution: FactConflictResolution,
   ): Promise<FactConflictResolutionResult> {
-    if (!shortId) {
-      throw new BadRequestException('shortId is required');
-    }
-
+    // Validation is now handled by DTO
     this.logger.log(`Resolving fact conflict ${shortId} with resolution: ${resolution}`);
 
     const result = await this.factConflictService.resolveConflict(shortId, resolution);

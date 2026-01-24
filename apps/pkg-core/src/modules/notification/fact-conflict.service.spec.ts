@@ -99,17 +99,17 @@ describe('FactConflictService', () => {
       expect(mockDigestActionStore.store).toHaveBeenCalledTimes(1);
       expect(mockTelegramNotifier.sendWithButtons).toHaveBeenCalledTimes(1);
 
-      // Check buttons format
+      // Check buttons format (using standardized short prefixes)
       const [message, buttons, parseMode] = (mockTelegramNotifier.sendWithButtons as jest.Mock).mock.calls[0];
       expect(parseMode).toBe('HTML');
       expect(buttons).toHaveLength(1);
       expect(buttons[0]).toHaveLength(3);
       expect(buttons[0][0].text).toBe('✅ Новый');
-      expect(buttons[0][0].callback_data).toBe('fact_new:d_abc123def456');
+      expect(buttons[0][0].callback_data).toBe('f_n:d_abc123def456');
       expect(buttons[0][1].text).toBe('❌ Старый');
-      expect(buttons[0][1].callback_data).toBe('fact_old:d_abc123def456');
+      expect(buttons[0][1].callback_data).toBe('f_o:d_abc123def456');
       expect(buttons[0][2].text).toBe('🔀 Оба');
-      expect(buttons[0][2].callback_data).toBe('fact_both:d_abc123def456');
+      expect(buttons[0][2].callback_data).toBe('f_b:d_abc123def456');
     });
 
     it('should format message with entity name and fact values', async () => {

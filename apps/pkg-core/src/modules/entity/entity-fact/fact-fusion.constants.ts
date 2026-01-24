@@ -26,15 +26,46 @@ export const SOURCE_PRIORITY: Record<FactSource, number> = {
   [FactSource.IMPORTED]: 50,
 };
 
+// ============================================
+// Confidence Constants
+// ============================================
+
+/** Confidence increment when confirming an existing fact */
+export const CONFIDENCE_INCREMENT_CONFIRM = 0.05;
+
+/** Confidence increment when enriching an existing fact */
+export const CONFIDENCE_INCREMENT_ENRICH = 0.1;
+
+/** Default confidence when none is present */
+export const DEFAULT_CONFIDENCE = 0.85;
+
+/** Fallback confidence for unknown/error cases */
+export const FALLBACK_CONFIDENCE = 0.7;
+
+// ============================================
+// Callback Prefixes (for Telegram buttons)
+// ============================================
+
+/** Callback data prefixes for fact conflict resolution */
+export const FACT_CALLBACK_PREFIX = {
+  /** Use new fact, deprecate old */
+  NEW: 'f_n:',
+  /** Keep old fact, reject new */
+  OLD: 'f_o:',
+  /** Keep both facts (COEXIST) */
+  BOTH: 'f_b:',
+} as const;
+
 /**
  * JSON Schema for LLM fusion decision
+ * Note: enum values are derived from FusionAction to prevent drift
  */
 export const FUSION_DECISION_SCHEMA = {
   type: 'object',
   properties: {
     action: {
       type: 'string',
-      enum: ['confirm', 'enrich', 'supersede', 'coexist', 'conflict'],
+      enum: Object.values(FusionAction),
       description: 'Decision type for fact fusion',
     },
     mergedValue: {
@@ -132,3 +163,13 @@ ${messageContext ? `- Контекст сообщения: "${messageContext.sli
  * Threshold for automatic fusion vs conflict
  */
 export const FUSION_CONFIDENCE_THRESHOLD = 0.7;
+
+// ============================================
+// Decision Caching (LRU)
+// ============================================
+
+/** Max cached fusion decisions */
+export const FUSION_CACHE_MAX_SIZE = 100;
+
+/** Cache TTL in milliseconds (5 minutes) */
+export const FUSION_CACHE_TTL_MS = 5 * 60 * 1000;

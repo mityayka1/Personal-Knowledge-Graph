@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
-import { EntityFact, FactSource } from '@pkg/entities';
+import { EntityFact, FactSource, FactCategory } from '@pkg/entities';
 import { CreateFactDto } from '../dto/create-entity.dto';
 import { EmbeddingService } from '../../embedding/embedding.service';
 import {
@@ -102,7 +102,7 @@ export class EntityFactService {
     const fact = this.factRepo.create({
       entityId,
       factType: dto.type,
-      category: dto.category,
+      category: dto.category || FactCategory.PROFESSIONAL,
       value: dto.value,
       valueDate: dto.valueDate,
       valueJson: dto.valueJson,

@@ -5,6 +5,7 @@ import { EntityFact, EntityRecord, FactSource } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CreateFactDto } from '../entity/dto/create-entity.dto';
+import { FACT_CALLBACK_PREFIX } from '../entity/entity-fact/fact-fusion.constants';
 
 /**
  * Resolution options for fact conflicts
@@ -37,10 +38,10 @@ export interface FactConflictResolutionResult {
  * When FactFusionService detects a CONFLICT (contradictory facts that need human review),
  * this service sends a Telegram notification with buttons for resolution.
  *
- * Callback format:
- * - fact_new:<shortId>  → Use new fact, deprecate old
- * - fact_old:<shortId>  → Keep old fact, reject new
- * - fact_both:<shortId> → Keep both facts (COEXIST)
+ * Callback format uses FACT_CALLBACK_PREFIX:
+ * - f_n:<shortId>  → Use new fact, deprecate old
+ * - f_o:<shortId>  → Keep old fact, reject new
+ * - f_b:<shortId>  → Keep both facts (COEXIST)
  */
 @Injectable()
 export class FactConflictService {
@@ -54,6 +55,31 @@ export class FactConflictService {
     @InjectRepository(EntityRecord)
     private readonly entityRepo: Repository<EntityRecord>,
   ) {}
+
+  // ============================================
+  // Helper Methods
+  // ============================================
+
+  /**
+   * Create a new fact entity from DTO (DRY helper)
+   */
+  private createFactFromDto(
+    entityId: string,
+    dto: CreateFactDto,
+    rank: 'preferred' | 'normal',
+  ): EntityFact {
+    return this.factRepo.create({
+      entityId,
+      factType: dto.type,
+      category: dto.category,
+      value: dto.value,
+      valueDate: dto.valueDate,
+      valueJson: dto.valueJson,
+      source: dto.source || FactSource.EXTRACTED,
+      rank,
+      validFrom: new Date(),
+    });
+  }
 
   /**
    * Send Telegram notification about fact conflict.
@@ -89,12 +115,12 @@ export class FactConflictService {
       sourceMessageLink,
     );
 
-    // Create inline buttons
+    // Create inline buttons using standardized prefixes
     const buttons = [
       [
-        { text: '✅ Новый', callback_data: `fact_new:${shortId}` },
-        { text: '❌ Старый', callback_data: `fact_old:${shortId}` },
-        { text: '🔀 Оба', callback_data: `fact_both:${shortId}` },
+        { text: '✅ Новый', callback_data: `${FACT_CALLBACK_PREFIX.NEW}${shortId}` },
+        { text: '❌ Старый', callback_data: `${FACT_CALLBACK_PREFIX.OLD}${shortId}` },
+        { text: '🔀 Оба', callback_data: `${FACT_CALLBACK_PREFIX.BOTH}${shortId}` },
       ],
     ];
 
@@ -177,19 +203,8 @@ export class FactConflictService {
   ): Promise<FactConflictResolutionResult> {
     const { newFactData, entityId } = conflictData;
 
-    // Create new fact as preferred
-    const newFact = this.factRepo.create({
-      entityId,
-      factType: newFactData.type,
-      category: newFactData.category,
-      value: newFactData.value,
-      valueDate: newFactData.valueDate,
-      valueJson: newFactData.valueJson,
-      source: newFactData.source || FactSource.EXTRACTED,
-      rank: 'preferred',
-      validFrom: new Date(),
-    });
-
+    // Create new fact as preferred using helper
+    const newFact = this.createFactFromDto(entityId, newFactData, 'preferred');
     const savedNewFact = await this.factRepo.save(newFact);
 
     // Deprecate old fact
@@ -247,18 +262,8 @@ export class FactConflictService {
       reviewReason: null,
     });
 
-    // Create new fact as normal (not deprecating old)
-    const newFact = this.factRepo.create({
-      entityId,
-      factType: newFactData.type,
-      category: newFactData.category,
-      value: newFactData.value,
-      valueDate: newFactData.valueDate,
-      valueJson: newFactData.valueJson,
-      source: newFactData.source || FactSource.EXTRACTED,
-      rank: 'normal',
-      validFrom: new Date(),
-    });
+    // Create new fact as normal (not deprecating old) using helper
+    const newFact = this.createFactFromDto(entityId, newFactData, 'normal');
 
     const savedNewFact = await this.factRepo.save(newFact);
 

@@ -3,12 +3,24 @@ import { Context } from 'telegraf';
 import { PkgCoreApiService } from '../../api/pkg-core-api.service';
 
 /**
- * Callback data format for fact conflict resolution:
- * - fact_new:<shortId>  → Use new fact, deprecate old
- * - fact_old:<shortId>  → Keep old fact, reject new
- * - fact_both:<shortId> → Keep both facts (COEXIST)
+ * Callback data format for fact conflict resolution (standardized short prefixes):
+ * - f_n:<shortId>  → Use new fact, deprecate old
+ * - f_o:<shortId>  → Keep old fact, reject new
+ * - f_b:<shortId>  → Keep both facts (COEXIST)
+ *
+ * These prefixes match FACT_CALLBACK_PREFIX from pkg-core.
  */
-const FACT_CALLBACK_PREFIXES = ['fact_new:', 'fact_old:', 'fact_both:'] as const;
+const FACT_CALLBACK_PREFIX = {
+  NEW: 'f_n:',
+  OLD: 'f_o:',
+  BOTH: 'f_b:',
+} as const;
+
+const FACT_CALLBACK_PREFIXES = [
+  FACT_CALLBACK_PREFIX.NEW,
+  FACT_CALLBACK_PREFIX.OLD,
+  FACT_CALLBACK_PREFIX.BOTH,
+] as const;
 
 type FactResolution = 'new' | 'old' | 'both';
 
@@ -99,16 +111,25 @@ export class FactCallbackHandler {
    * Parse callback data into resolution and shortId
    */
   private parseCallback(callbackData: string): ParsedFactCallback | null {
+    // Map prefix to resolution type
+    const prefixToResolution: Record<string, FactResolution> = {
+      [FACT_CALLBACK_PREFIX.NEW]: 'new',
+      [FACT_CALLBACK_PREFIX.OLD]: 'old',
+      [FACT_CALLBACK_PREFIX.BOTH]: 'both',
+    };
+
     for (const prefix of FACT_CALLBACK_PREFIXES) {
       if (callbackData.startsWith(prefix)) {
         const shortId = callbackData.substring(prefix.length);
-        const resolution = prefix.replace('fact_', '').replace(':', '') as FactResolution;
 
         if (!shortId) {
           return null;
         }
 
-        return { resolution, shortId };
+        return {
+          resolution: prefixToResolution[prefix],
+          shortId,
+        };
       }
     }
     return null;

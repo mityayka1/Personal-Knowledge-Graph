@@ -127,8 +127,8 @@ describe('similarity.utils', () => {
   });
 
   describe('SEMANTIC_SIMILARITY_THRESHOLD', () => {
-    it('should be 0.85', () => {
-      expect(SEMANTIC_SIMILARITY_THRESHOLD).toBe(0.85);
+    it('should be 0.7 (lowered for better fusion recall)', () => {
+      expect(SEMANTIC_SIMILARITY_THRESHOLD).toBe(0.7);
     });
   });
 });
