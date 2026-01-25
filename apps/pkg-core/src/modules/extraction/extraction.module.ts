@@ -14,6 +14,7 @@ import { EnrichmentQueueService } from './enrichment-queue.service';
 import { ConversationGrouperService } from './conversation-grouper.service';
 import { CrossChatContextService } from './cross-chat-context.service';
 import { SubjectResolverService } from './subject-resolver.service';
+import { RelationInferenceService } from './relation-inference.service';
 import { ExtractionController } from './extraction.controller';
 import { ExtractedEventController } from './extracted-event.controller';
 import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
@@ -63,6 +64,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     ConversationGrouperService,
     CrossChatContextService,
     SubjectResolverService,
+    RelationInferenceService,
     ExtractionToolsProvider,
   ],
   exports: [
@@ -77,6 +79,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     ConversationGrouperService,
     CrossChatContextService,
     SubjectResolverService,
+    RelationInferenceService,
     ExtractionToolsProvider,
   ],
 })

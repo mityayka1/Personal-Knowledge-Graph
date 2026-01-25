@@ -1,5 +1,6 @@
-import { Controller, Post, Body, Param, Get, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { FactExtractionService } from './fact-extraction.service';
+import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { MessageService } from '../interaction/message/message.service';
 import { EntityService } from '../entity/entity.service';
 
@@ -30,6 +31,7 @@ export class ExtractionController {
 
   constructor(
     private extractionService: FactExtractionService,
+    private relationInferenceService: RelationInferenceService,
     @Inject(forwardRef(() => MessageService))
     private messageService: MessageService,
     @Inject(forwardRef(() => EntityService))
@@ -131,5 +133,61 @@ export class ExtractionController {
     this.logger.log(`[extractFactsFromHistory] Final response: ${JSON.stringify({ ...response, facts: response.facts?.length || 0 })}`);
 
     return response;
+  }
+
+  /**
+   * Infer relations from existing facts.
+   * POST /extraction/relations/infer
+   *
+   * Creates employment relations from company facts by matching
+   * organization names in the database.
+   *
+   * @param dryRun - If 'true', only report what would be created
+   * @param sinceDate - Only process facts created after this date (ISO 8601)
+   * @param limit - Maximum number of facts to process
+   */
+  @Post('relations/infer')
+  async inferRelations(
+    @Query('dryRun') dryRun?: string,
+    @Query('sinceDate') sinceDate?: string,
+    @Query('limit') limit?: string,
+  ): Promise<InferenceResult> {
+    // Validate query parameters
+    let parsedLimit: number | undefined;
+    if (limit) {
+      parsedLimit = parseInt(limit, 10);
+      if (isNaN(parsedLimit) || parsedLimit < 1) {
+        throw new BadRequestException('limit must be a positive integer');
+      }
+    }
+
+    let parsedSinceDate: Date | undefined;
+    if (sinceDate) {
+      parsedSinceDate = new Date(sinceDate);
+      if (isNaN(parsedSinceDate.getTime())) {
+        throw new BadRequestException('sinceDate must be a valid ISO 8601 date');
+      }
+    }
+
+    const options = {
+      dryRun: dryRun === 'true',
+      sinceDate: parsedSinceDate,
+      limit: parsedLimit,
+    };
+
+    this.logger.log(
+      `[inferRelations] Starting inference with options: ${JSON.stringify(options)}`,
+    );
+
+    return this.relationInferenceService.inferRelations(options);
+  }
+
+  /**
+   * Get statistics about potential inference candidates.
+   * GET /extraction/relations/infer/stats
+   */
+  @Get('relations/infer/stats')
+  async getInferenceStats() {
+    return this.relationInferenceService.getInferenceStats();
   }
 }
