@@ -7,6 +7,7 @@ import {
   EntityType,
   CreationSource,
   CONFIDENCE_THRESHOLDS,
+  EXACT_MATCH_CONFIDENCE_BONUS,
 } from '@pkg/entities';
 
 describe('SubjectResolverService', () => {
@@ -132,8 +133,9 @@ describe('SubjectResolverService', () => {
       });
     });
 
-    describe('Case 3: Pending with low confidence', () => {
-      it('should create confirmation when confidence < 0.8 even with single match', async () => {
+    describe('Case 3: Pending with low confidence (partial match)', () => {
+      it('should create confirmation when confidence < 0.6 even with single partial match', async () => {
+        // Using partial match: "Лёша" doesn't exactly match "Алексей", no bonus applied
         const entity = createEntity('entity-1', 'Алексей');
         entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
 
@@ -142,16 +144,17 @@ describe('SubjectResolverService', () => {
         } as any);
 
         const result = await service.resolve(
-          'Алексей',
+          'Лёша', // Partial match (diminutive form)
           ['entity-1'],
-          0.6, // Low confidence
+          0.55, // Low confidence, no bonus applies
         );
 
         expect(result.status).toBe('pending');
         expect(result).toHaveProperty('confirmationId', 'confirmation-2');
       });
 
-      it('should create confirmation at 0.79 confidence (just below threshold)', async () => {
+      it('should create confirmation at 0.75 confidence with partial match (no bonus)', async () => {
+        // Using partial match: "Дима" doesn't exactly match "Дмитрий"
         const entity = createEntity('entity-1', 'Дмитрий');
         entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
 
@@ -159,9 +162,90 @@ describe('SubjectResolverService', () => {
           id: 'confirmation-3',
         } as any);
 
-        const result = await service.resolve('Дмитрий', ['entity-1'], 0.79);
+        // 0.75 is below 0.8 threshold, and no exact match bonus applies
+        const result = await service.resolve('Дима', ['entity-1'], 0.75);
 
         expect(result.status).toBe('pending');
+      });
+
+      it('should auto-resolve with exact match bonus even at 0.65 confidence', async () => {
+        // 0.65 base + 0.2 bonus = 0.85 >= 0.8 threshold
+        const entity = createEntity('entity-1', 'Дмитрий');
+        entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
+
+        const result = await service.resolve(
+          'Дмитрий', // Exact match with entity name
+          ['entity-1'],
+          0.65, // Below threshold but with exact match bonus becomes 0.85
+        );
+
+        expect(result.status).toBe('resolved');
+        expect(result).toHaveProperty('entityId', 'entity-1');
+        expect(confirmationService.create).not.toHaveBeenCalled();
+      });
+
+      it('should NOT auto-resolve with exact match bonus at 0.59 (0.79 effective)', async () => {
+        // 0.59 base + 0.2 bonus = 0.79 < 0.8 threshold
+        const entity = createEntity('entity-1', 'Павел');
+        entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
+
+        confirmationService.create.mockResolvedValue({
+          id: 'confirmation-exact-low',
+        } as any);
+
+        const result = await service.resolve(
+          'Павел', // Exact match
+          ['entity-1'],
+          0.59, // Even with bonus (0.79) still below threshold
+        );
+
+        expect(result.status).toBe('pending');
+      });
+
+      it('should NOT apply exact match bonus for partial match', async () => {
+        // "Дима" doesn't exactly match "Дмитрий", so no bonus
+        const entity = createEntity('entity-1', 'Дмитрий');
+        entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
+
+        confirmationService.create.mockResolvedValue({
+          id: 'confirmation-partial',
+        } as any);
+
+        const result = await service.resolve(
+          'Дима', // Partial match, NOT exact
+          ['entity-1'],
+          0.75, // Would auto-resolve if bonus applied (0.95), but no bonus
+        );
+
+        expect(result.status).toBe('pending');
+      });
+
+      it('should apply exact match bonus case-insensitively', async () => {
+        const entity = createEntity('entity-1', 'Мария');
+        entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
+
+        const result = await service.resolve(
+          'МАРИЯ', // Different case but exact match
+          ['entity-1'],
+          0.65, // 0.65 + 0.2 = 0.85 >= 0.8
+        );
+
+        expect(result.status).toBe('resolved');
+        expect(result).toHaveProperty('entityId', 'entity-1');
+      });
+
+      it('should cap effective confidence at 1.0', async () => {
+        const entity = createEntity('entity-1', 'Иван');
+        entityService.findAll.mockResolvedValue(createFindAllResult([entity]));
+
+        const result = await service.resolve(
+          'Иван', // Exact match
+          ['entity-1'],
+          0.95, // 0.95 + 0.2 = 1.15, should cap at 1.0
+        );
+
+        expect(result.status).toBe('resolved');
+        expect(result).toHaveProperty('entityId', 'entity-1');
       });
     });
 
@@ -284,7 +368,7 @@ describe('SubjectResolverService', () => {
         await service.resolve(
           'Андрей',
           ['entity-1'], // Only entity-1 is participant
-          0.7, // Low confidence to trigger confirmation
+          0.55, // Low enough that even with exact match bonus (0.75) < 0.8 threshold
         );
 
         const createCall = confirmationService.create.mock.calls[0][0];
@@ -307,6 +391,7 @@ describe('SubjectResolverService', () => {
           id: 'confirmation-8',
         } as any);
 
+        // Empty participants array, so no participant match, no auto-resolve
         await service.resolve('Николай', [], 0.7);
 
         const createCall = confirmationService.create.mock.calls[0][0];

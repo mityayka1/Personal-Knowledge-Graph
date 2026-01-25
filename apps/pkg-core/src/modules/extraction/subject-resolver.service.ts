@@ -125,6 +125,32 @@ export class SubjectResolverService {
   }
 
   /**
+   * Check if subject mention exactly matches candidate name (case-insensitive).
+   */
+  private isExactMatch(subjectMention: string, candidateName: string): boolean {
+    return subjectMention.toLowerCase().trim() === candidateName.toLowerCase().trim();
+  }
+
+  /**
+   * Calculate effective confidence with exact match bonus.
+   * Adds EXACT_MATCH_CONFIDENCE_BONUS when name exactly matches.
+   */
+  private calculateEffectiveConfidence(
+    subjectMention: string,
+    candidate: SubjectCandidate,
+    baseConfidence: number,
+  ): number {
+    if (this.isExactMatch(subjectMention, candidate.name)) {
+      const boosted = Math.min(1.0, baseConfidence + EXACT_MATCH_CONFIDENCE_BONUS);
+      this.logger.debug(
+        `Exact match bonus applied: ${baseConfidence} + ${EXACT_MATCH_CONFIDENCE_BONUS} = ${boosted}`,
+      );
+      return boosted;
+    }
+    return baseConfidence;
+  }
+
+  /**
    * Decision matrix for subject resolution.
    */
   private async decideResolution(
@@ -138,26 +164,29 @@ export class SubjectResolverService {
       sourceQuote?: string;
     },
   ): Promise<SubjectResolution> {
-    // Case 1: Exactly one participant match with high confidence → auto-resolve
-    if (
-      participantMatches.length === 1 &&
-      confidence >= CONFIDENCE_THRESHOLDS.AUTO_RESOLVE
-    ) {
-      this.logger.log(
-        `Auto-resolved subject "${subjectMention}" to entity ${participantMatches[0].id}`,
+    // Case 1: Exactly one participant match → check with potential exact match bonus
+    if (participantMatches.length === 1) {
+      const effectiveConfidence = this.calculateEffectiveConfidence(
+        subjectMention,
+        participantMatches[0],
+        confidence,
       );
-      return {
-        status: 'resolved',
-        entityId: participantMatches[0].id,
-      };
+
+      if (effectiveConfidence >= CONFIDENCE_THRESHOLDS.AUTO_RESOLVE) {
+        this.logger.log(
+          `Auto-resolved subject "${subjectMention}" to entity ${participantMatches[0].id} ` +
+            `(confidence: ${confidence}, effective: ${effectiveConfidence})`,
+        );
+        return {
+          status: 'resolved',
+          entityId: participantMatches[0].id,
+        };
+      }
     }
 
-    // Case 2: Multiple participant matches or low confidence → need confirmation
-    if (
-      participantMatches.length > 1 ||
-      (participantMatches.length === 1 &&
-        confidence < CONFIDENCE_THRESHOLDS.AUTO_RESOLVE)
-    ) {
+    // Case 2: Participant matches exist but didn't auto-resolve → need confirmation
+    // (either multiple matches, or single match with effective confidence below threshold)
+    if (participantMatches.length >= 1) {
       const confirmation = await this.createConfirmation(
         subjectMention,
         participantMatches,
