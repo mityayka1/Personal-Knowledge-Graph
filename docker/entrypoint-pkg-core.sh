@@ -29,5 +29,15 @@ fi
 export PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 export HOME="/home/nestjs"
 
+# Run database migrations before starting the application
+echo "Running database migrations..."
+cd /app/apps/pkg-core
+if node -e "require('./dist/database/data-source.js').default.initialize().then(ds => ds.runMigrations().then(() => { console.log('Migrations completed'); ds.destroy(); process.exit(0); })).catch(e => { console.error('Migration failed:', e.message); process.exit(1); })"; then
+  echo "✅ Migrations applied successfully"
+else
+  echo "⚠️ Migration failed, but continuing startup (may need manual intervention)"
+fi
+cd /app
+
 # Switch to nestjs user and start the application
 exec su-exec nestjs node apps/pkg-core/dist/main.js
