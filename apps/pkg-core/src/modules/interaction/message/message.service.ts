@@ -276,6 +276,9 @@ export class MessageService {
           // For proper attribution in group chats
           senderEntityId: entityId,
           senderEntityName: senderEntityName || undefined,
+          // Note: isBotSender is always false here due to the check above,
+          // but included for consistency and safety in batch processing
+          isBotSender: dto.telegram_user_info?.isBot ?? false,
         });
       } catch (error) {
         // Don't fail message creation if extraction scheduling fails

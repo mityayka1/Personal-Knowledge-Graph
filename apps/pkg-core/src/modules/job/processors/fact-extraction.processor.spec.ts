@@ -17,7 +17,7 @@ describe('FactExtractionProcessor', () => {
   let entityService: jest.Mocked<EntityService>;
 
   const mockFactExtractionService = {
-    extractFactsBatch: jest.fn(),
+    extractFactsAgentBatch: jest.fn(),
   };
 
   const mockEventExtractionService = {
@@ -100,7 +100,7 @@ describe('FactExtractionProcessor', () => {
         name: 'Test User',
         isBot: false,
       });
-      mockFactExtractionService.extractFactsBatch.mockResolvedValue({ facts: [] });
+      mockFactExtractionService.extractFactsAgentBatch.mockResolvedValue({ factsCreated: 0 });
       mockEventExtractionService.extractEventsBatch.mockResolvedValue({ events: [] });
       mockPromiseRecipientService.loadReplyToInfo.mockResolvedValue(new Map());
       mockPromiseRecipientService.resolveRecipient.mockResolvedValue(null);
@@ -122,7 +122,7 @@ describe('FactExtractionProcessor', () => {
       });
 
       expect(mockEntityService.findOne).toHaveBeenCalledWith('entity-456');
-      expect(mockFactExtractionService.extractFactsBatch).toHaveBeenCalled();
+      expect(mockFactExtractionService.extractFactsAgentBatch).toHaveBeenCalled();
       expect(mockEventExtractionService.extractEventsBatch).toHaveBeenCalled();
       expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalled();
     });
@@ -151,7 +151,7 @@ describe('FactExtractionProcessor', () => {
         });
 
         // Extraction services should NOT be called for bots
-        expect(mockFactExtractionService.extractFactsBatch).not.toHaveBeenCalled();
+        expect(mockFactExtractionService.extractFactsAgentBatch).not.toHaveBeenCalled();
         expect(mockEventExtractionService.extractEventsBatch).not.toHaveBeenCalled();
         expect(mockSecondBrainExtractionService.extractFromMessages).not.toHaveBeenCalled();
       });
@@ -167,7 +167,7 @@ describe('FactExtractionProcessor', () => {
 
         await processor.process(job);
 
-        expect(mockFactExtractionService.extractFactsBatch).toHaveBeenCalled();
+        expect(mockFactExtractionService.extractFactsAgentBatch).toHaveBeenCalled();
         expect(mockEventExtractionService.extractEventsBatch).toHaveBeenCalled();
         expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalled();
       });
@@ -429,8 +429,8 @@ describe('FactExtractionProcessor', () => {
 
     describe('extraction results aggregation', () => {
       it('should count extracted facts, events, and pending events', async () => {
-        mockFactExtractionService.extractFactsBatch.mockResolvedValue({
-          facts: [{ id: 'fact-1' }, { id: 'fact-2' }],
+        mockFactExtractionService.extractFactsAgentBatch.mockResolvedValue({
+          factsCreated: 2,
         });
 
         mockEventExtractionService.extractEventsBatch.mockResolvedValue({
@@ -486,7 +486,7 @@ describe('FactExtractionProcessor', () => {
       });
 
       it('should throw error when extraction fails', async () => {
-        mockFactExtractionService.extractFactsBatch.mockRejectedValue(
+        mockFactExtractionService.extractFactsAgentBatch.mockRejectedValue(
           new Error('LLM service unavailable'),
         );
 

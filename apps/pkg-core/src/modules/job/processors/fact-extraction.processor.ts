@@ -52,18 +52,20 @@ export class FactExtractionProcessor extends WorkerHost {
         };
       }
 
-      // Map messages to the format expected by extractFactsBatch
-      // Include context (isOutgoing, senderName) for better extraction accuracy
+      // Map messages to the format expected by extractFactsAgentBatch
+      // Include context (isOutgoing, senderName, isBotSender) for better extraction accuracy
       const formattedMessages = messages.map((m) => ({
         id: m.id,
         content: m.content,
         interactionId,
         isOutgoing: m.isOutgoing,
         senderName: m.senderEntityName,
+        isBotSender: m.isBotSender,
       }));
 
-      // Extract facts using Claude CLI
-      const factResult = await this.factExtractionService.extractFactsBatch({
+      // Extract facts using agent mode with Smart Fusion
+      // This creates EntityFacts directly (not PendingFacts) with semantic deduplication
+      const factResult = await this.factExtractionService.extractFactsAgentBatch({
         entityId,
         entityName: entity.name,
         messages: formattedMessages,
@@ -129,13 +131,13 @@ export class FactExtractionProcessor extends WorkerHost {
       );
 
       this.logger.log(
-        `Extraction job ${job.id} completed: ${factResult.facts.length} facts, ` +
+        `Extraction job ${job.id} completed: ${factResult.factsCreated} facts, ` +
           `${eventResult.events.length} events, ${extractedEventsCount} pending events extracted`,
       );
 
       return {
         success: true,
-        factsExtracted: factResult.facts.length,
+        factsExtracted: factResult.factsCreated,
         eventsExtracted: eventResult.events.length,
         pendingEventsExtracted: extractedEventsCount,
       };

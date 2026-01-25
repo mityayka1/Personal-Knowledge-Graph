@@ -24,6 +24,8 @@ export interface ExtractionJobData {
     senderEntityId?: string;
     /** Name of the message sender */
     senderEntityName?: string;
+    /** Is the sender a bot? Bot messages should be skipped in extraction */
+    isBotSender?: boolean;
   }>;
 }
 
@@ -93,8 +95,10 @@ export class JobService {
     senderEntityId?: string;
     /** Name of the message sender */
     senderEntityName?: string;
+    /** Is the sender a bot? Bot messages should be skipped in extraction */
+    isBotSender?: boolean;
   }): Promise<void> {
-    const { interactionId, entityId, messageId, messageContent, isOutgoing = false, replyToSourceMessageId, topicName, senderEntityId, senderEntityName } = params;
+    const { interactionId, entityId, messageId, messageContent, isOutgoing = false, replyToSourceMessageId, topicName, senderEntityId, senderEntityName, isBotSender } = params;
     // BullMQ doesn't allow colons in custom job IDs, use underscore instead
     const jobId = `extraction_${interactionId}`;
 
@@ -122,6 +126,7 @@ export class JobService {
             topicName,
             senderEntityId,
             senderEntityName,
+            isBotSender,
           }],
         });
         await existingJob.changeDelay(delayMs); // Reset delay
@@ -146,6 +151,7 @@ export class JobService {
             topicName,
             senderEntityId,
             senderEntityName,
+            isBotSender,
           }],
         } as ExtractionJobData, {
           jobId,
@@ -170,6 +176,7 @@ export class JobService {
           topicName,
           senderEntityId,
           senderEntityName,
+          isBotSender,
         }],
       } as ExtractionJobData, {
         jobId: uniqueJobId,
@@ -193,6 +200,7 @@ export class JobService {
         topicName,
         senderEntityId,
         senderEntityName,
+        isBotSender,
       }],
     } as ExtractionJobData, {
       jobId,

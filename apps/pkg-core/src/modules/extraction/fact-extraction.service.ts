@@ -522,6 +522,223 @@ ${memorySection}
   }
 
   /**
+   * Batch extract from multiple messages using agent mode with Smart Fusion.
+   *
+   * Key advantages over extractFactsBatch():
+   * - Uses Smart Fusion (semantic deduplication) via create_fact tool
+   * - Creates EntityFacts directly (not PendingFacts)
+   * - Supports cross-entity routing (facts about mentioned people)
+   * - Single API call for cost efficiency (like oneshot batch)
+   *
+   * @param params - Entity info and array of messages to process
+   * @returns AgentExtractionResult with counts of created entities
+   */
+  async extractFactsAgentBatch(params: {
+    entityId: string;
+    entityName: string;
+    messages: BatchExtractionMessage[];
+    chatType?: string;
+  }): Promise<AgentExtractionResult> {
+    const { entityId, entityName, messages, chatType } = params;
+
+    // Filter out bot messages and very short messages
+    const validMessages = messages.filter((m) => {
+      if (m.isBotSender) {
+        this.logger.debug(`Skipping bot message ${m.id}`);
+        return false;
+      }
+      if (m.content.length < MIN_MESSAGE_LENGTH) {
+        return false;
+      }
+      return true;
+    });
+
+    if (validMessages.length === 0) {
+      this.logger.debug(`No valid messages to extract for entity ${entityId}`);
+      return {
+        entityId,
+        factsCreated: 0,
+        relationsCreated: 0,
+        pendingEntitiesCreated: 0,
+      };
+    }
+
+    // Check if agent mode is available
+    if (!this.extractionToolsProvider) {
+      this.logger.warn('ExtractionToolsProvider not available, falling back to oneshot batch');
+      const result = await this.extractFactsBatch({
+        entityId,
+        entityName,
+        messages: validMessages,
+        chatType,
+      });
+      return {
+        entityId,
+        factsCreated: 0, // Oneshot creates PendingFacts, not EntityFacts
+        relationsCreated: 0,
+        pendingEntitiesCreated: result.facts.length,
+        tokensUsed: result.tokensUsed,
+      };
+    }
+
+    // Get entity memory context for context-aware extraction
+    let entityMemory = '';
+    if (this.entityFactService) {
+      try {
+        entityMemory = await this.entityFactService.getContextForExtraction(entityId);
+      } catch (error) {
+        this.logger.warn(`Failed to get entity context for agent batch: ${error}`);
+      }
+    }
+
+    // Combine messages into single context with direction markers
+    const combined = validMessages
+      .map((m) => {
+        const direction =
+          m.isOutgoing !== undefined
+            ? m.isOutgoing
+              ? '[Я]'
+              : `[${m.senderName || entityName}]`
+            : `[${m.senderName || entityName}]`;
+        return `${direction} ${m.content}`;
+      })
+      .join('\n---\n')
+      .substring(0, CONTEXT_SIZE_LIMIT);
+
+    // Create extraction context
+    const extractionContext = {
+      messageId: validMessages[0]?.id ?? null,
+      interactionId: validMessages[0]?.interactionId ?? null,
+    };
+
+    // Create custom MCP config with context
+    const mcpServer = this.extractionToolsProvider.createMcpServer(extractionContext);
+    const toolNames = this.extractionToolsProvider.getToolNames();
+
+    // Build agent batch prompt
+    const prompt = this.buildAgentBatchPrompt(entityId, entityName, combined, chatType, entityMemory);
+
+    try {
+      const { data, usage, turns, toolsUsed } = await this.claudeAgentService.call<AgentExtractionResponse>({
+        mode: 'agent',
+        taskType: 'fact_extraction',
+        prompt,
+        model: 'haiku',
+        maxTurns: 15, // More turns for batch processing
+        timeout: 180000, // 3 minutes for larger batches
+        customMcp: {
+          name: EXTRACTION_MCP_NAME,
+          server: mcpServer,
+          toolNames,
+        },
+        outputFormat: {
+          type: 'json_schema',
+          schema: AGENT_EXTRACTION_SCHEMA,
+          strict: true,
+        },
+      });
+
+      const result: AgentExtractionResult = {
+        entityId,
+        factsCreated: data?.factsCreated ?? 0,
+        relationsCreated: data?.relationsCreated ?? 0,
+        pendingEntitiesCreated: data?.pendingEntitiesCreated ?? 0,
+        turns,
+        toolsUsed,
+        tokensUsed: usage.inputTokens + usage.outputTokens,
+      };
+
+      this.logger.log(
+        `Agent batch extraction for ${entityName}: ${result.factsCreated} facts, ` +
+          `${result.relationsCreated} relations, ${result.pendingEntitiesCreated} pending ` +
+          `(${validMessages.length} messages, ${turns} turns, ${result.tokensUsed} tokens)`,
+      );
+
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Agent batch extraction failed: ${message}`);
+
+      // Fallback to oneshot batch mode
+      this.logger.warn('Falling back to oneshot batch extraction');
+      const result = await this.extractFactsBatch({
+        entityId,
+        entityName,
+        messages: validMessages,
+        chatType,
+      });
+      return {
+        entityId,
+        factsCreated: 0,
+        relationsCreated: 0,
+        pendingEntitiesCreated: result.facts.length,
+        tokensUsed: result.tokensUsed,
+      };
+    }
+  }
+
+  /**
+   * Build prompt for agent batch mode extraction.
+   */
+  private buildAgentBatchPrompt(
+    entityId: string,
+    entityName: string,
+    combinedMessages: string,
+    chatType?: string,
+    entityMemory?: string,
+  ): string {
+    // Build context description
+    let contextDesc = '';
+    if (chatType) {
+      contextDesc = `Это ${CHAT_TYPE_MAP[chatType] || chatType}.\n`;
+    }
+
+    // Build base context section
+    const baseContextSection = entityMemory
+      ? `\n═══════════════════════════════════════════════════════════
+ПАМЯТЬ О ${entityName} (entityId: ${entityId}):
+${entityMemory}
+═══════════════════════════════════════════════════════════\n`
+      : `\nПервичная сущность: ${entityName} (entityId: ${entityId})\n`;
+
+    return `Ты — агент для извлечения фактов из сообщений.
+
+ПРАВИЛА:
+1. Факты принадлежат КОНКРЕТНЫМ сущностям
+2. "Маша работает в Сбере" → создай факт для Маши (найди через find_entity_by_name), НЕ для ${entityName}
+3. Если упомянут человек — найди его через find_entity_by_name, затем получи контекст через get_entity_context
+4. Если человек не найден — создай pending entity через create_pending_entity
+5. Smart Fusion автоматически обрабатывает дубликаты (не нужно проверять вручную)
+6. Создавай связи через create_relation для упоминаний отношений ("мой начальник", "работает в")
+7. [Я] — это сообщения пользователя, [${entityName}] — сообщения собеседника
+
+ТИПЫ ФАКТОВ:
+- position: должность ("Senior Developer", "CTO")
+- company: компания ("Сбер", "Яндекс")
+- department: отдел
+- phone, email, telegram: контакты
+- birthday: день рождения
+- location: местоположение
+- education: образование
+${baseContextSection}
+${contextDesc}
+═══════════════════════════════════════════════════════════
+СООБЩЕНИЯ:
+${combinedMessages}
+═══════════════════════════════════════════════════════════
+
+Извлеки все факты и связи из ВСЕХ сообщений. Используй инструменты для создания:
+- create_fact — для каждого факта
+- create_relation — для связей между сущностями
+- create_pending_entity — для новых упомянутых людей
+
+ВАЖНО: Посчитай сколько раз ты успешно вызвал каждый инструмент и верни:
+- factsCreated: количество успешных вызовов create_fact
+- relationsCreated: количество успешных вызовов create_relation
+- pendingEntitiesCreated: количество успешных вызовов create_pending_entity`;
+  }
+
+  /**
    * Build prompt for agent mode extraction.
    */
   private buildAgentPrompt(
@@ -599,4 +816,17 @@ interface AgentExtractionResponse {
   factsCreated: number;
   relationsCreated: number;
   pendingEntitiesCreated: number;
+}
+
+/** Message input for batch extraction */
+export interface BatchExtractionMessage {
+  id: string;
+  content: string;
+  interactionId?: string;
+  /** Is this an outgoing message (from user to contact)? */
+  isOutgoing?: boolean;
+  /** Name of message sender (for group chats) */
+  senderName?: string;
+  /** Is sender a bot? Messages from bots should be skipped */
+  isBotSender?: boolean;
 }

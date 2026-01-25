@@ -35,6 +35,7 @@ export class InteractionParticipant {
 
   @ManyToOne(() => EntityRecord, (entity) => entity.participations, {
     nullable: true,
+    onDelete: 'SET NULL',
   })
   @JoinColumn({ name: 'entity_id' })
   entity: EntityRecord | null;

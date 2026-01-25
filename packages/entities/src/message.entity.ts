@@ -90,7 +90,7 @@ export class Message {
   @Index()
   senderEntityId: string | null;
 
-  @ManyToOne(() => EntityRecord, { nullable: true })
+  @ManyToOne(() => EntityRecord, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'sender_entity_id' })
   senderEntity: EntityRecord | null;
 
@@ -99,7 +99,7 @@ export class Message {
   @Index()
   recipientEntityId: string | null;
 
-  @ManyToOne(() => EntityRecord, { nullable: true })
+  @ManyToOne(() => EntityRecord, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'recipient_entity_id' })
   recipientEntity: EntityRecord | null;
 
