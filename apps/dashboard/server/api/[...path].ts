@@ -13,13 +13,18 @@ export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig();
   const path = event.context.params?.path || '';
 
+  console.log(`[API Proxy] Request: ${event.method} /api/${path}`);
+  console.log(`[API Proxy] PKG Core URL: ${config.pkgCoreUrl}`);
+
   // Skip auth proxy for auth endpoints (handled by separate routes)
   if (path.startsWith('auth/')) {
+    console.log(`[API Proxy] Auth endpoint, skipping token`);
     return proxyRequest(event, path, config, null);
   }
 
   // Try to get JWT token for authenticated requests
   const accessToken = await getValidAccessToken(event);
+  console.log(`[API Proxy] Has access token: ${!!accessToken}`);
 
   try {
     return await proxyRequest(event, path, config, accessToken);
@@ -44,6 +49,7 @@ async function proxyRequest(
 ) {
   // Build target URL
   const targetUrl = `${config.pkgCoreUrl}/${path}`;
+  console.log(`[API Proxy] Target URL: ${targetUrl}`);
 
   // Get query params
   const query = getQuery(event);
@@ -87,13 +93,16 @@ async function proxyRequest(
   }
 
   try {
+    console.log(`[API Proxy] Fetching: ${targetUrl}`);
     const response = await $fetch(targetUrl, {
       ...fetchOptions,
       query,
     });
 
+    console.log(`[API Proxy] Response received, type: ${typeof response}`);
     return response;
   } catch (error: unknown) {
+    console.error(`[API Proxy] Fetch error:`, error);
     const fetchError = error as { statusCode?: number; data?: unknown; message?: string };
 
     // Forward error status and message
