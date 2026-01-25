@@ -121,9 +121,11 @@ export class ClaudeAgentService {
 
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
+          this.logger.debug(`[oneshot] Result message: subtype=${resultMessage.subtype}, keys=${Object.keys(resultMessage).join(',')}`);
           // Check if it's a success result
           if (resultMessage.subtype === 'success' && 'result' in resultMessage) {
             rawResult = (resultMessage as { result?: string }).result || '';
+            this.logger.debug(`[oneshot] Raw result (first 500): ${rawResult.slice(0, 500)}`);
             result = this.parseStructuredOutput<T>(rawResult, params.schema);
           } else if (resultMessage.subtype.startsWith('error')) {
             throw new Error(`Claude returned error: ${resultMessage.subtype}`);

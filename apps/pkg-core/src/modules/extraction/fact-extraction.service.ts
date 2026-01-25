@@ -257,6 +257,9 @@ export class FactExtractionService {
 
     const prompt = this.buildBatchPrompt(entityName, combined, chatType, entityMemory);
 
+    this.logger.log(`[extractFactsBatch] Prompt length: ${prompt.length} chars`);
+    this.logger.debug(`[extractFactsBatch] First 500 chars of combined: ${combined.slice(0, 500)}`);
+
     try {
       const { data, usage } = await this.claudeAgentService.call<FactsExtractionResponse>({
         mode: 'oneshot',
@@ -267,6 +270,9 @@ export class FactExtractionService {
         maxTurns: 5,
         timeout: 90000,
       });
+
+      this.logger.log(`[extractFactsBatch] Claude response: data=${JSON.stringify(data).slice(0, 500)}`);
+      this.logger.log(`[extractFactsBatch] Usage: in=${usage.inputTokens}, out=${usage.outputTokens}`);
 
       const rawFacts = data.facts || [];
 
@@ -279,6 +285,8 @@ export class FactExtractionService {
           confidence: Math.min(1, Math.max(0, f.confidence)),
           sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
         }));
+
+      this.logger.log(`[extractFactsBatch] Raw facts: ${rawFacts.length}, valid facts: ${validFacts.length}`);
 
       for (const fact of validFacts) {
         await this.pendingFactService.create({
