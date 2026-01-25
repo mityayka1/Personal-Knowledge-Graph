@@ -37,9 +37,8 @@ async function proxyRequest(
   accessToken: string | null
 ) {
   // Build target URL through PKG Core proxy
-  // pkgCoreUrl is http://localhost:3000/api/v1, we need http://localhost:3000/internal/telegram
-  const baseUrl = config.pkgCoreUrl.replace(/\/api\/v1\/?$/, '');
-  const targetUrl = `${baseUrl}/internal/telegram/${path}`;
+  // pkgCoreUrl is http://localhost:3000/api/v1, routes through /api/v1/internal/telegram
+  const targetUrl = `${config.pkgCoreUrl}/internal/telegram/${path}`;
 
   // Get query params
   const query = getQuery(event);
