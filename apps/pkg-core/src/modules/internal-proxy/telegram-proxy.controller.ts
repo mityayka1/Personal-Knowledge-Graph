@@ -31,8 +31,9 @@ export class TelegramProxyController {
   @All('*path')
   async proxy(@Req() req: Request, @Res() res: Response) {
     // Extract the path after /internal/telegram/
-    // Note: path-to-regexp v8+ requires named parameter (*path) instead of just (*)
-    const path = (req.params as { path?: string }).path || '';
+    // Note: path-to-regexp v8+ returns array for wildcard params, need to join with /
+    const rawPath = (req.params as { path?: string | string[] }).path;
+    const path = Array.isArray(rawPath) ? rawPath.join('/') : rawPath || '';
     const targetUrl = `${this.telegramAdapterUrl}/api/v1/${path}`;
 
     this.logger.debug(`Proxying ${req.method} ${path} → ${targetUrl}`);
