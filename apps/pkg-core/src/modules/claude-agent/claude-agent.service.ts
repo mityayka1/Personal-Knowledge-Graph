@@ -117,15 +117,16 @@ export class ClaudeAgentService {
           abortController,
         },
       })) {
+        this.logger.log(`[oneshot] SDK message type=${message.type}`);
         this.accumulateUsage(message, usage);
 
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
-          this.logger.debug(`[oneshot] Result message: subtype=${resultMessage.subtype}, keys=${Object.keys(resultMessage).join(',')}`);
+          this.logger.log(`[oneshot] Result message: subtype=${resultMessage.subtype}, keys=${Object.keys(resultMessage).join(',')}`);
           // Check if it's a success result
           if (resultMessage.subtype === 'success' && 'result' in resultMessage) {
             rawResult = (resultMessage as { result?: string }).result || '';
-            this.logger.debug(`[oneshot] Raw result (first 500): ${rawResult.slice(0, 500)}`);
+            this.logger.log(`[oneshot] Raw result (first 500): ${rawResult.slice(0, 500)}`);
             result = this.parseStructuredOutput<T>(rawResult, params.schema);
           } else if (resultMessage.subtype.startsWith('error')) {
             throw new Error(`Claude returned error: ${resultMessage.subtype}`);
@@ -308,13 +309,24 @@ export class ClaudeAgentService {
 
   /**
    * Accumulate usage stats from SDK message
+   * SDK returns snake_case: input_tokens, output_tokens, cost_usd
    */
   private accumulateUsage(message: SDKMessage, usage: UsageStats): void {
     if (message.type === 'assistant' && 'usage' in message && message.usage) {
-      const u = message.usage as { inputTokens?: number; outputTokens?: number; costUSD?: number };
-      usage.inputTokens += u.inputTokens || 0;
-      usage.outputTokens += u.outputTokens || 0;
-      usage.totalCostUsd += u.costUSD || 0;
+      // SDK uses snake_case
+      const u = message.usage as {
+        input_tokens?: number;
+        output_tokens?: number;
+        cost_usd?: number;
+        // Legacy camelCase support
+        inputTokens?: number;
+        outputTokens?: number;
+        costUSD?: number;
+      };
+      usage.inputTokens += u.input_tokens || u.inputTokens || 0;
+      usage.outputTokens += u.output_tokens || u.outputTokens || 0;
+      usage.totalCostUsd += u.cost_usd || u.costUSD || 0;
+      this.logger.log(`[accumulateUsage] Added: in=${u.input_tokens || u.inputTokens || 0}, out=${u.output_tokens || u.outputTokens || 0}`);
     }
   }
 
