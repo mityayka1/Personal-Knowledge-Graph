@@ -5,6 +5,7 @@ import {
   EntityFact,
   EntityRecord,
   EntityType,
+  FactType,
   RelationType,
   RelationSource,
 } from '@pkg/entities';
@@ -212,16 +213,17 @@ export class RelationInferenceService {
   ): Promise<EntityFact[]> {
     const qb = this.factRepo
       .createQueryBuilder('f')
-      .where('f.factType = :type', { type: 'company' })
+      .where('f.factType = :type', { type: FactType.COMPANY })
       .andWhere('f.validUntil IS NULL') // Only current facts
       .andWhere(
         `NOT EXISTS (
         SELECT 1 FROM entity_relation_members m
         JOIN entity_relations r ON r.id = m.relation_id
         WHERE m.entity_id = f.entity_id
-          AND r.relation_type = 'employment'
+          AND r.relation_type = :relType
           AND m.valid_until IS NULL
       )`,
+        { relType: RelationType.EMPLOYMENT },
       )
       .orderBy('f.createdAt', 'DESC');
 
@@ -321,11 +323,19 @@ export class RelationInferenceService {
    * Removes legal forms, quotes, extra whitespace.
    */
   private normalizeCompanyName(name: string): string {
+    // Quote variants to remove:
+    // " ' - ASCII quotes
+    // " " - curly double quotes (U+201C, U+201D)
+    // ' ' - curly single quotes (U+2018, U+2019)
+    // „ ‚ - low-9 quotes (German/Cyrillic) (U+201E, U+201A)
+    // « » - guillemets (French/Russian) (U+00AB, U+00BB)
+    const QUOTE_REGEX = /["'""''„‚«»]/g;
+
     return name
       .toLowerCase()
-      .replace(/["'"""„«»''‚]/g, '') // Remove all quote variants
-      .replace(/\s*(ооо|оао|зао|пао|ао|ип|нко|гуп|муп|фгуп)\s*/gi, '') // Remove legal forms
-      .replace(/\s*(llc|inc|corp|ltd|gmbh|ag)\s*/gi, '') // Remove English legal forms
+      .replace(QUOTE_REGEX, '')
+      .replace(/\s*(ооо|оао|зао|пао|ао|ип|нко|гуп|муп|фгуп)\s*/gi, '') // Russian legal forms
+      .replace(/\s*(llc|inc|corp|ltd|gmbh|ag)\s*/gi, '') // English/German legal forms
       .replace(/\s+/g, ' ') // Normalize whitespace
       .trim();
   }
@@ -376,22 +386,23 @@ export class RelationInferenceService {
     organizationsInDb: number;
   }> {
     const totalCompanyFacts = await this.factRepo.count({
-      where: { factType: 'company' as any, validUntil: IsNull() },
+      where: { factType: FactType.COMPANY, validUntil: IsNull() },
     });
 
     // Use COUNT instead of loading all records for efficiency
     const unlinkedCompanyFacts = await this.factRepo
       .createQueryBuilder('f')
-      .where('f.factType = :type', { type: 'company' })
+      .where('f.factType = :type', { type: FactType.COMPANY })
       .andWhere('f.validUntil IS NULL')
       .andWhere(
         `NOT EXISTS (
           SELECT 1 FROM entity_relation_members m
           JOIN entity_relations r ON r.id = m.relation_id
           WHERE m.entity_id = f.entity_id
-            AND r.relation_type = 'employment'
+            AND r.relation_type = :relType
             AND m.valid_until IS NULL
         )`,
+        { relType: RelationType.EMPLOYMENT },
       )
       .getCount();
 

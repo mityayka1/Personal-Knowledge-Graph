@@ -207,6 +207,98 @@ describe('EntityRelationService', () => {
     });
   });
 
+  describe('findByPair', () => {
+    const mockQueryBuilder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      innerJoin: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn(),
+    };
+
+    beforeEach(() => {
+      mockRelationRepository.createQueryBuilder.mockReturnValue(mockQueryBuilder);
+      mockQueryBuilder.leftJoinAndSelect.mockReturnThis();
+      mockQueryBuilder.innerJoin.mockReturnThis();
+      mockQueryBuilder.andWhere.mockReturnThis();
+    });
+
+    it('should return null when no relation found', async () => {
+      mockQueryBuilder.getOne.mockResolvedValue(null);
+
+      const result = await service.findByPair('entity-1', 'entity-2');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return relation when found', async () => {
+      const relationWithMembers = {
+        ...mockRelation,
+        members: [
+          { entityId: 'entity-1', role: 'employee', validUntil: null },
+          { entityId: 'entity-2', role: 'employer', validUntil: null },
+        ],
+      };
+      mockQueryBuilder.getOne.mockResolvedValue(relationWithMembers);
+
+      const result = await service.findByPair('entity-1', 'entity-2');
+
+      expect(result).toEqual(relationWithMembers);
+    });
+
+    it('should be order-independent (A,B) == (B,A)', async () => {
+      // This tests the documented behavior: "Order-independent: findByPair(A, B) and findByPair(B, A)
+      // should return the same relation because search uses two independent INNER JOINs."
+      const relationWithMembers = {
+        ...mockRelation,
+        members: [
+          { entityId: 'entity-1', role: 'employee', validUntil: null },
+          { entityId: 'entity-2', role: 'employer', validUntil: null },
+        ],
+      };
+      mockQueryBuilder.getOne.mockResolvedValue(relationWithMembers);
+
+      // Call with (A, B)
+      const result1 = await service.findByPair('entity-1', 'entity-2');
+      const firstCallInnerJoins = mockQueryBuilder.innerJoin.mock.calls.slice();
+      mockQueryBuilder.innerJoin.mockClear();
+
+      // Call with (B, A)
+      const result2 = await service.findByPair('entity-2', 'entity-1');
+      const secondCallInnerJoins = mockQueryBuilder.innerJoin.mock.calls.slice();
+
+      // Both should return same relation
+      expect(result1).toEqual(result2);
+
+      // Verify both used independent INNER JOINs (the mechanism that makes it order-independent)
+      expect(firstCallInnerJoins.length).toBe(2);
+      expect(secondCallInnerJoins.length).toBe(2);
+    });
+
+    it('should filter by relationType when provided', async () => {
+      mockQueryBuilder.getOne.mockResolvedValue(null);
+
+      await service.findByPair('entity-1', 'entity-2', RelationType.EMPLOYMENT);
+
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+        'relation.relationType = :relationType',
+        { relationType: RelationType.EMPLOYMENT },
+      );
+    });
+
+    it('should only load active members (valid_until IS NULL)', async () => {
+      mockQueryBuilder.getOne.mockResolvedValue(null);
+
+      await service.findByPair('entity-1', 'entity-2');
+
+      // Verify leftJoinAndSelect includes the filter for active members
+      expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledWith(
+        'relation.members',
+        'member',
+        'member.valid_until IS NULL',
+      );
+    });
+  });
+
   describe('formatForContext', () => {
     it('should return empty string for no relations', () => {
       const result = service.formatForContext([]);

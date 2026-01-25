@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, ServiceUnavailableException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
+import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { MessageService } from '../interaction/message/message.service';
@@ -31,8 +31,7 @@ export class ExtractionController {
 
   constructor(
     private extractionService: FactExtractionService,
-    @Optional()
-    private relationInferenceService: RelationInferenceService | null,
+    private relationInferenceService: RelationInferenceService,
     @Inject(forwardRef(() => MessageService))
     private messageService: MessageService,
     @Inject(forwardRef(() => EntityService))
@@ -153,10 +152,6 @@ export class ExtractionController {
     @Query('sinceDate') sinceDate?: string,
     @Query('limit') limit?: string,
   ): Promise<InferenceResult> {
-    if (!this.relationInferenceService) {
-      throw new ServiceUnavailableException('RelationInferenceService not available');
-    }
-
     // Validate query parameters
     let parsedLimit: number | undefined;
     if (limit) {
@@ -193,10 +188,6 @@ export class ExtractionController {
    */
   @Get('relations/infer/stats')
   async getInferenceStats() {
-    if (!this.relationInferenceService) {
-      throw new ServiceUnavailableException('RelationInferenceService not available');
-    }
-
     return this.relationInferenceService.getInferenceStats();
   }
 }

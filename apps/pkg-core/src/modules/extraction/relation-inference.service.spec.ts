@@ -344,5 +344,90 @@ describe('RelationInferenceService', () => {
 
       expect(result.created).toBe(1);
     });
+
+    it('should skip very short company names (< 2 chars)', async () => {
+      // Company name "X" after normalization is too short to search
+      mockFactRepository.createQueryBuilder().getMany.mockResolvedValue([
+        { ...mockCompanyFact, value: 'X' },
+      ]);
+
+      const result = await service.inferRelations();
+
+      expect(result.processed).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(mockEntityService.findAll).not.toHaveBeenCalled();
+    });
+
+    it('should use default confidence (0.7) when fact.confidence is null', async () => {
+      const factWithoutConfidence = { ...mockCompanyFact, confidence: null };
+      mockFactRepository.createQueryBuilder().getMany.mockResolvedValue([factWithoutConfidence]);
+      mockEntityService.findAll.mockResolvedValue({
+        items: [mockOrgEntity],
+        total: 1,
+      });
+      mockEntityRelationService.findByPair.mockResolvedValue(null);
+      mockEntityRelationService.create.mockResolvedValue(mockRelation);
+
+      await service.inferRelations();
+
+      expect(mockEntityRelationService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          confidence: 0.7, // Default fallback
+        }),
+      );
+    });
+
+    it('should process multiple facts and create multiple relations', async () => {
+      const facts = [
+        { ...mockCompanyFact, id: 'fact-1', entityId: 'person-1', value: 'Сбербанк' },
+        { ...mockCompanyFact, id: 'fact-2', entityId: 'person-2', value: 'Газпром' },
+        { ...mockCompanyFact, id: 'fact-3', entityId: 'person-3', value: 'Яндекс' },
+      ];
+      const orgs = [
+        { ...mockOrgEntity, id: 'org-1', name: 'Сбербанк' },
+        { ...mockOrgEntity, id: 'org-2', name: 'Газпром' },
+        { ...mockOrgEntity, id: 'org-3', name: 'Яндекс' },
+      ];
+
+      mockFactRepository.createQueryBuilder().getMany.mockResolvedValue(facts);
+      // Return appropriate org for each search
+      mockEntityService.findAll
+        .mockResolvedValueOnce({ items: [orgs[0]], total: 1 })
+        .mockResolvedValueOnce({ items: [orgs[1]], total: 1 })
+        .mockResolvedValueOnce({ items: [orgs[2]], total: 1 });
+      mockEntityRelationService.findByPair.mockResolvedValue(null);
+      mockEntityRelationService.create.mockResolvedValue(mockRelation);
+
+      const result = await service.inferRelations();
+
+      expect(result.processed).toBe(3);
+      expect(result.created).toBe(3);
+      expect(result.skipped).toBe(0);
+      expect(mockEntityRelationService.create).toHaveBeenCalledTimes(3);
+    });
+
+    it('should handle mixed results (some created, some skipped, some errors)', async () => {
+      const facts = [
+        { ...mockCompanyFact, id: 'fact-1', entityId: 'person-1', value: 'Сбербанк' }, // Will succeed
+        { ...mockCompanyFact, id: 'fact-2', entityId: 'person-2', value: 'X' },        // Length 1 after norm, skipped
+        { ...mockCompanyFact, id: 'fact-3', entityId: 'person-3', value: 'ErrorOrg' }, // Will error
+      ];
+
+      mockFactRepository.createQueryBuilder().getMany.mockResolvedValue(facts);
+      mockEntityService.findAll
+        .mockResolvedValueOnce({ items: [mockOrgEntity], total: 1 }) // fact-1: found
+        // fact-2: skipped (too short), no findAll call
+        .mockRejectedValueOnce(new Error('DB error'));              // fact-3: error
+      mockEntityRelationService.findByPair.mockResolvedValue(null);
+      mockEntityRelationService.create.mockResolvedValue(mockRelation);
+
+      const result = await service.inferRelations();
+
+      expect(result.processed).toBe(3);
+      expect(result.created).toBe(1);
+      expect(result.skipped).toBe(1); // fact-2 skipped (too short)
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].factId).toBe('fact-3');
+    });
   });
 });

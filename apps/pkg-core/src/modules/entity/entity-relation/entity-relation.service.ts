@@ -169,7 +169,7 @@ export class EntityRelationService {
   ): Promise<EntityRelation | null> {
     const qb = this.relationRepo
       .createQueryBuilder('relation')
-      .leftJoinAndSelect('relation.members', 'member')
+      .leftJoinAndSelect('relation.members', 'member', 'member.valid_until IS NULL')
       .innerJoin(
         'relation.members',
         'm1',
