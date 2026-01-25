@@ -318,6 +318,24 @@ const { data } = await claudeAgentService.call<MyResponse>({
 
 **См. также:** [docs/TESTING_REAL_DATA.md](docs/TESTING_REAL_DATA.md) — тестирование на реальных данных
 
+### ⚠️ SDK Naming Convention: snake_case
+
+**Claude Agent SDK возвращает поля в snake_case**, а наш код использует camelCase. Это системная особенность.
+
+| Наш код (camelCase) | SDK возвращает (snake_case) |
+|---------------------|------------------------------|
+| `inputTokens` | `input_tokens` |
+| `outputTokens` | `output_tokens` |
+| `totalCostUsd` | `total_cost_usd` |
+| `structuredOutput` | `structured_output` |
+
+**При работе с SDK response:**
+1. Всегда проверяй реальные ключи через `Object.keys(message)`
+2. Usage находится в `result` message, НЕ в `assistant`
+3. Используй snake_case при доступе к полям SDK
+
+**Подробнее:** [docs/solutions/integration-issues/claude-sdk-snake-case-systemic-20250125.md](docs/solutions/integration-issues/claude-sdk-snake-case-systemic-20250125.md)
+
 ## AI Team
 
 Команда AI-субагентов для проекта PKG. Каждый агент специализируется на своей области.

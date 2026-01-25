@@ -106,6 +106,7 @@ if (message.type === 'result') {
 
 ## Связанные проблемы
 
+- [**SDK Snake_Case — Системная проблема**](./claude-sdk-snake-case-systemic-20250125.md) — корневая причина: SDK использует snake_case
 - [Missing outputFormat in Agent Mode](./structured-output-undefined-agent-mode-20260124.md) — `structured_output` undefined если не передать `outputFormat`
 - [Claude OAuth Token Expired](./claude-oauth-token-expired-ClaudeAgent-20260125.md) — истёкший OAuth токен также приводит к нулевым результатам
 
