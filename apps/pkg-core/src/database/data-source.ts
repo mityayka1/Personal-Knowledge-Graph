@@ -10,30 +10,8 @@ try {
   // dotenv not available, use environment variables directly
 }
 
-// Import entities from shared package
-import {
-  EntityRecord,
-  EntityIdentifier,
-  EntityFact,
-  Interaction,
-  InteractionParticipant,
-  Message,
-  TranscriptSegment,
-  InteractionSummary,
-  PendingEntityResolution,
-  PendingFact,
-  Job,
-  Setting,
-  ChatCategoryRecord,
-  GroupMembership,
-  EntityEvent,
-  EntityRelationshipProfile,
-  EntityRelation,
-  EntityRelationMember,
-  ClaudeCliRun,
-  ClaudeAgentRun,
-  User,
-} from '@pkg/entities';
+// Single source of truth for entities
+import { ALL_ENTITIES } from './entities';
 
 // Database configuration for TypeORM CLI
 // Load from environment variables with fallbacks for development
@@ -57,30 +35,8 @@ export const dataSourceOptions: DataSourceOptions = {
   // SSL for production
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
 
-  // Entities
-  entities: [
-    EntityRecord,
-    EntityIdentifier,
-    EntityFact,
-    Interaction,
-    InteractionParticipant,
-    Message,
-    TranscriptSegment,
-    InteractionSummary,
-    PendingEntityResolution,
-    PendingFact,
-    Job,
-    Setting,
-    ChatCategoryRecord,
-    GroupMembership,
-    EntityEvent,
-    EntityRelationshipProfile,
-    EntityRelation,
-    EntityRelationMember,
-    ClaudeCliRun,
-    ClaudeAgentRun,
-    User,
-  ],
+  // Entities from single source of truth
+  entities: [...ALL_ENTITIES],
 
   // Migrations
   migrations: [path.join(__dirname, 'migrations', '*{.ts,.js}')],

@@ -1,27 +1,8 @@
 import { registerAs } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
-import {
-  EntityRecord,
-  EntityIdentifier,
-  EntityFact,
-  Interaction,
-  InteractionParticipant,
-  Message,
-  TranscriptSegment,
-  InteractionSummary,
-  PendingEntityResolution,
-  PendingFact,
-  Job,
-  Setting,
-  ChatCategoryRecord,
-  GroupMembership,
-  EntityEvent,
-  EntityRelationshipProfile,
-  ClaudeCliRun,
-  ClaudeAgentRun,
-  User,
-  ExtractedEvent,
-} from '@pkg/entities';
+
+// Single source of truth for entities
+import { ALL_ENTITIES } from '../../database/entities';
 
 export default registerAs('database', (): TypeOrmModuleOptions => {
   const isRemoteDb = process.env.DB_HOST && process.env.DB_HOST !== 'localhost';
@@ -47,29 +28,8 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
           ? { rejectUnauthorized: process.env.DB_SSL_VERIFY !== 'false' }
           : false,
 
-    // Entities
-    entities: [
-      EntityRecord,
-      EntityIdentifier,
-      EntityFact,
-      Interaction,
-      InteractionParticipant,
-      Message,
-      TranscriptSegment,
-      InteractionSummary,
-      PendingEntityResolution,
-      PendingFact,
-      Job,
-      Setting,
-      ChatCategoryRecord,
-      GroupMembership,
-      EntityEvent,
-      EntityRelationshipProfile,
-      ClaudeCliRun,
-      ClaudeAgentRun,
-      User,
-      ExtractedEvent,
-    ],
+    // Entities from single source of truth
+    entities: [...ALL_ENTITIES],
 
     // Synchronize only for tests (creates tables automatically)
     // NEVER use synchronize in production!
