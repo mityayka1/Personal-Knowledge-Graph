@@ -298,8 +298,8 @@ export class FactExtractionService {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Batch extraction failed: ${message}`);
-      return { entityId, facts: [] };
+      this.logger.error(`Batch extraction failed for entity ${entityId}: ${message}`);
+      return { entityId, facts: [], tokensUsed: 0 };
     }
   }
 
