@@ -11,6 +11,9 @@ import { ContextEnrichmentService } from './context-enrichment.service';
 import { PromiseRecipientService } from './promise-recipient.service';
 import { EnrichmentProcessor } from './enrichment.processor';
 import { EnrichmentQueueService } from './enrichment-queue.service';
+import { ConversationGrouperService } from './conversation-grouper.service';
+import { CrossChatContextService } from './cross-chat-context.service';
+import { SubjectResolverService } from './subject-resolver.service';
 import { ExtractionController } from './extraction.controller';
 import { ExtractedEventController } from './extracted-event.controller';
 import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
@@ -22,6 +25,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 import { SettingsModule } from '../settings/settings.module';
 import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
+import { ConfirmationModule } from '../confirmation/confirmation.module';
 
 @Module({
   imports: [
@@ -43,6 +47,7 @@ import { EmbeddingModule } from '../embedding/embedding.module';
     SettingsModule,
     SearchModule,
     EmbeddingModule,
+    forwardRef(() => ConfirmationModule),
   ],
   controllers: [ExtractionController, ExtractedEventController],
   providers: [
@@ -55,6 +60,9 @@ import { EmbeddingModule } from '../embedding/embedding.module';
     PromiseRecipientService,
     EnrichmentProcessor,
     EnrichmentQueueService,
+    ConversationGrouperService,
+    CrossChatContextService,
+    SubjectResolverService,
     ExtractionToolsProvider,
   ],
   exports: [
@@ -66,6 +74,9 @@ import { EmbeddingModule } from '../embedding/embedding.module';
     ContextEnrichmentService,
     PromiseRecipientService,
     EnrichmentQueueService,
+    ConversationGrouperService,
+    CrossChatContextService,
+    SubjectResolverService,
     ExtractionToolsProvider,
   ],
 })

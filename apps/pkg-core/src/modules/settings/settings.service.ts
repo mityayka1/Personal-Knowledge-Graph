@@ -55,6 +55,19 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Порог разделения сессий в минутах. Если между сообщениями прошло больше этого времени, создаётся новая сессия.',
     category: 'session',
   },
+  // Conversation-based extraction settings
+  {
+    key: 'extraction.conversationGapMinutes',
+    value: 30,
+    description: 'Порог разделения бесед в минутах для extraction (сообщения с gap больше этого значения попадают в разные беседы)',
+    category: 'extraction',
+  },
+  {
+    key: 'extraction.crossChatContextMinutes',
+    value: 30,
+    description: 'Окно в минутах для поиска кросс-чат контекста (сообщения из других чатов с теми же участниками)',
+    category: 'extraction',
+  },
   // Notification settings
   {
     key: 'notification.highConfidenceThreshold',
@@ -80,9 +93,15 @@ const DEFAULT_SETTINGS: Array<{
 export class SettingsService implements OnModuleInit {
   private readonly logger = new Logger(SettingsService.name);
 
-  // Cache for session gap threshold (queried on every message)
+  // Cache for frequently accessed settings (queried on every message)
   private sessionGapCache: { value: number; expiresAt: number } | null = null;
+  private conversationGapCache: { value: number; expiresAt: number } | null = null;
+  private crossChatContextCache: { value: number; expiresAt: number } | null = null;
   private readonly CACHE_TTL_MS = 60_000; // 1 minute
+
+  // Default values for conversation-based extraction
+  private readonly DEFAULT_CONVERSATION_GAP_MINUTES = 30;
+  private readonly DEFAULT_CROSS_CHAT_CONTEXT_MINUTES = 30;
 
   constructor(
     @InjectRepository(Setting)
@@ -220,6 +239,43 @@ export class SettingsService implements OnModuleInit {
     const value = (minutes ?? DEFAULT_SESSION_GAP_MINUTES) * 60 * 1000;
 
     this.sessionGapCache = { value, expiresAt: now + this.CACHE_TTL_MS };
+    return value;
+  }
+
+  /**
+   * Get conversation gap threshold in milliseconds for grouping messages into conversations.
+   * Cached for 1 minute to avoid DB query on every message.
+   */
+  async getConversationGapMs(): Promise<number> {
+    const now = Date.now();
+
+    if (this.conversationGapCache && this.conversationGapCache.expiresAt > now) {
+      return this.conversationGapCache.value;
+    }
+
+    const minutes = await this.getValue<number>('extraction.conversationGapMinutes');
+    const value = (minutes ?? this.DEFAULT_CONVERSATION_GAP_MINUTES) * 60 * 1000;
+
+    this.conversationGapCache = { value, expiresAt: now + this.CACHE_TTL_MS };
+    return value;
+  }
+
+  /**
+   * Get cross-chat context window in milliseconds.
+   * Used to find related messages from other chats with same participants.
+   * Cached for 1 minute.
+   */
+  async getCrossChatContextMs(): Promise<number> {
+    const now = Date.now();
+
+    if (this.crossChatContextCache && this.crossChatContextCache.expiresAt > now) {
+      return this.crossChatContextCache.value;
+    }
+
+    const minutes = await this.getValue<number>('extraction.crossChatContextMinutes');
+    const value = (minutes ?? this.DEFAULT_CROSS_CHAT_CONTEXT_MINUTES) * 60 * 1000;
+
+    this.crossChatContextCache = { value, expiresAt: now + this.CACHE_TTL_MS };
     return value;
   }
 }

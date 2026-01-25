@@ -31,6 +31,7 @@ import { MediaModule } from './modules/media/media.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { InternalProxyModule } from './modules/internal-proxy/internal-proxy.module';
+import { ConfirmationModule } from './modules/confirmation/confirmation.module';
 
 @Module({
   imports: [
@@ -108,6 +109,7 @@ import { InternalProxyModule } from './modules/internal-proxy/internal-proxy.mod
     MediaModule,
     NotificationModule,
     InternalProxyModule,
+    ConfirmationModule,
   ],
   providers: [
     // Global Combined Auth Guard - supports JWT and API Key

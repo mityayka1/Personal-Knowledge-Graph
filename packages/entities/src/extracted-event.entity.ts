@@ -129,6 +129,19 @@ export interface EnrichmentData {
   enrichmentFailureReason?: string;
   /** Timestamp when enrichment was performed */
   enrichedAt?: string;
+
+  // === Subject Resolution (for third-party fact attribution) ===
+
+  /** Flag indicating this fact mentions a third party and needs entity resolution */
+  needsSubjectResolution?: boolean;
+  /** Name/mention of the subject as extracted from text (e.g., "Игорь", "мой брат") */
+  subjectMention?: string;
+  /** Entity ID of the conversation participant (for context during resolution) */
+  conversationEntityId?: string;
+  /** Entity ID after subject resolution (auto-resolved or user-confirmed) */
+  resolvedEntityId?: string;
+  /** ID of pending confirmation created for subject resolution */
+  pendingConfirmationId?: string;
 }
 
 /**
