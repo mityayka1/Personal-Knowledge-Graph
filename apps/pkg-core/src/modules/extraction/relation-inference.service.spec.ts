@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { RelationInferenceService } from './relation-inference.service';
 import { EntityService } from '../entity/entity.service';
 import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   EntityFact,
   EntityRecord,
@@ -63,6 +64,13 @@ describe('RelationInferenceService', () => {
     create: jest.fn(),
   };
 
+  const mockSettingsService = {
+    getInferenceSettings: jest.fn().mockResolvedValue({
+      similarityThreshold: 0.7,
+      defaultLimit: 1000,
+    }),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -80,6 +88,10 @@ describe('RelationInferenceService', () => {
         {
           provide: EntityRelationService,
           useValue: mockEntityRelationService,
+        },
+        {
+          provide: SettingsService,
+          useValue: mockSettingsService,
         },
       ],
     }).compile();
@@ -134,7 +146,8 @@ describe('RelationInferenceService', () => {
       const result = await service.inferRelations({ dryRun: true });
 
       expect(result.processed).toBe(1);
-      expect(result.created).toBe(1);
+      expect(result.created).toBe(0);  // Nothing actually created in dry-run
+      expect(result.wouldCreate).toBe(1);  // Reports what would be created
       expect(result.details).toBeDefined();
       expect(result.details).toHaveLength(1);
       expect(result.details![0]).toMatchObject({

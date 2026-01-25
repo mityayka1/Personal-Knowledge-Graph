@@ -10,6 +10,7 @@ import {
 } from '@pkg/entities';
 import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
 import { EntityService } from '../entity/entity.service';
+import { SettingsService } from '../settings/settings.service';
 
 /**
  * Options for relation inference.
@@ -29,13 +30,15 @@ export interface InferenceOptions {
 export interface InferenceResult {
   /** Number of facts processed */
   processed: number;
-  /** Number of relations created */
+  /** Number of relations actually created (0 in dry-run mode) */
   created: number;
+  /** Number of relations that would be created (populated in dry-run mode) */
+  wouldCreate?: number;
   /** Number of facts skipped (org not found, relation exists, etc.) */
   skipped: number;
   /** Errors encountered */
   errors: Array<{ factId: string; error: string }>;
-  /** Details of created relations (for dry-run) */
+  /** Details of relations that would be created (populated in dry-run mode) */
   details?: Array<{
     factId: string;
     entityId: string;
@@ -65,6 +68,7 @@ export class RelationInferenceService {
     private readonly factRepo: Repository<EntityFact>,
     private readonly entityService: EntityService,
     private readonly entityRelationService: EntityRelationService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   /**
@@ -78,15 +82,19 @@ export class RelationInferenceService {
     const result: InferenceResult = {
       processed: 0,
       created: 0,
+      wouldCreate: options?.dryRun ? 0 : undefined,
       skipped: 0,
       errors: [],
       details: options?.dryRun ? [] : undefined,
     };
 
+    // Load inference settings
+    const settings = await this.settingsService.getInferenceSettings();
+
     // 1. Find company facts without corresponding employment relations
     const companyFacts = await this.findUnlinkedCompanyFacts(
       options?.sinceDate,
-      options?.limit,
+      options?.limit ?? settings.defaultLimit,
     );
 
     this.logger.log(
@@ -105,7 +113,7 @@ export class RelationInferenceService {
         }
 
         // 2. Try to find organization entity by company name
-        const org = await this.findOrganizationByName(fact.value);
+        const org = await this.findOrganizationByName(fact.value, settings.similarityThreshold);
 
         if (!org) {
           this.logger.debug(
@@ -139,7 +147,7 @@ export class RelationInferenceService {
             organizationName: org.name,
             relationType: RelationType.EMPLOYMENT,
           });
-          result.created++;
+          result.wouldCreate!++;
           this.logger.log(
             `[DRY-RUN] Would create employment: ${fact.entityId} → ${org.name}`,
           );
@@ -175,8 +183,11 @@ export class RelationInferenceService {
     }
 
     this.logger.log(
-      `Inference complete: processed=${result.processed}, created=${result.created}, ` +
-        `skipped=${result.skipped}, errors=${result.errors.length}` +
+      `Inference complete: processed=${result.processed}, ` +
+        (options?.dryRun
+          ? `wouldCreate=${result.wouldCreate}`
+          : `created=${result.created}`) +
+        `, skipped=${result.skipped}, errors=${result.errors.length}` +
         (options?.dryRun ? ' [DRY-RUN]' : ''),
     );
 
@@ -230,10 +241,14 @@ export class RelationInferenceService {
    * Strategy:
    * 1. Try exact match on normalized name
    * 2. Try fuzzy search on first word
-   * 3. Return best match if similarity > 0.7
+   * 3. Return best match if similarity > threshold
+   *
+   * @param name - Company name to search for
+   * @param similarityThreshold - Minimum similarity for matching (from settings)
    */
   private async findOrganizationByName(
     name: string,
+    similarityThreshold: number,
   ): Promise<EntityRecord | null> {
     // Normalize name
     const normalized = this.normalizeCompanyName(name);
@@ -258,24 +273,29 @@ export class RelationInferenceService {
           type: EntityType.ORGANIZATION,
           limit: 5,
         });
-        return this.findBestMatch(normalized, fuzzyResult.items);
+        return this.findBestMatch(normalized, fuzzyResult.items, similarityThreshold);
       }
       return null;
     }
 
-    return this.findBestMatch(normalized, result.items);
+    return this.findBestMatch(normalized, result.items, similarityThreshold);
   }
 
   /**
    * Find best matching organization from candidates.
-   * Returns the one with highest similarity > 0.7, or null.
+   * Returns the one with highest similarity > threshold, or null.
+   *
+   * @param searchTerm - Normalized search term
+   * @param candidates - Candidate organizations
+   * @param threshold - Minimum similarity threshold (from settings)
    */
   private findBestMatch(
     searchTerm: string,
     candidates: EntityRecord[],
+    threshold: number,
   ): EntityRecord | null {
     let bestMatch: EntityRecord | null = null;
-    let bestSimilarity = 0.7; // Minimum threshold
+    let bestSimilarity = threshold; // Minimum threshold from settings
 
     for (const org of candidates) {
       const orgNormalized = this.normalizeCompanyName(org.name);
@@ -289,7 +309,7 @@ export class RelationInferenceService {
 
     if (bestMatch) {
       this.logger.debug(
-        `Matched "${searchTerm}" to "${bestMatch.name}" (similarity: ${bestSimilarity.toFixed(2)})`,
+        `Matched "${searchTerm}" to "${bestMatch.name}" (similarity: ${bestSimilarity.toFixed(2)}, threshold: ${threshold})`,
       );
     }
 

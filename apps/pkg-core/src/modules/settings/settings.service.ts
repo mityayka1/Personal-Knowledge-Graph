@@ -68,6 +68,19 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Окно в минутах для поиска кросс-чат контекста (сообщения из других чатов с теми же участниками)',
     category: 'extraction',
   },
+  // Inference settings (relation inference from facts)
+  {
+    key: 'inference.similarityThreshold',
+    value: 0.7,
+    description: 'Минимальный порог схожести для matching организаций (0.0-1.0). Выше = строже.',
+    category: 'inference',
+  },
+  {
+    key: 'inference.defaultLimit',
+    value: 1000,
+    description: 'Максимальное количество фактов для обработки за один запуск inference',
+    category: 'inference',
+  },
   // Notification settings
   {
     key: 'notification.highConfidenceThreshold',
@@ -221,6 +234,22 @@ export class SettingsService implements OnModuleInit {
       highConfidenceThreshold: highConfidenceThreshold ?? 0.9,
       urgentMeetingHoursWindow: urgentMeetingHoursWindow ?? 24,
       expirationDays: expirationDays ?? 7,
+    };
+  }
+
+  // Helper to get inference settings (relation inference from facts)
+  async getInferenceSettings(): Promise<{
+    similarityThreshold: number;
+    defaultLimit: number;
+  }> {
+    const [similarityThreshold, defaultLimit] = await Promise.all([
+      this.getValue<number>('inference.similarityThreshold'),
+      this.getValue<number>('inference.defaultLimit'),
+    ]);
+
+    return {
+      similarityThreshold: similarityThreshold ?? 0.7,
+      defaultLimit: defaultLimit ?? 1000,
     };
   }
 
