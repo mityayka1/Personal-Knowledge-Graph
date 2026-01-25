@@ -20,10 +20,17 @@ jest.mock('../claude-agent/claude-agent.service', () => ({
 // Import after mock
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
+import { ConversationGrouperService } from './conversation-grouper.service';
+import { CrossChatContextService } from './cross-chat-context.service';
+import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
+import { ConversationGroup, MessageData } from './extraction.types';
 
 describe('SecondBrainExtractionService', () => {
   let service: SecondBrainExtractionService;
   let extractedEventRepo: jest.Mocked<Repository<ExtractedEvent>>;
+  let conversationGrouperService: jest.Mocked<ConversationGrouperService>;
+  let crossChatContextService: jest.Mocked<CrossChatContextService>;
+  let entityFactService: jest.Mocked<EntityFactService>;
 
   const mockExtractedEvent: Partial<ExtractedEvent> = {
     id: 'test-event-id',
@@ -77,11 +84,34 @@ describe('SecondBrainExtractionService', () => {
             }),
           },
         },
+        {
+          provide: ConversationGrouperService,
+          useValue: {
+            formatConversationForPrompt: jest.fn().mockReturnValue(
+              '[14:00] Собеседник: Привет!\n[14:01] Я: Привет, как дела?',
+            ),
+          },
+        },
+        {
+          provide: CrossChatContextService,
+          useValue: {
+            getContext: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: EntityFactService,
+          useValue: {
+            getContextForExtraction: jest.fn().mockResolvedValue(''),
+          },
+        },
       ],
     }).compile();
 
     service = module.get<SecondBrainExtractionService>(SecondBrainExtractionService);
     extractedEventRepo = module.get(getRepositoryToken(ExtractedEvent));
+    conversationGrouperService = module.get(ConversationGrouperService);
+    crossChatContextService = module.get(CrossChatContextService);
+    entityFactService = module.get(EntityFactService);
   });
 
   it('should be defined', () => {
@@ -329,6 +359,336 @@ describe('SecondBrainExtractionService', () => {
       expect(mockQueryBuilder.set).toHaveBeenCalledWith({
         status: ExtractedEventStatus.EXPIRED,
       });
+    });
+  });
+
+  describe('extractFromConversation', () => {
+    const mockConversation: ConversationGroup = {
+      messages: [
+        {
+          id: 'msg-1',
+          content: 'Привет! Созвонимся завтра в 15:00?',
+          timestamp: '2025-01-25T14:00:00.000Z',
+          isOutgoing: false,
+          senderEntityId: 'entity-1',
+          senderEntityName: 'Пётр',
+        },
+        {
+          id: 'msg-2',
+          content: 'Да, давай! Я подготовлю документы.',
+          timestamp: '2025-01-25T14:01:00.000Z',
+          isOutgoing: true,
+        },
+      ],
+      startedAt: new Date('2025-01-25T14:00:00.000Z'),
+      endedAt: new Date('2025-01-25T14:01:00.000Z'),
+      participantEntityIds: ['entity-1'],
+    };
+
+    it('should extract events from conversation', async () => {
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          events: [
+            {
+              type: 'meeting',
+              confidence: 0.85,
+              sourceQuote: 'Созвонимся завтра в 15:00',
+              data: {
+                datetime: '2025-01-26T15:00:00Z',
+                dateText: 'завтра в 15:00',
+              },
+            },
+            {
+              type: 'promise_by_me',
+              confidence: 0.9,
+              sourceQuote: 'Я подготовлю документы',
+              data: {
+                what: 'Подготовить документы',
+              },
+            },
+          ],
+        },
+        usage: { inputTokens: 200, outputTokens: 100, totalCostUsd: 0.002 },
+        run: { id: 'run-conv-1' } as any,
+      });
+
+      const meetingEvent = {
+        ...mockExtractedEvent,
+        eventType: ExtractedEventType.MEETING,
+      };
+      const promiseEvent = {
+        ...mockExtractedEvent,
+        eventType: ExtractedEventType.PROMISE_BY_ME,
+      };
+
+      extractedEventRepo.create
+        .mockReturnValueOnce(meetingEvent as ExtractedEvent)
+        .mockReturnValueOnce(promiseEvent as ExtractedEvent);
+      extractedEventRepo.save
+        .mockResolvedValueOnce(meetingEvent as ExtractedEvent)
+        .mockResolvedValueOnce(promiseEvent as ExtractedEvent);
+
+      const result = await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(conversationGrouperService.formatConversationForPrompt).toHaveBeenCalledWith(
+        mockConversation,
+        { includeTimestamps: true, maxLength: 6000 },
+      );
+      expect(mockClaudeAgentService.call).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: 'oneshot',
+          taskType: 'event_extraction',
+          model: 'haiku',
+          timeout: 90000,
+        }),
+      );
+      expect(result.sourceMessageIds).toEqual(['msg-1', 'msg-2']);
+      expect(result.extractedEvents).toHaveLength(2);
+      expect(result.tokensUsed).toBe(300);
+    });
+
+    it('should filter low confidence events', async () => {
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          events: [
+            {
+              type: 'meeting',
+              confidence: 0.3, // Below threshold 0.6
+              data: { topic: 'maybe meeting' },
+            },
+            {
+              type: 'task',
+              confidence: 0.8, // Above threshold
+              data: { what: 'Review code' },
+            },
+          ],
+        },
+        usage: { inputTokens: 150, outputTokens: 80, totalCostUsd: 0.0015 },
+        run: { id: 'run-conv-2' } as any,
+      });
+
+      const taskEvent = {
+        ...mockExtractedEvent,
+        eventType: ExtractedEventType.TASK,
+      };
+      extractedEventRepo.create.mockReturnValue(taskEvent as ExtractedEvent);
+      extractedEventRepo.save.mockResolvedValue(taskEvent as ExtractedEvent);
+
+      const result = await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      // Only task event should be saved (confidence 0.8 >= 0.6)
+      expect(extractedEventRepo.save).toHaveBeenCalledTimes(1);
+      expect(result.extractedEvents).toHaveLength(1);
+    });
+
+    it('should handle third-party fact with subject resolution', async () => {
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          events: [
+            {
+              type: 'fact',
+              confidence: 0.9,
+              sourceQuote: 'У Игоря ДР 10 августа',
+              data: {
+                factType: 'birthday',
+                value: '10 августа',
+                quote: 'У Игоря ДР 10 августа',
+              },
+              subjectMention: 'Игорь', // Third-party mention
+            },
+          ],
+        },
+        usage: { inputTokens: 100, outputTokens: 50, totalCostUsd: 0.001 },
+        run: { id: 'run-conv-3' } as any,
+      });
+
+      const factEvent = {
+        ...mockExtractedEvent,
+        eventType: ExtractedEventType.FACT,
+        entityId: null, // Should be null for third-party
+        enrichmentData: {
+          needsSubjectResolution: true,
+          subjectMention: 'Игорь',
+          conversationEntityId: 'entity-1',
+        },
+      };
+      extractedEventRepo.create.mockReturnValue(factEvent as ExtractedEvent);
+      extractedEventRepo.save.mockResolvedValue(factEvent as ExtractedEvent);
+
+      const result = await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(extractedEventRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityId: null, // null because needs resolution
+          eventType: ExtractedEventType.FACT,
+          enrichmentData: expect.objectContaining({
+            needsSubjectResolution: true,
+            subjectMention: 'Игорь',
+            conversationEntityId: 'entity-1',
+          }),
+        }),
+      );
+      expect(result.extractedEvents).toHaveLength(1);
+    });
+
+    it('should include entity context in prompt', async () => {
+      entityFactService.getContextForExtraction.mockResolvedValue(
+        'Должность: менеджер\nКомпания: Acme Corp',
+      );
+
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: { events: [] },
+        usage: { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.0005 },
+        run: { id: 'run-conv-4' } as any,
+      });
+
+      await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(entityFactService.getContextForExtraction).toHaveBeenCalledWith('entity-1');
+      expect(mockClaudeAgentService.call).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining('ИЗВЕСТНЫЕ ФАКТЫ О СОБЕСЕДНИКЕ'),
+        }),
+      );
+    });
+
+    it('should include cross-chat context when available', async () => {
+      crossChatContextService.getContext.mockResolvedValue(
+        '[13:50] Личный чат | Собеседник: Встретимся в 15:00 в офисе',
+      );
+
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: { events: [] },
+        usage: { inputTokens: 150, outputTokens: 30, totalCostUsd: 0.0008 },
+        run: { id: 'run-conv-5' } as any,
+      });
+
+      await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(crossChatContextService.getContext).toHaveBeenCalledWith(
+        'interaction-1',
+        ['entity-1'],
+        mockConversation.endedAt,
+      );
+      expect(mockClaudeAgentService.call).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining('СВЯЗАННЫЙ КОНТЕКСТ'),
+        }),
+      );
+    });
+
+    it('should handle extraction errors gracefully', async () => {
+      mockClaudeAgentService.call.mockRejectedValue(new Error('LLM timeout'));
+
+      const result = await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(result.extractedEvents).toHaveLength(0);
+      expect(result.tokensUsed).toBe(0);
+      expect(result.sourceMessageIds).toEqual(['msg-1', 'msg-2']);
+    });
+
+    it('should handle failed entity context retrieval gracefully', async () => {
+      entityFactService.getContextForExtraction.mockRejectedValue(
+        new Error('Entity not found'),
+      );
+
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: { events: [] },
+        usage: { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.0005 },
+        run: { id: 'run-conv-6' } as any,
+      });
+
+      // Should not throw
+      const result = await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(result.extractedEvents).toHaveLength(0);
+      expect(mockClaudeAgentService.call).toHaveBeenCalled();
+    });
+
+    it('should handle failed cross-chat context retrieval gracefully', async () => {
+      crossChatContextService.getContext.mockRejectedValue(
+        new Error('Database error'),
+      );
+
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: { events: [] },
+        usage: { inputTokens: 100, outputTokens: 20, totalCostUsd: 0.0005 },
+        run: { id: 'run-conv-7' } as any,
+      });
+
+      // Should not throw
+      const result = await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(result.extractedEvents).toHaveLength(0);
+      expect(mockClaudeAgentService.call).toHaveBeenCalled();
+    });
+
+    it('should use first message ID as primary source', async () => {
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          events: [
+            {
+              type: 'task',
+              confidence: 0.85,
+              data: { what: 'Test task' },
+            },
+          ],
+        },
+        usage: { inputTokens: 100, outputTokens: 50, totalCostUsd: 0.001 },
+        run: { id: 'run-conv-8' } as any,
+      });
+
+      const taskEvent = {
+        ...mockExtractedEvent,
+        eventType: ExtractedEventType.TASK,
+      };
+      extractedEventRepo.create.mockReturnValue(taskEvent as ExtractedEvent);
+      extractedEventRepo.save.mockResolvedValue(taskEvent as ExtractedEvent);
+
+      await service.extractFromConversation(
+        mockConversation,
+        'entity-1',
+        'interaction-1',
+      );
+
+      expect(extractedEventRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceMessageId: 'msg-1', // First message in conversation
+          sourceInteractionId: 'interaction-1',
+        }),
+      );
     });
   });
 });

@@ -23,6 +23,7 @@ export * from './entity-relation-member.entity';
 export { ClaudeCliRun } from './claude-cli-run.entity';
 export * from './claude-agent-run.entity';
 export * from './user.entity';
+export * from './pending-confirmation.entity';
 export * from './brief.types';
 export * from './brief.constants';
 export * from './utils/html.utils';

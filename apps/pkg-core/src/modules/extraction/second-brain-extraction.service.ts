@@ -1,7 +1,10 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThanOrEqual } from 'typeorm';
 import { EnrichmentQueueService } from './enrichment-queue.service';
+import { CrossChatContextService } from './cross-chat-context.service';
+import { ConversationGrouperService } from './conversation-grouper.service';
+import { ConversationGroup, MessageData } from './extraction.types';
 import {
   ExtractedEvent,
   ExtractedEventType,
@@ -15,6 +18,7 @@ import {
 } from '@pkg/entities';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
+import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 
 /**
  * Raw event extracted by LLM
@@ -75,6 +79,63 @@ const SECOND_BRAIN_EXTRACTION_SCHEMA = {
   required: ['events'],
 };
 
+/**
+ * JSON Schema for Conversation-Based extraction.
+ * Extends the base schema with subjectMention for third-party fact attribution.
+ */
+const CONVERSATION_EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    events: {
+      type: 'array',
+      description: 'Array of extracted events from the conversation',
+      items: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: ['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact', 'cancellation'],
+            description: 'Event type',
+          },
+          confidence: {
+            type: 'number',
+            minimum: 0,
+            maximum: 1,
+            description: 'Confidence score 0.0-1.0',
+          },
+          sourceQuote: {
+            type: 'string',
+            description: 'Original text fragment that triggered extraction',
+          },
+          data: {
+            type: 'object',
+            description: 'Event-specific data (see type descriptions)',
+            additionalProperties: true,
+          },
+          subjectMention: {
+            type: 'string',
+            description:
+              'Name/mention of the person this fact is about (only for fact type). ' +
+              'Examples: "Игорь", "мой брат", "начальник Иванов". ' +
+              'Leave empty if fact is about the direct conversation participant.',
+          },
+        },
+        required: ['type', 'confidence', 'data'],
+      },
+    },
+  },
+  required: ['events'],
+};
+
+interface RawConversationEvent extends RawExtractedEvent {
+  /** Name/mention of person the fact is about (for third-party facts) */
+  subjectMention?: string;
+}
+
+interface ConversationExtractionResponse {
+  events: RawConversationEvent[];
+}
+
 interface ExtractionResponse {
   events: RawExtractedEvent[];
 }
@@ -82,6 +143,15 @@ interface ExtractionResponse {
 export interface SecondBrainExtractionResult {
   sourceMessageId: string;
   extractedEvents: ExtractedEvent[];
+  tokensUsed: number;
+}
+
+export interface ConversationExtractionResult {
+  /** IDs of all messages in the conversation */
+  sourceMessageIds: string[];
+  /** Extracted events from the conversation */
+  extractedEvents: ExtractedEvent[];
+  /** Total tokens used for extraction */
   tokensUsed: number;
 }
 
@@ -103,6 +173,15 @@ export class SecondBrainExtractionService {
     private settingsService: SettingsService,
     @Optional()
     private enrichmentQueueService: EnrichmentQueueService | null,
+    @Optional()
+    @Inject(forwardRef(() => CrossChatContextService))
+    private crossChatContextService: CrossChatContextService | null,
+    @Optional()
+    @Inject(forwardRef(() => ConversationGrouperService))
+    private conversationGrouperService: ConversationGrouperService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityFactService))
+    private entityFactService: EntityFactService | null,
   ) {}
 
   /**
@@ -289,6 +368,241 @@ export class SecondBrainExtractionService {
     }
 
     return results;
+  }
+
+  /**
+   * Extract events from a grouped conversation (multiple messages together).
+   *
+   * This provides better context than single-message extraction:
+   * - Understands references across messages
+   * - Resolves ambiguous pronouns
+   * - Detects third-party mentions for fact attribution
+   *
+   * @param conversation - Grouped conversation with messages
+   * @param entityId - Entity ID of the main participant (other than user)
+   * @param interactionId - ID of the interaction
+   */
+  async extractFromConversation(
+    conversation: ConversationGroup,
+    entityId: string,
+    interactionId: string,
+  ): Promise<ConversationExtractionResult> {
+    // Check if required services are available
+    if (!this.conversationGrouperService) {
+      this.logger.warn('ConversationGrouperService not available');
+      return {
+        sourceMessageIds: conversation.messages.map((m) => m.id),
+        extractedEvents: [],
+        tokensUsed: 0,
+      };
+    }
+
+    // Get entity context for better extraction
+    let entityContext = '';
+    if (this.entityFactService && entityId) {
+      try {
+        entityContext = await this.entityFactService.getContextForExtraction(entityId);
+      } catch (e) {
+        this.logger.warn(`Failed to get entity context: ${e}`);
+      }
+    }
+
+    // Get cross-chat context
+    let crossChatContext: string | null = null;
+    if (this.crossChatContextService && conversation.participantEntityIds.length > 0) {
+      try {
+        crossChatContext = await this.crossChatContextService.getContext(
+          interactionId,
+          conversation.participantEntityIds,
+          conversation.endedAt,
+        );
+      } catch (e) {
+        this.logger.warn(`Failed to get cross-chat context: ${e}`);
+      }
+    }
+
+    // Format conversation for prompt
+    const formattedConversation = this.conversationGrouperService.formatConversationForPrompt(
+      conversation,
+      { includeTimestamps: true, maxLength: 6000 },
+    );
+
+    // Build full prompt with system instructions and context
+    const systemInstructions = this.buildConversationSystemPrompt(entityContext, crossChatContext);
+    const fullPrompt = `${systemInstructions}\n\n---\n\nБеседа:\n\n${formattedConversation}`;
+
+    // Get extraction settings
+    const settings = await this.settingsService.getExtractionSettings();
+
+    try {
+      const { data, usage } = await this.claudeAgentService.call<ConversationExtractionResponse>({
+        mode: 'oneshot',
+        taskType: 'event_extraction',
+        prompt: fullPrompt,
+        schema: CONVERSATION_EXTRACTION_SCHEMA,
+        model: 'haiku',
+        referenceType: 'interaction',
+        referenceId: interactionId,
+        timeout: 90000, // Longer timeout for conversation
+      });
+
+      const rawEvents = data?.events || [];
+      const savedEvents: ExtractedEvent[] = [];
+      const sourceMessageIds = conversation.messages.map((m) => m.id);
+
+      // Use first message ID as the primary source for events
+      const primaryMessageId = sourceMessageIds[0];
+
+      for (const rawEvent of rawEvents) {
+        // Skip low confidence
+        if (rawEvent.confidence < settings.minConfidence) {
+          continue;
+        }
+
+        const eventType = this.mapEventType(rawEvent.type);
+        if (!eventType) {
+          this.logger.warn(`Unknown event type: ${rawEvent.type}`);
+          continue;
+        }
+
+        const extractedData = this.normalizeEventData(eventType, rawEvent.data);
+
+        try {
+          // Check if fact needs subject resolution (third-party mention)
+          const needsSubjectResolution =
+            eventType === ExtractedEventType.FACT && !!rawEvent.subjectMention;
+
+          const event = this.extractedEventRepo.create({
+            sourceMessageId: primaryMessageId,
+            sourceInteractionId: interactionId,
+            entityId: needsSubjectResolution ? null : entityId, // null if needs resolution
+            eventType,
+            extractedData,
+            sourceQuote: rawEvent.sourceQuote?.substring(0, settings.maxQuoteLength) || null,
+            confidence: Math.min(1, Math.max(0, rawEvent.confidence)),
+            status: ExtractedEventStatus.PENDING,
+            needsContext: false,
+            enrichmentData: needsSubjectResolution
+              ? {
+                  needsSubjectResolution: true,
+                  subjectMention: rawEvent.subjectMention,
+                  conversationEntityId: entityId, // For context
+                }
+              : null,
+          });
+
+          const saved = await this.extractedEventRepo.save(event);
+          savedEvents.push(saved);
+        } catch (saveError) {
+          const msg = saveError instanceof Error ? saveError.message : String(saveError);
+          this.logger.warn(`Failed to save extracted event: ${msg}`);
+        }
+      }
+
+      this.logger.log(
+        `Extracted ${savedEvents.length} events from conversation ` +
+          `(${conversation.messages.length} messages, interactionId=${interactionId})`,
+      );
+
+      return {
+        sourceMessageIds,
+        extractedEvents: savedEvents,
+        tokensUsed: usage.inputTokens + usage.outputTokens,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Conversation extraction failed: ${message}`);
+      return {
+        sourceMessageIds: conversation.messages.map((m) => m.id),
+        extractedEvents: [],
+        tokensUsed: 0,
+      };
+    }
+  }
+
+  /**
+   * Build system prompt for conversation-based extraction.
+   */
+  private buildConversationSystemPrompt(
+    entityContext: string,
+    crossChatContext: string | null,
+  ): string {
+    const today = new Date().toISOString().split('T')[0];
+
+    let prompt = `Ты — агент для извлечения событий из БЕСЕД (не отдельных сообщений).
+Сегодня: ${today}
+
+`;
+
+    if (entityContext) {
+      prompt += `═══════════════════════════════════════════════════════════════
+ИЗВЕСТНЫЕ ФАКТЫ О СОБЕСЕДНИКЕ:
+${entityContext}
+═══════════════════════════════════════════════════════════════
+
+`;
+    }
+
+    if (crossChatContext) {
+      prompt += `═══════════════════════════════════════════════════════════════
+СВЯЗАННЫЙ КОНТЕКСТ (другие чаты за последние 30 мин):
+${crossChatContext}
+═══════════════════════════════════════════════════════════════
+
+`;
+    }
+
+    prompt += `ПРАВИЛА ИЗВЛЕЧЕНИЯ:
+
+1. Анализируй БЕСЕДУ ЦЕЛИКОМ, не отдельные сообщения
+   - Учитывай контекст предыдущих сообщений
+   - Если сообщение неясно без контекста — смотри на предыдущие
+
+2. СУБЪЕКТ ФАКТА — не всегда собеседник!
+   - "У Игоря ДР 10 августа" → subjectMention: "Игорь" (третье лицо)
+   - "Мой ДР 15 марта" → subjectMention: null (сам собеседник)
+   - "У начальника жена врач" → subjectMention: "начальник"
+
+3. PROMISE определяется по АВТОРУ сообщения:
+   - Автор = "Я" → promise_by_me
+   - Автор = собеседник → promise_by_them
+
+4. Используй СВЯЗАННЫЙ КОНТЕКСТ для понимания отсылок:
+   - "как договорились" → смотри crossChatContext
+   - "по нашему вопросу" → ищи тему в истории
+
+5. НЕ извлекай:
+   - Вопросы (только утверждения)
+   - Гипотетические ситуации
+   - Шутки и сарказм
+
+ТИПЫ СОБЫТИЙ:
+
+1. **meeting** — встреча/созвон с датой
+   data: { datetime?, dateText?, topic?, participants?: [] }
+
+2. **promise_by_me** — моё обещание
+   data: { what, deadline?, deadlineText? }
+
+3. **promise_by_them** — обещание собеседника
+   data: { what, deadline?, deadlineText? }
+
+4. **task** — задача от собеседника мне
+   data: { what, priority?: "low"|"normal"|"high"|"urgent", deadline?, deadlineText? }
+
+5. **fact** — факт о человеке (ДР, телефон, email, должность, компания)
+   data: { factType, value, quote }
+   + subjectMention если факт о третьем лице
+
+6. **cancellation** — отмена/перенос
+   data: { what, newDateTime?, newDateText?, reason? }
+
+ВАЖНО:
+- confidence 0.0-1.0 (высокий если явно, низкий если вывод)
+- sourceQuote — цитата из беседы
+- ВСЕ ОПИСАНИЯ НА РУССКОМ (даже если оригинал на английском)`;
+
+    return prompt;
   }
 
   /**

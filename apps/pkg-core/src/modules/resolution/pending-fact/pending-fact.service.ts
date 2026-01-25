@@ -96,4 +96,16 @@ export class PendingFactService {
 
     return this.pendingFactRepo.save(fact);
   }
+
+  /**
+   * Update the subject (owner entity) of a pending fact.
+   * Used when subject resolution determines the correct entity.
+   */
+  async updateSubject(id: string, entityId: string): Promise<PendingFact> {
+    const fact = await this.findOne(id);
+
+    fact.entityId = entityId;
+
+    return this.pendingFactRepo.save(fact);
+  }
 }

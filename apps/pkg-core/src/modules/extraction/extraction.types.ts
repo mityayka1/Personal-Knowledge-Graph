@@ -72,3 +72,21 @@ export interface CrossChatContext {
   /** Time window description (e.g., "last 30 minutes") */
   timeWindow: string;
 }
+
+/**
+ * Result of subject resolution for a fact.
+ */
+export type SubjectResolution =
+  | { status: 'resolved'; entityId: string }
+  | { status: 'pending'; confirmationId: string }
+  | { status: 'unknown'; suggestedName: string };
+
+/**
+ * Entity candidate for subject resolution.
+ */
+export interface SubjectCandidate {
+  id: string;
+  name: string;
+  displayName: string;
+  isParticipant: boolean;
+}
