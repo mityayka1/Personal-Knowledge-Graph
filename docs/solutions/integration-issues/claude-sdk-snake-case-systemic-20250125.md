@@ -140,9 +140,18 @@ interface UsageStats {
 
 ## Рекомендация
 
-**Краткосрочно (сейчас):** Вариант C — документировать паттерн в CLAUDE.md
+~~**Краткосрочно (сейчас):** Вариант C — документировать паттерн в CLAUDE.md~~
 
-**Среднесрочно (при рефакторинге ClaudeAgentService):** Вариант A — создать `normalizeSDKResult()`
+~~**Среднесрочно (при рефакторинге ClaudeAgentService):** Вариант A — создать `normalizeSDKResult()`~~
+
+### ✅ РЕШЕНО — Вариант A реализован
+
+**PR:** [#90 feat(claude-agent): add centralized SDK response transformer](https://github.com/mityayka1/Personal-Knowledge-Graph/pull/90)
+
+Создан `sdk-transformer.ts` с:
+- SDK типами (`SDKUsage`, `SDKResultFields`)
+- Normalized типами (`NormalizedResultFields<T>`)
+- Функциями трансформации (`normalizeSDKResult<T>()`, `accumulateSDKUsage()`, etc.)
 
 ## Связанные проблемы
 
@@ -158,6 +167,6 @@ interface UsageStats {
 
 ## Action Items
 
-- [ ] Добавить в CLAUDE.md секцию "SDK Naming Convention"
-- [ ] При следующем рефакторинге — создать `normalizeSDKResult()`
-- [ ] Обновить типы или добавить SDK-специфичные интерфейсы
+- [x] Добавить в CLAUDE.md секцию "SDK Naming Convention"
+- [x] Создать `normalizeSDKResult()` — PR #90
+- [x] Добавить SDK-специфичные интерфейсы (`SDKUsage`, `SDKResultFields`)
