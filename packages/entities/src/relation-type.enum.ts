@@ -26,6 +26,7 @@ export enum RelationSource {
   MANUAL = 'manual',
   EXTRACTED = 'extracted',
   IMPORTED = 'imported',
+  INFERRED = 'inferred', // Auto-inferred from existing facts (e.g., company fact → employment relation)
 }
 
 /**

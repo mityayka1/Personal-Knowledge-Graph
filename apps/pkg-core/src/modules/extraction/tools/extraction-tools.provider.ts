@@ -263,28 +263,45 @@ export class ExtractionToolsProvider {
 
   /**
    * create_relation - Create a relation between entities.
+   * Enhanced description to encourage LLM to use this tool more often.
    */
   private createRelationTool() {
     return tool(
       'create_relation',
-      `Создать связь между сущностями.
+      `ОБЯЗАТЕЛЬНО создавай связь при любом упоминании отношений между людьми/организациями!
 
-Типы связей и роли:
-- employment: employee (работник), employer (работодатель)
-- reporting: subordinate (подчинённый), manager (руководитель)
-- team: member (участник), lead (лидер)
-- marriage: spouse (супруг/супруга)
-- parenthood: parent (родитель), child (ребёнок)
-- siblinghood: sibling (брат/сестра)
-- friendship: friend (друг)
-- acquaintance: acquaintance (знакомый)
-- partnership: partner (партнёр)
-- client_vendor: client (клиент), vendor (поставщик)
+ТРИГГЕРЫ — вызывай create_relation когда видишь:
+• Рабочие: "работает в", "устроился в", "уволился из", "коллега", "начальник", "подчинённый", "сотрудник"
+• Семейные: "жена", "муж", "сын", "дочь", "брат", "сестра", "родители", "супруг"
+• Социальные: "друг", "подруга", "знакомый", "партнёр"
 
-Примеры:
-- "работает в Сбере" → employment: [{entityId: person, role: "employee"}, {entityId: org, role: "employer"}]
-- "мой начальник" → reporting: [{entityId: me, role: "subordinate"}, {entityId: boss, role: "manager"}]
-- "жена" → marriage: [{entityId: p1, role: "spouse"}, {entityId: p2, role: "spouse"}]`,
+АЛГОРИТМ:
+1. Найди обе сущности через find_entity_by_name
+2. Если сущность не найдена — создай через create_pending_entity
+3. Вызови create_relation с ID обеих сущностей
+
+ТИПЫ СВЯЗЕЙ И РОЛИ:
+• employment: employee ↔ employer — "работает в X", "сотрудник Y", "устроился в"
+• reporting: subordinate ↔ manager — "начальник", "руководитель", "подчинённый", "босс"
+• team: member ↔ lead — "в команде", "тимлид", "коллега"
+• marriage: spouse ↔ spouse — "жена", "муж", "супруг(а)"
+• parenthood: parent ↔ child — "отец", "мать", "сын", "дочь", "ребёнок"
+• siblinghood: sibling ↔ sibling — "брат", "сестра"
+• friendship: friend ↔ friend — "друг", "подруга", "лучший друг"
+• acquaintance: acquaintance ↔ acquaintance — "знакомый", "знакомая"
+• partnership: partner ↔ partner — "партнёр", "бизнес-партнёр"
+• client_vendor: client ↔ vendor — "клиент", "поставщик", "заказчик"
+
+ПРИМЕР ПОЛНОГО FLOW:
+Сообщение: "Маша работает в Сбере"
+1. find_entity_by_name("Маша") → найдено entityId: "abc-123"
+2. find_entity_by_name("Сбер") → найдено entityId: "xyz-789"
+3. create_relation(employment, [{entityId: "abc-123", role: "employee"}, {entityId: "xyz-789", role: "employer"}])
+
+Если сущность НЕ найдена:
+1. find_entity_by_name("Сбер") → пусто
+2. create_pending_entity(suggestedName: "Сбер", mentionedAs: "место работы Маши")
+3. Связь будет создана позже, когда pending entity будет resolved`,
       {
         relationType: z
           .enum([

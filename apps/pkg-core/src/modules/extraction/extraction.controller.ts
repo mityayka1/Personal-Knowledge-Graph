@@ -1,5 +1,6 @@
-import { Controller, Post, Body, Param, Get, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Param, Get, Query, NotFoundException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
 import { FactExtractionService } from './fact-extraction.service';
+import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { MessageService } from '../interaction/message/message.service';
 import { EntityService } from '../entity/entity.service';
 
@@ -30,6 +31,8 @@ export class ExtractionController {
 
   constructor(
     private extractionService: FactExtractionService,
+    @Optional()
+    private relationInferenceService: RelationInferenceService | null,
     @Inject(forwardRef(() => MessageService))
     private messageService: MessageService,
     @Inject(forwardRef(() => EntityService))
@@ -131,5 +134,62 @@ export class ExtractionController {
     this.logger.log(`[extractFactsFromHistory] Final response: ${JSON.stringify({ ...response, facts: response.facts?.length || 0 })}`);
 
     return response;
+  }
+
+  /**
+   * Infer relations from existing facts.
+   * POST /extraction/relations/infer
+   *
+   * Creates employment relations from company facts by matching
+   * organization names in the database.
+   *
+   * @param dryRun - If 'true', only report what would be created
+   * @param sinceDate - Only process facts created after this date (ISO 8601)
+   * @param limit - Maximum number of facts to process
+   */
+  @Post('relations/infer')
+  async inferRelations(
+    @Query('dryRun') dryRun?: string,
+    @Query('sinceDate') sinceDate?: string,
+    @Query('limit') limit?: string,
+  ): Promise<InferenceResult> {
+    if (!this.relationInferenceService) {
+      return {
+        processed: 0,
+        created: 0,
+        skipped: 0,
+        errors: [{ factId: '', error: 'RelationInferenceService not available' }],
+      };
+    }
+
+    const options = {
+      dryRun: dryRun === 'true',
+      sinceDate: sinceDate ? new Date(sinceDate) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    };
+
+    this.logger.log(
+      `[inferRelations] Starting inference with options: ${JSON.stringify(options)}`,
+    );
+
+    return this.relationInferenceService.inferRelations(options);
+  }
+
+  /**
+   * Get statistics about potential inference candidates.
+   * GET /extraction/relations/infer/stats
+   */
+  @Get('relations/infer/stats')
+  async getInferenceStats() {
+    if (!this.relationInferenceService) {
+      return {
+        totalCompanyFacts: 0,
+        unlinkedCompanyFacts: 0,
+        organizationsInDb: 0,
+        error: 'RelationInferenceService not available',
+      };
+    }
+
+    return this.relationInferenceService.getInferenceStats();
   }
 }

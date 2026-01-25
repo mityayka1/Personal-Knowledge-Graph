@@ -150,6 +150,51 @@ export class EntityRelationService {
   }
 
   /**
+   * Найти связь между двумя конкретными сущностями.
+   * Используется для проверки дубликатов при inference.
+   *
+   * @param entityId1 - ID первой сущности
+   * @param entityId2 - ID второй сущности
+   * @param relationType - Опционально: фильтр по типу связи
+   * @returns Первая найденная активная связь или null
+   */
+  async findByPair(
+    entityId1: string,
+    entityId2: string,
+    relationType?: RelationType,
+  ): Promise<EntityRelation | null> {
+    const qb = this.relationRepo
+      .createQueryBuilder('relation')
+      .leftJoinAndSelect('relation.members', 'member')
+      .innerJoin(
+        'relation.members',
+        'm1',
+        'm1.entity_id = :entityId1 AND m1.valid_until IS NULL',
+        { entityId1 },
+      )
+      .innerJoin(
+        'relation.members',
+        'm2',
+        'm2.entity_id = :entityId2 AND m2.valid_until IS NULL',
+        { entityId2 },
+      );
+
+    if (relationType) {
+      qb.andWhere('relation.relationType = :relationType', { relationType });
+    }
+
+    const relation = await qb.getOne();
+
+    if (relation) {
+      this.logger.debug(
+        `Found existing relation ${relation.id} (${relation.relationType}) between ${entityId1} and ${entityId2}`,
+      );
+    }
+
+    return relation;
+  }
+
+  /**
    * Добавить участника в существующую связь.
    */
   async addMember(relationId: string, dto: AddMemberDto): Promise<EntityRelationMember> {
