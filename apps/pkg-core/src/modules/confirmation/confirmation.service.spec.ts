@@ -122,7 +122,7 @@ describe('ConfirmationService', () => {
       expect(mockRepository.save).not.toHaveBeenCalled();
     });
 
-    it('should deduplicate by sourcePendingFactId', async () => {
+    it('should deduplicate by sourcePendingFactId for non-FACT_SUBJECT types', async () => {
       const dto: CreateConfirmationDto = {
         ...createDto,
         sourcePendingFactId: 'fact-1',
@@ -135,6 +135,89 @@ describe('ConfirmationService', () => {
         'c.source_pending_fact_id = :factId',
         { factId: 'fact-1' },
       );
+    });
+
+    describe('FACT_SUBJECT deduplication', () => {
+      const factSubjectDto: CreateConfirmationDto = {
+        type: PendingConfirmationType.FACT_SUBJECT,
+        context: {
+          title: 'О ком этот факт?',
+          description: 'Упоминание: "Игорь"',
+        },
+        options: mockOptions,
+        confidence: 0.7,
+      };
+
+      it('should deduplicate FACT_SUBJECT by context.description', async () => {
+        mockQueryBuilder.getOne.mockResolvedValue(null);
+
+        await service.create(factSubjectDto);
+
+        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+          "c.context->>'description' = :description",
+          { description: 'Упоминание: "Игорь"' },
+        );
+      });
+
+      it('should return existing confirmation for same subject mention', async () => {
+        const existing = {
+          ...mockConfirmation,
+          id: 'existing-fact-subject',
+          type: PendingConfirmationType.FACT_SUBJECT,
+          context: {
+            title: 'О ком этот факт?',
+            description: 'Упоминание: "Игорь"',
+          },
+        };
+        mockQueryBuilder.getOne.mockResolvedValue(existing);
+
+        const result = await service.create(factSubjectDto);
+
+        expect(result.id).toBe('existing-fact-subject');
+        expect(mockRepository.save).not.toHaveBeenCalled();
+      });
+
+      it('should create new confirmation for different subject mention', async () => {
+        // First call: check for existing (returns null)
+        mockQueryBuilder.getOne.mockResolvedValue(null);
+
+        const differentSubjectDto: CreateConfirmationDto = {
+          ...factSubjectDto,
+          context: {
+            title: 'О ком этот факт?',
+            description: 'Упоминание: "Мария"',
+          },
+        };
+
+        await service.create(differentSubjectDto);
+
+        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+          "c.context->>'description' = :description",
+          { description: 'Упоминание: "Мария"' },
+        );
+        expect(mockRepository.save).toHaveBeenCalled();
+      });
+
+      it('should fallback to sourcePendingFactId when description is empty', async () => {
+        mockQueryBuilder.getOne.mockResolvedValue(null);
+
+        const emptyDescriptionDto: CreateConfirmationDto = {
+          type: PendingConfirmationType.FACT_SUBJECT,
+          context: {
+            title: 'О ком этот факт?',
+            description: '', // Empty description
+          },
+          options: mockOptions,
+          sourcePendingFactId: 'fact-123',
+        };
+
+        await service.create(emptyDescriptionDto);
+
+        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+          'c.source_pending_fact_id = :factId',
+          { factId: 'fact-123' },
+        );
+      });
     });
 
     it('should set null for optional fields when not provided', async () => {

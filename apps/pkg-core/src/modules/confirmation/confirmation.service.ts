@@ -267,21 +267,44 @@ export class ConfirmationService {
       .andWhere('c.status = :status', { status: PendingConfirmationStatus.PENDING });
 
     // Type-specific deduplication logic
-    if (dto.sourcePendingFactId) {
-      qb.andWhere('c.source_pending_fact_id = :factId', {
-        factId: dto.sourcePendingFactId,
-      });
-    } else if (dto.sourceExtractedEventId) {
-      qb.andWhere('c.source_extracted_event_id = :eventId', {
-        eventId: dto.sourceExtractedEventId,
-      });
-    } else if (dto.sourceEntityId && dto.sourceMessageId) {
-      qb.andWhere('c.source_entity_id = :entityId', { entityId: dto.sourceEntityId })
-        .andWhere('c.source_message_id = :messageId', { messageId: dto.sourceMessageId });
-    } else if (dto.sourceEntityId) {
-      // For entity merge, check by context title (which contains entity names)
-      qb.andWhere('c.source_entity_id = :entityId', { entityId: dto.sourceEntityId })
-        .andWhere("c.context->>'title' = :title", { title: dto.context.title });
+    switch (dto.type) {
+      case PendingConfirmationType.FACT_SUBJECT:
+        // For FACT_SUBJECT, dedupe by context.description (contains subject mention)
+        // This prevents multiple confirmations for the same subject name
+        if (dto.context.description) {
+          qb.andWhere("c.context->>'description' = :description", {
+            description: dto.context.description,
+          });
+        } else if (dto.sourcePendingFactId) {
+          qb.andWhere('c.source_pending_fact_id = :factId', {
+            factId: dto.sourcePendingFactId,
+          });
+        } else if (dto.sourceExtractedEventId) {
+          qb.andWhere('c.source_extracted_event_id = :eventId', {
+            eventId: dto.sourceExtractedEventId,
+          });
+        }
+        break;
+
+      default:
+        // Generic deduplication by source IDs
+        if (dto.sourcePendingFactId) {
+          qb.andWhere('c.source_pending_fact_id = :factId', {
+            factId: dto.sourcePendingFactId,
+          });
+        } else if (dto.sourceExtractedEventId) {
+          qb.andWhere('c.source_extracted_event_id = :eventId', {
+            eventId: dto.sourceExtractedEventId,
+          });
+        } else if (dto.sourceEntityId && dto.sourceMessageId) {
+          qb.andWhere('c.source_entity_id = :entityId', { entityId: dto.sourceEntityId })
+            .andWhere('c.source_message_id = :messageId', { messageId: dto.sourceMessageId });
+        } else if (dto.sourceEntityId) {
+          // For entity merge, check by context title (which contains entity names)
+          qb.andWhere('c.source_entity_id = :entityId', { entityId: dto.sourceEntityId })
+            .andWhere("c.context->>'title' = :title", { title: dto.context.title });
+        }
+        break;
     }
 
     return qb.getOne();
