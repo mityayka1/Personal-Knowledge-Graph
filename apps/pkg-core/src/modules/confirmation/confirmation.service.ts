@@ -72,17 +72,20 @@ export class ConfirmationService {
 
   /**
    * Resolve a confirmation with user's selected option.
+   * Uses atomic update to prevent race conditions.
    */
   async resolve(
     id: string,
     optionId: string,
     resolution?: Record<string, unknown>,
   ): Promise<PendingConfirmation> {
+    // First, get the confirmation to check options and current status
     const confirmation = await this.repo.findOne({ where: { id } });
     if (!confirmation) {
       throw new NotFoundException(`Confirmation ${id} not found`);
     }
 
+    // If already resolved, return as-is (idempotent)
     if (confirmation.status !== PendingConfirmationStatus.PENDING) {
       this.logger.warn(`Confirmation ${id} is already ${confirmation.status}`);
       return confirmation;
@@ -91,17 +94,47 @@ export class ConfirmationService {
     // Check if decline option
     const selectedOption = confirmation.options.find((o) => o.id === optionId);
     const isDecline = selectedOption?.isDecline || optionId === 'decline';
-
-    confirmation.status = isDecline
+    const newStatus = isDecline
       ? PendingConfirmationStatus.DECLINED
       : PendingConfirmationStatus.CONFIRMED;
+    const resolvedAt = new Date();
+
+    // Use atomic update with WHERE status = 'pending' to prevent race conditions
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateData: any = {
+      status: newStatus,
+      selectedOptionId: optionId,
+      resolution: resolution ?? null,
+      resolvedAt,
+      resolvedBy: PendingConfirmationResolvedBy.USER,
+    };
+    const updateResult = await this.repo
+      .createQueryBuilder()
+      .update(PendingConfirmation)
+      .set(updateData)
+      .where('id = :id', { id })
+      .andWhere('status = :status', { status: PendingConfirmationStatus.PENDING })
+      .execute();
+
+    // If no rows affected, someone else resolved it concurrently
+    if (updateResult.affected === 0) {
+      this.logger.warn(`Confirmation ${id} was resolved by another process`);
+      // Re-fetch to get the current state
+      const current = await this.repo.findOne({ where: { id } });
+      if (!current) {
+        throw new NotFoundException(`Confirmation ${id} not found`);
+      }
+      return current;
+    }
+
+    this.logger.log(`Resolved confirmation ${id} with option ${optionId}`);
+
+    // Update local object for dispatch and return
+    confirmation.status = newStatus;
     confirmation.selectedOptionId = optionId;
     confirmation.resolution = resolution ?? null;
-    confirmation.resolvedAt = new Date();
+    confirmation.resolvedAt = resolvedAt;
     confirmation.resolvedBy = PendingConfirmationResolvedBy.USER;
-
-    await this.repo.save(confirmation);
-    this.logger.log(`Resolved confirmation ${id} with option ${optionId}`);
 
     // Dispatch to type-specific handler
     await this.dispatchResolution(confirmation);

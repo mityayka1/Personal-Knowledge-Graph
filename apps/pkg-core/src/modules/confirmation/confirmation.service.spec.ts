@@ -266,6 +266,11 @@ describe('ConfirmationService', () => {
   });
 
   describe('resolve', () => {
+    beforeEach(() => {
+      // Mock successful atomic update
+      mockQueryBuilder.execute.mockResolvedValue({ affected: 1 });
+    });
+
     it('should resolve confirmation with CONFIRMED status for regular option', async () => {
       mockRepository.findOne.mockResolvedValue({ ...mockConfirmation });
 
@@ -276,7 +281,9 @@ describe('ConfirmationService', () => {
       expect(result.resolution).toEqual({ entityId: 'entity-1' });
       expect(result.resolvedBy).toBe(PendingConfirmationResolvedBy.USER);
       expect(result.resolvedAt).toBeDefined();
-      expect(mockRepository.save).toHaveBeenCalled();
+      // Should use atomic update via QueryBuilder
+      expect(mockQueryBuilder.update).toHaveBeenCalled();
+      expect(mockQueryBuilder.execute).toHaveBeenCalled();
     });
 
     it('should resolve confirmation with DECLINED status for decline option', async () => {
@@ -320,7 +327,7 @@ describe('ConfirmationService', () => {
 
       // Should return as-is, not update
       expect(result.selectedOptionId).toBe('opt-1');
-      expect(mockRepository.save).not.toHaveBeenCalled();
+      expect(mockQueryBuilder.execute).not.toHaveBeenCalled();
     });
 
     it('should set resolution to null when not provided', async () => {
@@ -329,6 +336,28 @@ describe('ConfirmationService', () => {
       const result = await service.resolve('confirmation-uuid-1', 'opt-1');
 
       expect(result.resolution).toBeNull();
+    });
+
+    it('should handle concurrent resolution gracefully', async () => {
+      // First find returns pending confirmation
+      mockRepository.findOne
+        .mockResolvedValueOnce({ ...mockConfirmation })
+        // Second find (after concurrent resolution) returns already resolved
+        .mockResolvedValueOnce({
+          ...mockConfirmation,
+          status: PendingConfirmationStatus.CONFIRMED,
+          selectedOptionId: 'opt-2',
+          resolvedBy: PendingConfirmationResolvedBy.USER,
+        });
+
+      // Atomic update fails because someone else resolved it
+      mockQueryBuilder.execute.mockResolvedValue({ affected: 0 });
+
+      const result = await service.resolve('confirmation-uuid-1', 'opt-1');
+
+      // Should return the state set by the other process
+      expect(result.status).toBe(PendingConfirmationStatus.CONFIRMED);
+      expect(result.selectedOptionId).toBe('opt-2');
     });
   });
 
