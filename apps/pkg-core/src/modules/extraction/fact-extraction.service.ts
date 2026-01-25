@@ -87,7 +87,8 @@ const AGENT_EXTRACTION_SCHEMA = {
 const MIN_MESSAGE_LENGTH = 20;
 const ONESHOT_CONTENT_LIMIT = 1500;
 const AGENT_CONTENT_LIMIT = 2000;
-const BATCH_CONTENT_LIMIT = 12000; // For batch extraction with many messages
+const BATCH_CONTENT_LIMIT = 12000; // For oneshot batch extraction with many messages
+const AGENT_BATCH_CONTENT_LIMIT = 8000; // For agent batch extraction (more expensive)
 const SOURCE_QUOTE_MAX_LENGTH = 200;
 const SEARCH_TEXT_MAX_LENGTH = 500;
 
@@ -616,7 +617,7 @@ ${memorySection}
         return `${direction} ${m.content}`;
       })
       .join('\n---\n')
-      .substring(0, CONTEXT_SIZE_LIMIT);
+      .substring(0, AGENT_BATCH_CONTENT_LIMIT);
 
     // Create extraction context
     const extractionContext = {
