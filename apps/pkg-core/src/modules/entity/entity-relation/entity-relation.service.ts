@@ -153,6 +153,10 @@ export class EntityRelationService {
    * Найти связь между двумя конкретными сущностями.
    * Используется для проверки дубликатов при inference.
    *
+   * **Order-independent:** Порядок entityId1 и entityId2 не важен.
+   * findByPair(A, B) и findByPair(B, A) вернут одну и ту же связь,
+   * т.к. поиск выполняется через два независимых INNER JOIN.
+   *
    * @param entityId1 - ID первой сущности
    * @param entityId2 - ID второй сущности
    * @param relationType - Опционально: фильтр по типу связи
