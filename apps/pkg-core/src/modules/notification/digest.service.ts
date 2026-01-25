@@ -208,7 +208,12 @@ export class DigestService {
     const events = await this.notificationService.getPendingEventsForDigest('medium', 10);
 
     if (events.length === 0) {
-      this.logger.debug('No events for hourly digest');
+      // Send "no events" message (same pattern as sendDailyDigest)
+      await this.telegramNotifier.send({
+        message: '<b>Дайджест событий</b>\n\nНет новых событий для обработки.',
+        parseMode: 'HTML',
+      });
+      this.logger.debug('Hourly digest sent (empty)');
       return;
     }
 
