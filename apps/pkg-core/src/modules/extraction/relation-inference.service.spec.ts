@@ -50,6 +50,7 @@ describe('RelationInferenceService', () => {
       orderBy: jest.fn().mockReturnThis(),
       limit: jest.fn().mockReturnThis(),
       getMany: jest.fn(),
+      getCount: jest.fn(),
     }),
   };
 
@@ -219,6 +220,15 @@ describe('RelationInferenceService', () => {
       expect(mockFactRepository.createQueryBuilder().limit).toHaveBeenCalledWith(2);
     });
 
+    it('should apply default limit when no limit specified', async () => {
+      mockFactRepository.createQueryBuilder().getMany.mockResolvedValue([]);
+
+      await service.inferRelations();
+
+      // DEFAULT_LIMIT = 1000
+      expect(mockFactRepository.createQueryBuilder().limit).toHaveBeenCalledWith(1000);
+    });
+
     it('should respect sinceDate option', async () => {
       const sinceDate = new Date('2025-01-01');
       mockFactRepository.createQueryBuilder().getMany.mockResolvedValue([]);
@@ -235,11 +245,8 @@ describe('RelationInferenceService', () => {
   describe('getInferenceStats', () => {
     it('should return statistics about inference candidates', async () => {
       mockFactRepository.count.mockResolvedValue(10);
-      mockFactRepository.createQueryBuilder().getMany.mockResolvedValue([
-        mockCompanyFact,
-        mockCompanyFact,
-        mockCompanyFact,
-      ]);
+      // getCount returns number directly instead of array
+      mockFactRepository.createQueryBuilder().getCount.mockResolvedValue(3);
       mockEntityService.findAll.mockResolvedValue({
         items: [mockOrgEntity],
         total: 5,

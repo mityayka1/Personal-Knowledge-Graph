@@ -184,6 +184,11 @@ export class RelationInferenceService {
   }
 
   /**
+   * Default limit to prevent unbounded scans.
+   */
+  private static readonly DEFAULT_LIMIT = 1000;
+
+  /**
    * Find company facts that don't have corresponding employment relations.
    *
    * Uses a NOT EXISTS subquery to exclude facts where:
@@ -213,9 +218,8 @@ export class RelationInferenceService {
       qb.andWhere('f.createdAt >= :since', { since: sinceDate });
     }
 
-    if (limit) {
-      qb.limit(limit);
-    }
+    // Always apply limit to prevent unbounded scans
+    qb.limit(limit ?? RelationInferenceService.DEFAULT_LIMIT);
 
     return qb.getMany();
   }
@@ -355,7 +359,21 @@ export class RelationInferenceService {
       where: { factType: 'company' as any, validUntil: IsNull() },
     });
 
-    const unlinkedFacts = await this.findUnlinkedCompanyFacts();
+    // Use COUNT instead of loading all records for efficiency
+    const unlinkedCompanyFacts = await this.factRepo
+      .createQueryBuilder('f')
+      .where('f.factType = :type', { type: 'company' })
+      .andWhere('f.validUntil IS NULL')
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM entity_relation_members m
+          JOIN entity_relations r ON r.id = m.relation_id
+          WHERE m.entity_id = f.entity_id
+            AND r.relation_type = 'employment'
+            AND m.valid_until IS NULL
+        )`,
+      )
+      .getCount();
 
     const orgsResult = await this.entityService.findAll({
       type: EntityType.ORGANIZATION,
@@ -364,7 +382,7 @@ export class RelationInferenceService {
 
     return {
       totalCompanyFacts,
-      unlinkedCompanyFacts: unlinkedFacts.length,
+      unlinkedCompanyFacts,
       organizationsInDb: orgsResult.total,
     };
   }

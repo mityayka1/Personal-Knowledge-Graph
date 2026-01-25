@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
+import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, ServiceUnavailableException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { MessageService } from '../interaction/message/message.service';
@@ -154,12 +154,7 @@ export class ExtractionController {
     @Query('limit') limit?: string,
   ): Promise<InferenceResult> {
     if (!this.relationInferenceService) {
-      return {
-        processed: 0,
-        created: 0,
-        skipped: 0,
-        errors: [{ factId: '', error: 'RelationInferenceService not available' }],
-      };
+      throw new ServiceUnavailableException('RelationInferenceService not available');
     }
 
     // Validate query parameters
@@ -199,12 +194,7 @@ export class ExtractionController {
   @Get('relations/infer/stats')
   async getInferenceStats() {
     if (!this.relationInferenceService) {
-      return {
-        totalCompanyFacts: 0,
-        unlinkedCompanyFacts: 0,
-        organizationsInDb: 0,
-        error: 'RelationInferenceService not available',
-      };
+      throw new ServiceUnavailableException('RelationInferenceService not available');
     }
 
     return this.relationInferenceService.getInferenceStats();
