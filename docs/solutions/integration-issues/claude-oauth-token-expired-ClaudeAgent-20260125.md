@@ -142,3 +142,4 @@ API ключ не истекает и не требует интерактивн
 - [.claude/agents/claude-code-expert.md](../../../.claude/agents/claude-code-expert.md) — полная документация по авторизации
 - [Missing outputFormat in Agent Mode](./structured-output-undefined-agent-mode-20260124.md) — другая причина нулевых результатов от agent mode
 - [Claude SDK Usage Extraction](./claude-sdk-usage-extraction-20250125.md) — usage данные в snake_case и в `result` message
+- [**Claude SDK Snake_Case — Системная проблема**](./claude-sdk-snake-case-systemic-20250125.md) — централизованный трансформер для snake_case → camelCase
