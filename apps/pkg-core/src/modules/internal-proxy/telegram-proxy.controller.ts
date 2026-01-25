@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
+import { extractWildcardPath, WildcardParams } from '../../common/utils';
 
 /**
  * Proxy controller for Telegram Adapter requests.
@@ -15,6 +16,8 @@ import { Request, Response } from 'express';
  *
  * This maintains the architectural principle that Dashboard
  * communicates only with PKG Core, not directly with adapters.
+ *
+ * @see docs/solutions/integration-issues/source-agnostic-architecture-prevention.md
  */
 @Controller('internal/telegram')
 export class TelegramProxyController {
@@ -31,9 +34,8 @@ export class TelegramProxyController {
   @All('*path')
   async proxy(@Req() req: Request, @Res() res: Response) {
     // Extract the path after /internal/telegram/
-    // Note: path-to-regexp v8+ returns array for wildcard params, need to join with /
-    const rawPath = (req.params as { path?: string | string[] }).path;
-    const path = Array.isArray(rawPath) ? rawPath.join('/') : rawPath || '';
+    // Uses extractWildcardPath to handle path-to-regexp v8+ array format
+    const path = extractWildcardPath(req.params as WildcardParams);
     const targetUrl = `${this.telegramAdapterUrl}/api/v1/${path}`;
 
     this.logger.debug(`Proxying ${req.method} ${path} → ${targetUrl}`);
