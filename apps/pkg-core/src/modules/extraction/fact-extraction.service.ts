@@ -87,7 +87,7 @@ const AGENT_EXTRACTION_SCHEMA = {
 const MIN_MESSAGE_LENGTH = 20;
 const ONESHOT_CONTENT_LIMIT = 1500;
 const AGENT_CONTENT_LIMIT = 2000;
-const CONTEXT_SIZE_LIMIT = 3000;
+const BATCH_CONTENT_LIMIT = 12000; // For batch extraction with many messages
 const SOURCE_QUOTE_MAX_LENGTH = 200;
 const SEARCH_TEXT_MAX_LENGTH = 500;
 
@@ -253,7 +253,7 @@ export class FactExtractionService {
         return `${direction} ${m.content}`;
       })
       .join('\n---\n')
-      .substring(0, CONTEXT_SIZE_LIMIT); // Limit total size
+      .substring(0, BATCH_CONTENT_LIMIT); // Limit total size for batch extraction
 
     const prompt = this.buildBatchPrompt(entityName, combined, chatType, entityMemory);
 
@@ -368,7 +368,12 @@ ${memorySection}
     chatType?: string,
     entityMemory?: string,
   ): string {
-    const cleanText = text.replace(/\n/g, ' ').substring(0, 1000);
+    // Text is already limited by caller (BATCH_CONTENT_LIMIT)
+    // Clean up multiple whitespace but preserve message separators (---)
+    const cleanText = text
+      .replace(/\n---\n/g, ' | ')  // Replace separators with pipes
+      .replace(/\s+/g, ' ')        // Collapse multiple whitespace
+      .trim();
 
     // Build context description
     let contextDesc = '';
