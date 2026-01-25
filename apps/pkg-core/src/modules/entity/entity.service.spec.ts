@@ -5,13 +5,15 @@ import { NotFoundException, ConflictException } from '@nestjs/common';
 import { EntityService } from './entity.service';
 import { EntityIdentifierService } from './entity-identifier/entity-identifier.service';
 import { EntityFactService } from './entity-fact/entity-fact.service';
-import { EntityRecord, EntityType } from '@pkg/entities';
+import { EntityRelationService } from './entity-relation/entity-relation.service';
+import { EntityRecord, EntityType, RelationType } from '@pkg/entities';
 
 describe('EntityService', () => {
   let service: EntityService;
   let entityRepo: Repository<EntityRecord>;
   let identifierService: EntityIdentifierService;
   let factService: EntityFactService;
+  let relationService: EntityRelationService;
 
   const mockEntity = {
     id: 'test-uuid-1',
@@ -54,6 +56,13 @@ describe('EntityService', () => {
     moveToEntity: jest.fn(),
   };
 
+  const mockRelationService = {
+    findByEntity: jest.fn(),
+    findByType: jest.fn(),
+    create: jest.fn(),
+    findById: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -70,6 +79,10 @@ describe('EntityService', () => {
           provide: EntityFactService,
           useValue: mockFactService,
         },
+        {
+          provide: EntityRelationService,
+          useValue: mockRelationService,
+        },
       ],
     }).compile();
 
@@ -77,6 +90,7 @@ describe('EntityService', () => {
     entityRepo = module.get<Repository<EntityRecord>>(getRepositoryToken(EntityRecord));
     identifierService = module.get<EntityIdentifierService>(EntityIdentifierService);
     factService = module.get<EntityFactService>(EntityFactService);
+    relationService = module.get<EntityRelationService>(EntityRelationService);
   });
 
   afterEach(() => {
@@ -261,6 +275,119 @@ describe('EntityService', () => {
       mockEntityRepository.findOne.mockResolvedValue(mockEntity);
 
       await expect(service.merge('test-uuid-1', 'test-uuid-1')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('getGraph', () => {
+    const centralEntity = {
+      ...mockEntity,
+      id: 'central-uuid',
+      name: 'Central Person',
+      profilePhoto: 'photo.jpg',
+    };
+
+    const relatedEntity = {
+      id: 'related-uuid',
+      name: 'Related Person',
+      type: EntityType.PERSON,
+      profilePhoto: null,
+    };
+
+    const orgEntity = {
+      id: 'org-uuid',
+      name: 'Company Inc',
+      type: EntityType.ORGANIZATION,
+      profilePhoto: null,
+    };
+
+    it('should return graph with central entity', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([]);
+
+      const result = await service.getGraph('central-uuid');
+
+      expect(result).toEqual({
+        centralEntityId: 'central-uuid',
+        nodes: [
+          {
+            id: 'central-uuid',
+            name: 'Central Person',
+            type: EntityType.PERSON,
+            profilePhoto: 'photo.jpg',
+          },
+        ],
+        edges: [],
+      });
+    });
+
+    it('should include related entities from binary relations', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([
+        {
+          id: 'relation-1',
+          relationType: RelationType.FRIENDSHIP,
+          members: [
+            { entityId: 'central-uuid', role: 'friend', validUntil: null, entity: centralEntity },
+            { entityId: 'related-uuid', role: 'friend', validUntil: null, entity: relatedEntity },
+          ],
+        },
+      ]);
+
+      const result = await service.getGraph('central-uuid');
+
+      expect(result.nodes).toHaveLength(2);
+      expect(result.edges).toHaveLength(1);
+      expect(result.edges[0]).toEqual({
+        id: 'relation-1',
+        source: 'central-uuid',
+        target: 'related-uuid',
+        relationType: RelationType.FRIENDSHIP,
+        sourceRole: 'friend',
+        targetRole: 'friend',
+      });
+    });
+
+    it('should handle N-ary relations (more than 2 members)', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([
+        {
+          id: 'team-relation',
+          relationType: RelationType.TEAM,
+          members: [
+            { entityId: 'central-uuid', role: 'member', validUntil: null, entity: centralEntity },
+            { entityId: 'related-uuid', role: 'member', validUntil: null, entity: relatedEntity },
+            { entityId: 'org-uuid', role: 'lead', validUntil: null, entity: orgEntity },
+          ],
+        },
+      ]);
+
+      const result = await service.getGraph('central-uuid');
+
+      expect(result.nodes).toHaveLength(3);
+      expect(result.edges).toHaveLength(2);
+      // Central entity should have edges to all other members
+      expect(result.edges.map((e) => e.target)).toContain('related-uuid');
+      expect(result.edges.map((e) => e.target)).toContain('org-uuid');
+    });
+
+    it('should exclude members with validUntil (soft-deleted)', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([
+        {
+          id: 'relation-1',
+          relationType: RelationType.EMPLOYMENT,
+          members: [
+            { entityId: 'central-uuid', role: 'employee', validUntil: null, entity: centralEntity },
+            { entityId: 'org-uuid', role: 'employer', validUntil: new Date(), entity: orgEntity }, // Soft-deleted
+          ],
+        },
+      ]);
+
+      const result = await service.getGraph('central-uuid');
+
+      // Only central entity, no edges (employer is soft-deleted)
+      expect(result.nodes).toHaveLength(1);
+      expect(result.edges).toHaveLength(0);
     });
   });
 });

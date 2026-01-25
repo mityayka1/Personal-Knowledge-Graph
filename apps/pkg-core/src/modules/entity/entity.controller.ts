@@ -103,4 +103,19 @@ export class EntityController {
     const invalidated = await this.factService.invalidate(factId);
     return { invalidated, factId };
   }
+
+  // Graph visualization
+
+  /**
+   * Get entity graph for visualization.
+   * Returns nodes (entities) and edges (relations) centered around the given entity.
+   */
+  @Get(':id/graph')
+  async getGraph(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('depth') depth?: string,
+  ) {
+    const depthNum = depth ? parseInt(depth, 10) : 1;
+    return this.entityService.getGraph(id, depthNum);
+  }
 }

@@ -8,6 +8,7 @@ import {
   EntityRelationMember,
 } from '@pkg/entities';
 import { EntityController } from './entity.controller';
+import { EntityRelationController } from './entity-relation/entity-relation.controller';
 import { EntityService } from './entity.service';
 import { EntityIdentifierService } from './entity-identifier/entity-identifier.service';
 import { EntityFactService } from './entity-fact/entity-fact.service';
@@ -30,7 +31,7 @@ import { NotificationModule } from '../notification/notification.module';
     forwardRef(() => ClaudeAgentModule),
     forwardRef(() => NotificationModule),
   ],
-  controllers: [EntityController],
+  controllers: [EntityController, EntityRelationController],
   providers: [
     EntityService,
     EntityIdentifierService,

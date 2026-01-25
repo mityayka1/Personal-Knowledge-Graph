@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle } from 'lucide-vue-next';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network } from 'lucide-vue-next';
 import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
+import { useEntityGraph } from '~/composables/useEntityGraph';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -8,6 +9,7 @@ const router = useRouter();
 
 const entityId = computed(() => route.params.id as string);
 const { data: entity, isLoading, error, refetch } = useEntity(entityId);
+const { data: graphData, isLoading: isGraphLoading } = useEntityGraph(entityId);
 
 const deleteEntity = useDeleteEntity();
 const addFact = useAddFact();
@@ -191,6 +193,13 @@ function dismissExtractedFact(fact: ExtractedFact) {
 const pendingExtractedFacts = computed(() =>
   extractedFacts.value.filter(f => f.status === 'pending')
 );
+
+// Handle graph node click - navigate to related entity
+function handleGraphNodeClick(nodeId: string) {
+  if (nodeId !== entityId.value) {
+    router.push(`/entities/${nodeId}`);
+  }
+}
 </script>
 
 <template>
@@ -299,6 +308,36 @@ const pendingExtractedFacts = computed(() =>
                 <div class="text-xs text-muted-foreground">{{ identifier.identifierType }}</div>
               </div>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <!-- Relations Graph -->
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-lg flex items-center gap-2">
+            <Network class="h-5 w-5" />
+            Граф связей
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div v-if="isGraphLoading" class="h-[400px] flex items-center justify-center">
+            <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+          <div v-else-if="graphData && graphData.nodes.length > 1">
+            <EntityGraphView
+              :nodes="graphData.nodes"
+              :edges="graphData.edges"
+              :central-entity-id="graphData.centralEntityId"
+              @node-click="handleGraphNodeClick"
+            />
+            <p class="text-xs text-muted-foreground mt-2">
+              Кликните на узел для перехода к связанной сущности
+            </p>
+          </div>
+          <div v-else class="text-muted-foreground text-center py-8">
+            <Network class="h-12 w-12 mx-auto mb-3 opacity-30" />
+            <p>У этой сущности пока нет связей</p>
           </div>
         </CardContent>
       </Card>
