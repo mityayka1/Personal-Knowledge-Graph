@@ -54,6 +54,8 @@ services:
       # Telegram Adapter URL for media proxy
       # Use host.docker.internal:3001 for local dev, telegram-adapter:3001 for full Docker
       TELEGRAM_ADAPTER_URL: ${TELEGRAM_ADAPTER_URL:-http://telegram-adapter:3001}
+      # API key for calling Telegram Adapter (same as API_KEY)
+      PKG_CORE_API_KEY: ${API_KEY:?API_KEY is required}
       # Claude CLI
       CLAUDE_WORKSPACE_PATH: /app/claude-workspace
     volumes:
