@@ -243,3 +243,5 @@ WHERE username = 'admin';
 - [TROUBLESHOOTING.md](../deploy/TROUBLESHOOTING.md) — общие проблемы деплоя
 - [NGINX_SSL.md](../deploy/NGINX_SSL.md) — конфигурация Nginx
 - [SERVER_SETUP_LOG.md](../SERVER_SETUP_LOG.md) — текущие credentials и статус
+- [Claude OAuth Token Expired](../integration-issues/claude-oauth-token-expired-ClaudeAgent-20260125.md) — OAuth токен истекает после смены сервера
+- [Source-Agnostic Architecture Prevention](../integration-issues/source-agnostic-architecture-prevention.md) — архитектурный паттерн Dashboard → PKG Core → Adapter

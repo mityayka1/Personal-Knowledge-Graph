@@ -643,6 +643,11 @@ async proxy(@Req() req: Request, @Res() res: Response) {
 - [CLAUDE.md](../../../CLAUDE.md) - Development guidelines
 - [apps/pkg-core/src/modules/internal-proxy/](../../../apps/pkg-core/src/modules/internal-proxy/) - Proxy controllers
 
+## Related Issues & Docs
+
+- **GitHub Issue #86** - [feat: Add Telegram Adapter proxy in PKG Core](https://github.com/mityayka1/Personal-Knowledge-Graph/issues/86)
+- [Server IP Change Multi-Issue](../deployment-issues/server-ip-change-multi-issue-20260125.md) - Related Nginx routing problems during deployment
+
 ## Prevention Summary
 
 | Issue | Prevention | Detection |
