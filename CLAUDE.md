@@ -92,6 +92,32 @@ Telegram сообщения группируются в sessions (Interactions).
 3. **Async Processing:** Тяжёлые задачи (transcription, LLM) выполняются асинхронно через Worker
 4. **Embeddings:** Генерируются асинхронно в очереди, не блокируют основной поток
 
+### Source-Agnostic Architecture
+
+**КРИТИЧНО:** Dashboard и другие клиенты НИКОГДА не должны обращаться напрямую к адаптерам (Telegram, WhatsApp и др.). Все запросы идут через PKG Core.
+
+```
+✅ ПРАВИЛЬНО:  Dashboard → PKG Core → Telegram Adapter
+❌ НЕПРАВИЛЬНО: Dashboard → Telegram Adapter (напрямую)
+```
+
+**Проверяй перед коммитом:**
+- Dashboard НЕ содержит `*_ADAPTER_URL` в конфигурации
+- Новые API для адаптеров добавляются через PKG Core proxy (`/internal/{adapter}/*`)
+
+**При работе с wildcard routes (NestJS):**
+```typescript
+// Используй extractWildcardPath для совместимости с path-to-regexp v8+
+import { extractWildcardPath, WildcardParams } from '../../common/utils';
+
+@All('*path')
+async handler(@Req() req: Request) {
+  const path = extractWildcardPath(req.params as WildcardParams);
+}
+```
+
+**Подробнее:** [docs/solutions/integration-issues/source-agnostic-architecture-prevention.md](docs/solutions/integration-issues/source-agnostic-architecture-prevention.md)
+
 ## Git Workflow
 
 ### Merge Strategy
