@@ -104,6 +104,11 @@ if (message.type === 'result') {
 
 - `apps/pkg-core/src/modules/claude-agent/claude-agent.service.ts`
 
+## Связанные проблемы
+
+- [Missing outputFormat in Agent Mode](./structured-output-undefined-agent-mode-20260124.md) — `structured_output` undefined если не передать `outputFormat`
+- [Claude OAuth Token Expired](./claude-oauth-token-expired-ClaudeAgent-20260125.md) — истёкший OAuth токен также приводит к нулевым результатам
+
 ## Результат
 
 После исправления:

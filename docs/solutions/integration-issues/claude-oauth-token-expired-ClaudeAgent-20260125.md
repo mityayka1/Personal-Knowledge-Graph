@@ -141,3 +141,4 @@ API ключ не истекает и не требует интерактивн
 - [docs/solutions/deployment-issues/server-ip-change-multi-issue-20260125.md](../deployment-issues/server-ip-change-multi-issue-20260125.md) — предыдущие проблемы деплоя
 - [.claude/agents/claude-code-expert.md](../../../.claude/agents/claude-code-expert.md) — полная документация по авторизации
 - [Missing outputFormat in Agent Mode](./structured-output-undefined-agent-mode-20260124.md) — другая причина нулевых результатов от agent mode
+- [Claude SDK Usage Extraction](./claude-sdk-usage-extraction-20250125.md) — usage данные в snake_case и в `result` message

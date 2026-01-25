@@ -135,6 +135,7 @@ const prompt = `
 - Задокументировано в CLAUDE.md: секция "Claude Agent SDK — Правила работы"
 - Создан гайд: docs/TESTING_REAL_DATA.md
 - [Claude OAuth Token Expired](./claude-oauth-token-expired-ClaudeAgent-20260125.md) — другая причина сбоя agent mode (401 auth errors)
+- [Claude SDK Usage Extraction](./claude-sdk-usage-extraction-20250125.md) — usage в `result` message, не `assistant` + snake_case поля
 
 ## Verification
 
