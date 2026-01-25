@@ -826,4 +826,43 @@ export class MessageService {
 
     return { items, total, limit, offset };
   }
+
+  /**
+   * Find messages from interactions where specified entities are participants.
+   * Used for cross-chat context - fetching related messages from other chats
+   * involving the same people within a time window.
+   */
+  async findByEntitiesInTimeWindow(params: {
+    entityIds: string[];
+    from: Date;
+    to: Date;
+    excludeInteractionId?: string;
+    limit?: number;
+  }): Promise<Message[]> {
+    if (params.entityIds.length === 0) {
+      return [];
+    }
+
+    const qb = this.messageRepo
+      .createQueryBuilder('m')
+      .innerJoin('m.interaction', 'i')
+      .innerJoin('i.participants', 'p')
+      .leftJoinAndSelect('m.interaction', 'interaction')
+      .where('p.entityId IN (:...entityIds)', { entityIds: params.entityIds })
+      .andWhere('m.timestamp BETWEEN :from AND :to', {
+        from: params.from,
+        to: params.to,
+      });
+
+    if (params.excludeInteractionId) {
+      qb.andWhere('m.interactionId != :excludeId', {
+        excludeId: params.excludeInteractionId,
+      });
+    }
+
+    return qb
+      .orderBy('m.timestamp', 'DESC')
+      .take(params.limit ?? 20)
+      .getMany();
+  }
 }
