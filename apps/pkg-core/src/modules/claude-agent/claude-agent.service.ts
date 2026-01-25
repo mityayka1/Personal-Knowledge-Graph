@@ -123,6 +123,10 @@ export class ClaudeAgentService {
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
           this.logger.log(`[oneshot] Result message: subtype=${resultMessage.subtype}, keys=${Object.keys(resultMessage).join(',')}`);
+
+          // Extract usage from result message (SDK puts usage here, not in assistant)
+          this.accumulateUsageFromResult(resultMessage, usage);
+
           // Check if it's a success result
           if (resultMessage.subtype === 'success' && 'result' in resultMessage) {
             rawResult = (resultMessage as { result?: string }).result || '';
@@ -308,7 +312,7 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Accumulate usage stats from SDK message
+   * Accumulate usage stats from SDK assistant message
    * SDK returns snake_case: input_tokens, output_tokens, cost_usd
    */
   private accumulateUsage(message: SDKMessage, usage: UsageStats): void {
@@ -327,6 +331,26 @@ export class ClaudeAgentService {
       usage.outputTokens += u.output_tokens || u.outputTokens || 0;
       usage.totalCostUsd += u.cost_usd || u.costUSD || 0;
       this.logger.log(`[accumulateUsage] Added: in=${u.input_tokens || u.inputTokens || 0}, out=${u.output_tokens || u.outputTokens || 0}`);
+    }
+  }
+
+  /**
+   * Accumulate usage stats from SDK result message
+   * Result message contains usage and total_cost_usd fields
+   */
+  private accumulateUsageFromResult(resultMessage: SDKResultMessage, usage: UsageStats): void {
+    const msg = resultMessage as {
+      usage?: { input_tokens?: number; output_tokens?: number };
+      total_cost_usd?: number;
+    };
+
+    if (msg.usage) {
+      usage.inputTokens += msg.usage.input_tokens || 0;
+      usage.outputTokens += msg.usage.output_tokens || 0;
+      this.logger.log(`[accumulateUsageFromResult] Added from result: in=${msg.usage.input_tokens || 0}, out=${msg.usage.output_tokens || 0}`);
+    }
+    if (msg.total_cost_usd) {
+      usage.totalCostUsd += msg.total_cost_usd;
     }
   }
 
