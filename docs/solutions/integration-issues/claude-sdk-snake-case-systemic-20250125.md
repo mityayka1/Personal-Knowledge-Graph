@@ -170,3 +170,42 @@ interface UsageStats {
 - [x] Добавить в CLAUDE.md секцию "SDK Naming Convention"
 - [x] Создать `normalizeSDKResult()` — PR #90
 - [x] Добавить SDK-специфичные интерфейсы (`SDKUsage`, `SDKResultFields`)
+- [x] Протестировано в production (2026-01-25)
+
+## Результаты тестирования
+
+**Дата:** 2026-01-25
+**Метод:** POST /api/v1/extraction/facts с тестовым сообщением
+
+### Тестовый запрос
+```bash
+curl -X POST -H "X-API-Key: ..." \
+  "http://localhost:3000/api/v1/extraction/facts" \
+  -d '{"entityId":"test","entityName":"Тест","messageContent":"Иван работает в Сбербанке с 2020 года."}'
+```
+
+### Результат
+```json
+{
+  "entityId": "test-entity-id",
+  "facts": [
+    {"factType": "company", "value": "Сбербанк", "confidence": 0.95},
+    {"factType": "phone", "value": "+79001234567", "confidence": 0.95}
+  ],
+  "tokensUsed": 143
+}
+```
+
+### Логи подтверждают корректную работу
+```
+Claude oneshot success: task=fact_extraction, duration=3310ms, tokens=3/140
+```
+
+### Статистика до/после
+| Метрика | До теста | После теста |
+|---------|----------|-------------|
+| totalRuns | 24 | 25 |
+| totalTokensIn | 9 | 12 (+3) |
+| totalTokensOut | 564 | 704 (+140) |
+
+**Вывод:** Трансформер `sdk-transformer.ts` корректно преобразует snake_case → camelCase
