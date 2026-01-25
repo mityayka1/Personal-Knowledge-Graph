@@ -22,6 +22,8 @@ export enum CreationSource {
   MANUAL = 'manual',
   PRIVATE_CHAT = 'private_chat',
   WORKING_GROUP = 'working_group',
+  /** Created from extracted facts (e.g., when user selects "Create new" in subject resolution) */
+  EXTRACTED = 'extracted',
 }
 
 @Entity('entities')

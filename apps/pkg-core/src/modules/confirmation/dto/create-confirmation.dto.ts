@@ -12,4 +12,6 @@ export class CreateConfirmationDto {
   sourceMessageId?: string;
   sourceEntityId?: string;
   sourcePendingFactId?: string;
+  /** Source extracted event ID (for FACT_SUBJECT when using SecondBrainExtraction) */
+  sourceExtractedEventId?: string;
 }

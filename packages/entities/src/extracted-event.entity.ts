@@ -138,6 +138,10 @@ export interface EnrichmentData {
   subjectMention?: string;
   /** Entity ID of the conversation participant (for context during resolution) */
   conversationEntityId?: string;
+  /** Entity ID after subject resolution (auto-resolved or user-confirmed) */
+  resolvedEntityId?: string;
+  /** ID of pending confirmation created for subject resolution */
+  pendingConfirmationId?: string;
 }
 
 /**

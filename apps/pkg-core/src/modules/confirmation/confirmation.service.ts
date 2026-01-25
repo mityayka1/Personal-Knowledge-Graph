@@ -59,6 +59,7 @@ export class ConfirmationService {
       sourceMessageId: dto.sourceMessageId ?? null,
       sourceEntityId: dto.sourceEntityId ?? null,
       sourcePendingFactId: dto.sourcePendingFactId ?? null,
+      sourceExtractedEventId: dto.sourceExtractedEventId ?? null,
       status: PendingConfirmationStatus.PENDING,
       expiresAt: this.calculateExpiry(dto.type),
     });
@@ -269,6 +270,10 @@ export class ConfirmationService {
     if (dto.sourcePendingFactId) {
       qb.andWhere('c.source_pending_fact_id = :factId', {
         factId: dto.sourcePendingFactId,
+      });
+    } else if (dto.sourceExtractedEventId) {
+      qb.andWhere('c.source_extracted_event_id = :eventId', {
+        eventId: dto.sourceExtractedEventId,
       });
     } else if (dto.sourceEntityId && dto.sourceMessageId) {
       qb.andWhere('c.source_entity_id = :entityId', { entityId: dto.sourceEntityId })

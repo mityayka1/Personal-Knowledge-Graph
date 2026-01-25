@@ -26,4 +26,5 @@ export * from './user.entity';
 export * from './pending-confirmation.entity';
 export * from './brief.types';
 export * from './brief.constants';
+export * from './confidence.constants';
 export * from './utils/html.utils';

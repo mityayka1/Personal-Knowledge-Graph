@@ -4,6 +4,7 @@ import { Repository, MoreThanOrEqual } from 'typeorm';
 import { EnrichmentQueueService } from './enrichment-queue.service';
 import { CrossChatContextService } from './cross-chat-context.service';
 import { ConversationGrouperService } from './conversation-grouper.service';
+import { SubjectResolverService } from './subject-resolver.service';
 import { ConversationGroup, MessageData } from './extraction.types';
 import {
   ExtractedEvent,
@@ -182,6 +183,9 @@ export class SecondBrainExtractionService {
     @Optional()
     @Inject(forwardRef(() => EntityFactService))
     private entityFactService: EntityFactService | null,
+    @Optional()
+    @Inject(forwardRef(() => SubjectResolverService))
+    private subjectResolverService: SubjectResolverService | null,
   ) {}
 
   /**
@@ -493,6 +497,62 @@ export class SecondBrainExtractionService {
 
           const saved = await this.extractedEventRepo.save(event);
           savedEvents.push(saved);
+
+          // Trigger subject resolution for third-party facts
+          if (needsSubjectResolution && rawEvent.subjectMention && this.subjectResolverService) {
+            try {
+              const resolution = await this.subjectResolverService.resolve(
+                rawEvent.subjectMention,
+                conversation.participantEntityIds,
+                rawEvent.confidence,
+                {
+                  sourceExtractedEventId: saved.id,
+                  sourceQuote: rawEvent.sourceQuote,
+                },
+              );
+
+              // Handle resolution result
+              if (resolution.status === 'resolved' && resolution.entityId) {
+                // Auto-resolved: update the event with the entity ID
+                saved.entityId = resolution.entityId;
+                if (saved.enrichmentData) {
+                  saved.enrichmentData = {
+                    ...saved.enrichmentData,
+                    needsSubjectResolution: false,
+                    resolvedEntityId: resolution.entityId,
+                  };
+                }
+                await this.extractedEventRepo.save(saved);
+                this.logger.log(
+                  `Auto-resolved subject "${rawEvent.subjectMention}" to entity ${resolution.entityId}`,
+                );
+              } else if (resolution.status === 'pending') {
+                // Confirmation created, update event with confirmationId for tracking
+                if (saved.enrichmentData && resolution.confirmationId) {
+                  saved.enrichmentData = {
+                    ...saved.enrichmentData,
+                    pendingConfirmationId: resolution.confirmationId,
+                  };
+                  await this.extractedEventRepo.save(saved);
+                }
+                this.logger.debug(
+                  `Created subject confirmation ${resolution.confirmationId} for "${rawEvent.subjectMention}"`,
+                );
+              } else if (resolution.status === 'unknown') {
+                // No matches found, might need manual entity creation
+                this.logger.debug(
+                  `No matches found for subject "${rawEvent.subjectMention}", suggested name: ${resolution.suggestedName}`,
+                );
+              }
+            } catch (resolveError) {
+              const errMsg =
+                resolveError instanceof Error ? resolveError.message : String(resolveError);
+              this.logger.warn(
+                `Failed to resolve subject "${rawEvent.subjectMention}": ${errMsg}`,
+              );
+              // Don't fail the extraction, just log the error
+            }
+          }
         } catch (saveError) {
           const msg = saveError instanceof Error ? saveError.message : String(saveError);
           this.logger.warn(`Failed to save extracted event: ${msg}`);

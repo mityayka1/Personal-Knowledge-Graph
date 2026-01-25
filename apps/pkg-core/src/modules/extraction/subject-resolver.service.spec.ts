@@ -2,14 +2,19 @@ import { Test } from '@nestjs/testing';
 import { SubjectResolverService } from './subject-resolver.service';
 import { EntityService } from '../entity/entity.service';
 import { ConfirmationService } from '../confirmation/confirmation.service';
-import { PendingConfirmationType, EntityType, CreationSource } from '@pkg/entities';
+import {
+  PendingConfirmationType,
+  EntityType,
+  CreationSource,
+  CONFIDENCE_THRESHOLDS,
+} from '@pkg/entities';
 
 describe('SubjectResolverService', () => {
   let service: SubjectResolverService;
   let entityService: jest.Mocked<EntityService>;
   let confirmationService: jest.Mocked<ConfirmationService>;
 
-  const AUTO_RESOLVE_THRESHOLD = 0.8;
+  const AUTO_RESOLVE_THRESHOLD = CONFIDENCE_THRESHOLDS.AUTO_RESOLVE;
 
   beforeEach(async () => {
     const mockEntityService = {
@@ -235,7 +240,10 @@ describe('SubjectResolverService', () => {
           id: 'confirmation-6',
         } as any);
 
-        await service.resolve('Анна', [], 0.9, 'pending-fact-123', 'Анна сказала...');
+        await service.resolve('Анна', [], 0.9, {
+          sourcePendingFactId: 'pending-fact-123',
+          sourceQuote: 'Анна сказала...',
+        });
 
         expect(confirmationService.create).toHaveBeenCalledWith(
           expect.objectContaining({

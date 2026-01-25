@@ -10,6 +10,7 @@ import {
 import { EntityRecord } from './entity.entity';
 import { Message } from './message.entity';
 import { PendingFact } from './pending-fact.entity';
+import { ExtractedEvent } from './extracted-event.entity';
 
 /**
  * Types of confirmations that can be requested from user
@@ -138,6 +139,14 @@ export class PendingConfirmation {
   @ManyToOne(() => PendingFact, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'source_pending_fact_id' })
   sourcePendingFact: PendingFact | null;
+
+  /** Source extracted event (for FACT_SUBJECT when using SecondBrainExtraction) */
+  @Column({ name: 'source_extracted_event_id', type: 'uuid', nullable: true })
+  sourceExtractedEventId: string | null;
+
+  @ManyToOne(() => ExtractedEvent, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'source_extracted_event_id' })
+  sourceExtractedEvent: ExtractedEvent | null;
 
   // ==================== Resolution ====================
 

@@ -3,16 +3,12 @@ import {
   PendingConfirmationType,
   ConfirmationOption,
   ConfirmationContext,
+  CONFIDENCE_THRESHOLDS,
+  EXACT_MATCH_CONFIDENCE_BONUS,
 } from '@pkg/entities';
 import { EntityService } from '../entity/entity.service';
 import { ConfirmationService } from '../confirmation/confirmation.service';
 import { SubjectResolution, SubjectCandidate } from './extraction.types';
-
-/**
- * Threshold for auto-resolving subjects without confirmation.
- * If confidence >= this value AND exactly 1 participant matches, resolve automatically.
- */
-const AUTO_RESOLVE_CONFIDENCE_THRESHOLD = 0.8;
 
 /**
  * Maximum number of candidates to show in confirmation options.
@@ -47,16 +43,21 @@ export class SubjectResolverService {
    * @param subjectMention - The text mentioning the subject (e.g., "Игорь", "моя жена")
    * @param conversationParticipants - Entity IDs of people in the conversation
    * @param confidence - LLM confidence in the extraction (0-1)
-   * @param sourcePendingFactId - Optional ID of the pending fact for linking
-   * @param sourceQuote - Optional source quote for context
+   * @param options - Optional parameters for linking
+   * @param options.sourcePendingFactId - ID of the pending fact for linking
+   * @param options.sourceExtractedEventId - ID of the extracted event for linking
+   * @param options.sourceQuote - Source quote for context
    * @returns Resolution result: resolved, pending, or unknown
    */
   async resolve(
     subjectMention: string,
     conversationParticipants: string[],
     confidence: number,
-    sourcePendingFactId?: string,
-    sourceQuote?: string,
+    options?: {
+      sourcePendingFactId?: string;
+      sourceExtractedEventId?: string;
+      sourceQuote?: string;
+    },
   ): Promise<SubjectResolution> {
     this.logger.debug(
       `Resolving subject "${subjectMention}" with confidence ${confidence}, ` +
@@ -83,8 +84,7 @@ export class SubjectResolverService {
       candidatesWithParticipantFlag,
       participantMatches,
       confidence,
-      sourcePendingFactId,
-      sourceQuote,
+      options,
     );
   }
 
@@ -132,13 +132,16 @@ export class SubjectResolverService {
     allCandidates: SubjectCandidate[],
     participantMatches: SubjectCandidate[],
     confidence: number,
-    sourcePendingFactId?: string,
-    sourceQuote?: string,
+    options?: {
+      sourcePendingFactId?: string;
+      sourceExtractedEventId?: string;
+      sourceQuote?: string;
+    },
   ): Promise<SubjectResolution> {
     // Case 1: Exactly one participant match with high confidence → auto-resolve
     if (
       participantMatches.length === 1 &&
-      confidence >= AUTO_RESOLVE_CONFIDENCE_THRESHOLD
+      confidence >= CONFIDENCE_THRESHOLDS.AUTO_RESOLVE
     ) {
       this.logger.log(
         `Auto-resolved subject "${subjectMention}" to entity ${participantMatches[0].id}`,
@@ -153,15 +156,14 @@ export class SubjectResolverService {
     if (
       participantMatches.length > 1 ||
       (participantMatches.length === 1 &&
-        confidence < AUTO_RESOLVE_CONFIDENCE_THRESHOLD)
+        confidence < CONFIDENCE_THRESHOLDS.AUTO_RESOLVE)
     ) {
       const confirmation = await this.createConfirmation(
         subjectMention,
         participantMatches,
         allCandidates,
         confidence,
-        sourcePendingFactId,
-        sourceQuote,
+        options,
       );
       return {
         status: 'pending',
@@ -176,8 +178,7 @@ export class SubjectResolverService {
         [],
         allCandidates,
         confidence,
-        sourcePendingFactId,
-        sourceQuote,
+        options,
       );
       return {
         status: 'pending',
@@ -201,13 +202,16 @@ export class SubjectResolverService {
     participantMatches: SubjectCandidate[],
     allCandidates: SubjectCandidate[],
     confidence: number,
-    sourcePendingFactId?: string,
-    sourceQuote?: string,
+    resolveOptions?: {
+      sourcePendingFactId?: string;
+      sourceExtractedEventId?: string;
+      sourceQuote?: string;
+    },
   ): Promise<{ id: string }> {
     const context: ConfirmationContext = {
       title: 'О ком этот факт?',
       description: `Упоминание: "${subjectMention}"`,
-      sourceQuote: sourceQuote,
+      sourceQuote: resolveOptions?.sourceQuote,
     };
 
     const options = this.buildConfirmationOptions(
@@ -220,7 +224,8 @@ export class SubjectResolverService {
       context,
       options,
       confidence,
-      sourcePendingFactId,
+      sourcePendingFactId: resolveOptions?.sourcePendingFactId,
+      sourceExtractedEventId: resolveOptions?.sourceExtractedEventId,
     });
 
     this.logger.log(
