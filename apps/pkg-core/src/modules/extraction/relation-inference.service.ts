@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, MoreThanOrEqual } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import {
   EntityFact,
   EntityRecord,
@@ -196,7 +196,7 @@ export class RelationInferenceService {
   ): Promise<EntityFact[]> {
     const qb = this.factRepo
       .createQueryBuilder('f')
-      .where('f.type = :type', { type: 'company' })
+      .where('f.factType = :type', { type: 'company' })
       .andWhere('f.validUntil IS NULL') // Only current facts
       .andWhere(
         `NOT EXISTS (
@@ -264,25 +264,32 @@ export class RelationInferenceService {
 
   /**
    * Find best matching organization from candidates.
-   * Returns the first one with similarity > 0.7, or null.
+   * Returns the one with highest similarity > 0.7, or null.
    */
   private findBestMatch(
     searchTerm: string,
     candidates: EntityRecord[],
   ): EntityRecord | null {
+    let bestMatch: EntityRecord | null = null;
+    let bestSimilarity = 0.7; // Minimum threshold
+
     for (const org of candidates) {
       const orgNormalized = this.normalizeCompanyName(org.name);
       const sim = this.similarity(searchTerm, orgNormalized);
 
-      if (sim > 0.7) {
-        this.logger.debug(
-          `Matched "${searchTerm}" to "${org.name}" (similarity: ${sim.toFixed(2)})`,
-        );
-        return org;
+      if (sim > bestSimilarity) {
+        bestMatch = org;
+        bestSimilarity = sim;
       }
     }
 
-    return null;
+    if (bestMatch) {
+      this.logger.debug(
+        `Matched "${searchTerm}" to "${bestMatch.name}" (similarity: ${bestSimilarity.toFixed(2)})`,
+      );
+    }
+
+    return bestMatch;
   }
 
   /**
@@ -292,7 +299,7 @@ export class RelationInferenceService {
   private normalizeCompanyName(name: string): string {
     return name
       .toLowerCase()
-      .replace(/["""«»'']/g, '') // Remove quotes
+      .replace(/["'"""„«»''‚]/g, '') // Remove all quote variants
       .replace(/\s*(ооо|оао|зао|пао|ао|ип|нко|гуп|муп|фгуп)\s*/gi, '') // Remove legal forms
       .replace(/\s*(llc|inc|corp|ltd|gmbh|ag)\s*/gi, '') // Remove English legal forms
       .replace(/\s+/g, ' ') // Normalize whitespace

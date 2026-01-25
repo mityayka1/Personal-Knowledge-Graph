@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Get, Query, NotFoundException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
+import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { MessageService } from '../interaction/message/message.service';
@@ -162,10 +162,27 @@ export class ExtractionController {
       };
     }
 
+    // Validate query parameters
+    let parsedLimit: number | undefined;
+    if (limit) {
+      parsedLimit = parseInt(limit, 10);
+      if (isNaN(parsedLimit) || parsedLimit < 1) {
+        throw new BadRequestException('limit must be a positive integer');
+      }
+    }
+
+    let parsedSinceDate: Date | undefined;
+    if (sinceDate) {
+      parsedSinceDate = new Date(sinceDate);
+      if (isNaN(parsedSinceDate.getTime())) {
+        throw new BadRequestException('sinceDate must be a valid ISO 8601 date');
+      }
+    }
+
     const options = {
       dryRun: dryRun === 'true',
-      sinceDate: sinceDate ? new Date(sinceDate) : undefined,
-      limit: limit ? parseInt(limit, 10) : undefined,
+      sinceDate: parsedSinceDate,
+      limit: parsedLimit,
     };
 
     this.logger.log(

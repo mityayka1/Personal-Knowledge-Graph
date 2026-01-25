@@ -19,12 +19,6 @@ describe('RelationInferenceService', () => {
   let entityService: EntityService;
   let entityRelationService: EntityRelationService;
 
-  const mockPersonEntity: Partial<EntityRecord> = {
-    id: 'person-uuid-1',
-    name: 'Иван Петров',
-    type: EntityType.PERSON,
-  };
-
   const mockOrgEntity: Partial<EntityRecord> = {
     id: 'org-uuid-1',
     name: 'Сбербанк',
@@ -309,7 +303,7 @@ describe('RelationInferenceService', () => {
       mockEntityRelationService.findByPair.mockResolvedValue(null);
       mockEntityRelationService.create.mockResolvedValue(mockRelation);
 
-      const result = await service.inferRelations();
+      await service.inferRelations();
 
       // Should call findAll twice - first full name, then first word
       expect(mockEntityService.findAll).toHaveBeenCalledTimes(2);
