@@ -6,14 +6,15 @@ import { ConversationGroup, MessageData } from './extraction.types';
  * Groups messages into conversations based on time gaps.
  *
  * A conversation is a sequence of messages where the gap between
- * any two consecutive messages is less than conversationGapMinutes (default: 30).
+ * any two consecutive messages is less than conversationGapMinutes
+ * (configurable via SettingsService, default: 30 minutes).
  *
  * This enables extraction to process logically connected messages together,
  * providing context that single-message extraction lacks.
  *
- * Example:
+ * Example (with 30min gap):
  *   Messages: [14:00, 14:05, 14:10, 15:00, 15:05]
- *   With 30min gap: [[14:00, 14:05, 14:10], [15:00, 15:05]]
+ *   Result: [[14:00, 14:05, 14:10], [15:00, 15:05]]
  */
 @Injectable()
 export class ConversationGrouperService {

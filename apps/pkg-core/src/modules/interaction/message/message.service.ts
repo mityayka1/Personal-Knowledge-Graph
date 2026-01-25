@@ -845,9 +845,8 @@ export class MessageService {
 
     const qb = this.messageRepo
       .createQueryBuilder('m')
-      .innerJoin('m.interaction', 'i')
-      .innerJoin('i.participants', 'p')
-      .leftJoinAndSelect('m.interaction', 'interaction')
+      .innerJoinAndSelect('m.interaction', 'interaction')
+      .innerJoin('interaction.participants', 'p')
       .where('p.entityId IN (:...entityIds)', { entityIds: params.entityIds })
       .andWhere('m.timestamp BETWEEN :from AND :to', {
         from: params.from,
