@@ -18,6 +18,12 @@ import {
   AgentHooks,
 } from './claude-agent.types';
 import { ToolsRegistryService } from './tools-registry.service';
+import {
+  SDKAssistantUsage,
+  SDKResultFields,
+  accumulateSDKUsage,
+  accumulateSDKResultUsage,
+} from './sdk-transformer';
 
 /**
  * Content block with tool use
@@ -311,43 +317,20 @@ export class ClaudeAgentService {
 
   /**
    * Accumulate usage stats from SDK assistant message
-   * SDK returns snake_case: input_tokens, output_tokens, cost_usd
+   * @see sdk-transformer.ts for snake_case → camelCase transformation
    */
   private accumulateUsage(message: SDKMessage, usage: UsageStats): void {
     if (message.type === 'assistant' && 'usage' in message && message.usage) {
-      // SDK uses snake_case
-      const u = message.usage as {
-        input_tokens?: number;
-        output_tokens?: number;
-        cost_usd?: number;
-        // Legacy camelCase support
-        inputTokens?: number;
-        outputTokens?: number;
-        costUSD?: number;
-      };
-      usage.inputTokens += u.input_tokens || u.inputTokens || 0;
-      usage.outputTokens += u.output_tokens || u.outputTokens || 0;
-      usage.totalCostUsd += u.cost_usd || u.costUSD || 0;
+      accumulateSDKUsage(message.usage as SDKAssistantUsage, usage);
     }
   }
 
   /**
    * Accumulate usage stats from SDK result message
-   * Result message contains usage and total_cost_usd fields
+   * @see sdk-transformer.ts for snake_case → camelCase transformation
    */
   private accumulateUsageFromResult(resultMessage: SDKResultMessage, usage: UsageStats): void {
-    const msg = resultMessage as {
-      usage?: { input_tokens?: number; output_tokens?: number };
-      total_cost_usd?: number;
-    };
-
-    if (msg.usage) {
-      usage.inputTokens += msg.usage.input_tokens || 0;
-      usage.outputTokens += msg.usage.output_tokens || 0;
-    }
-    if (msg.total_cost_usd) {
-      usage.totalCostUsd += msg.total_cost_usd;
-    }
+    accumulateSDKResultUsage(resultMessage as unknown as SDKResultFields, usage);
   }
 
   /**
