@@ -1,8 +1,8 @@
 # Relation Inference — Implementation Plan
 
-> **Статус:** 🔄 In Progress
+> **Статус:** ✅ Completed
 > **Дата:** 2025-01-26
-> **Ветка:** `feat/relation-inference`
+> **Ветка:** `feat/relation-inference` (merged to master)
 
 ---
 
@@ -100,11 +100,11 @@ Entity Relations не создаются автоматически при extra
 ```
 
 ### Критерии приёмки (Этап 1)
-- [ ] Description обновлён в `extraction-tools.provider.ts`
-- [ ] Добавлены триггерные фразы
-- [ ] Добавлен алгоритм действий
-- [ ] Добавлен полный пример flow
-- [ ] Unit тест не сломан
+- [x] Description обновлён в `extraction-tools.provider.ts`
+- [x] Добавлены триггерные фразы
+- [x] Добавлен алгоритм действий
+- [x] Добавлен полный пример flow
+- [x] Unit тест не сломан
 
 ---
 
@@ -179,13 +179,13 @@ async inferRelations(@Query('dryRun') dryRun?: boolean): Promise<InferenceResult
 ```
 
 ### Критерии приёмки (Этап 2)
-- [ ] `RelationInferenceService` создан и работает
-- [ ] `INFERRED` добавлен в `RelationSource`
-- [ ] `findByPair()` добавлен в `EntityRelationService`
-- [ ] API endpoint `/extraction/relations/infer` работает
-- [ ] Unit тесты для inference logic
-- [ ] Dry-run режим работает
-- [ ] Логирование результатов
+- [x] `RelationInferenceService` создан и работает
+- [x] `INFERRED` добавлен в `RelationSource`
+- [x] `findByPair()` добавлен в `EntityRelationService`
+- [x] API endpoint `/extraction/relations/infer` работает
+- [x] Unit тесты для inference logic (18 тестов)
+- [x] Dry-run режим работает
+- [x] Логирование результатов
 
 ---
 
