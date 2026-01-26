@@ -4,14 +4,10 @@ export class AddMentorshipAndOwner1769700000000 implements MigrationInterface {
   name = 'AddMentorshipAndOwner1769700000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // 1. Add 'mentorship' to relation_type enum
-    // PostgreSQL requires this specific syntax to add values to existing enum
-    await queryRunner.query(`
-      ALTER TYPE "public"."entity_relations_relation_type_enum"
-      ADD VALUE IF NOT EXISTS 'mentorship'
-    `);
+    // Note: relation_type is VARCHAR, not PostgreSQL enum.
+    // No ALTER TYPE needed - 'mentorship' value is defined in TypeScript enum only.
 
-    // 2. Add is_owner column to entities table
+    // 1. Add is_owner column to entities table
     await queryRunner.query(`
       ALTER TABLE "entities"
       ADD COLUMN "is_owner" BOOLEAN NOT NULL DEFAULT FALSE
@@ -32,7 +28,6 @@ export class AddMentorshipAndOwner1769700000000 implements MigrationInterface {
     // Drop the is_owner column
     await queryRunner.query(`ALTER TABLE "entities" DROP COLUMN IF EXISTS "is_owner"`);
 
-    // Note: PostgreSQL doesn't support removing enum values easily
-    // The 'mentorship' value will remain in the enum but won't affect anything
+    // Note: 'mentorship' is just a TypeScript enum value, no DB cleanup needed
   }
 }

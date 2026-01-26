@@ -28,9 +28,12 @@ MENTORSHIP = 'mentorship', // roles: mentor, mentee
 ### 2. Добавить поле `isOwner` в EntityRecord
 
 ```typescript
-@Column({ name: 'is_owner', type: 'boolean', default: false, unique: true })
+@Column({ name: 'is_owner', type: 'boolean', default: false })
+@Index('idx_entities_is_owner', { unique: true, where: '"is_owner" = true' })
 isOwner: boolean;
 ```
+
+**Примечание:** Используется partial unique index, чтобы разрешить множество `false`, но только один `true`.
 
 **Ограничения:**
 - Только одна entity может быть `isOwner = true`
@@ -43,12 +46,12 @@ isOwner: boolean;
 ### 3. Миграции
 
 ```sql
--- 1. Add MENTORSHIP to relation_type enum
-ALTER TYPE relation_type ADD VALUE 'mentorship';
+-- Note: relation_type is VARCHAR(50), not PostgreSQL enum.
+-- 'mentorship' value is defined in TypeScript enum only, no DB migration needed.
 
--- 2. Add is_owner column
-ALTER TABLE entities ADD COLUMN is_owner BOOLEAN DEFAULT FALSE;
-CREATE UNIQUE INDEX idx_entities_owner ON entities (is_owner) WHERE is_owner = TRUE;
+-- Add is_owner column with partial unique index
+ALTER TABLE entities ADD COLUMN is_owner BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE UNIQUE INDEX idx_entities_is_owner ON entities (is_owner) WHERE is_owner = TRUE;
 ```
 
 ---
@@ -88,5 +91,5 @@ CREATE UNIQUE INDEX idx_entities_owner ON entities (is_owner) WHERE is_owner = T
 
 | Риск | Митигация |
 |------|-----------|
-| Enum migration в PostgreSQL | Использовать безопасный ALTER TYPE ADD VALUE |
 | Уникальность isOwner | Partial unique index WHERE is_owner = TRUE |
+| Race condition в setOwner() | Обернуть в транзакцию через manager.transaction() |

@@ -212,25 +212,34 @@ export class EntityService {
    * Only one entity can be owner at a time.
    * If another entity is currently owner, it will be unset first.
    *
+   * Uses transaction to prevent race conditions when multiple
+   * requests try to set owner simultaneously.
+   *
    * @param id - Entity ID to set as owner
    * @returns The updated entity
    */
   async setOwner(id: string): Promise<EntityRecord> {
-    const entity = await this.findOne(id);
+    // Validate entity exists before starting transaction
+    await this.findOne(id);
 
-    // Find current owner (if any) and unset
-    const currentOwner = await this.entityRepo.findOne({
-      where: { isOwner: true },
+    await this.entityRepo.manager.transaction(async (manager) => {
+      // Find current owner (if any) and unset
+      const currentOwner = await manager.findOne(EntityRecord, {
+        where: { isOwner: true },
+      });
+
+      if (currentOwner && currentOwner.id !== id) {
+        currentOwner.isOwner = false;
+        await manager.save(currentOwner);
+      }
+
+      // Set new owner
+      const entity = await manager.findOne(EntityRecord, { where: { id } });
+      if (entity) {
+        entity.isOwner = true;
+        await manager.save(entity);
+      }
     });
-
-    if (currentOwner && currentOwner.id !== id) {
-      currentOwner.isOwner = false;
-      await this.entityRepo.save(currentOwner);
-    }
-
-    // Set new owner
-    entity.isOwner = true;
-    await this.entityRepo.save(entity);
 
     return this.findOne(id);
   }
