@@ -2,9 +2,9 @@ import { IsArray, IsEnum, IsString, IsUUID, ValidateNested } from 'class-validat
 import { Type } from 'class-transformer';
 
 export enum ConflictResolution {
-  KEEP_TARGET = 'keep_target',
-  KEEP_SOURCE = 'keep_source',
-  KEEP_BOTH = 'keep_both',
+  KEEP_TARGET = 'KEEP_TARGET',
+  KEEP_SOURCE = 'KEEP_SOURCE',
+  KEEP_BOTH = 'KEEP_BOTH',
 }
 
 export class ConflictResolutionDto {

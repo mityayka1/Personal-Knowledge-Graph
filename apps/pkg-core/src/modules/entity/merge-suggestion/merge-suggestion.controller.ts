@@ -25,9 +25,12 @@ export class MergeSuggestionController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
+    const parsedLimit = limit ? Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100) : 50;
+    const parsedOffset = offset ? Math.max(parseInt(offset, 10) || 0, 0) : 0;
+
     return this.mergeSuggestionService.getSuggestions({
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
+      limit: parsedLimit,
+      offset: parsedOffset,
     });
   }
 

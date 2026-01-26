@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import {
   EntityRecord,
   EntityIdentifier,
@@ -44,6 +44,7 @@ export class MergeSuggestionService {
     private factRepo: Repository<EntityFact>,
     @InjectRepository(DismissedMergeSuggestion)
     private dismissedRepo: Repository<DismissedMergeSuggestion>,
+    private dataSource: DataSource,
   ) {}
 
   /**
@@ -202,6 +203,7 @@ export class MergeSuggestionService {
 
   /**
    * Execute merge with selected fields.
+   * Uses transaction to ensure data consistency.
    */
   async mergeWithOptions(dto: MergeRequestDto): Promise<{
     mergedEntityId: string;
@@ -211,7 +213,7 @@ export class MergeSuggestionService {
   }> {
     const { sourceId, targetId, includeIdentifiers, includeFacts, conflictResolutions } = dto;
 
-    // Validate entities exist
+    // Validate entities exist before transaction
     const [source, target] = await Promise.all([
       this.entityRepo.findOne({
         where: { id: sourceId },
@@ -240,98 +242,119 @@ export class MergeSuggestionService {
       resolutionMap.set(key, res.resolution);
     }
 
-    // Move selected identifiers
-    let identifiersMoved = 0;
-    for (const idId of includeIdentifiers) {
-      const identifier = source.identifiers?.find((i) => i.id === idId);
-      if (!identifier) continue;
+    // Execute merge in transaction
+    return await this.dataSource.transaction(async (manager) => {
+      let identifiersMoved = 0;
+      let factsMoved = 0;
 
-      // Check for conflict
-      const conflictKey = `identifier:${identifier.identifierType}`;
-      const resolution = resolutionMap.get(conflictKey);
+      // Process identifiers
+      for (const idId of includeIdentifiers) {
+        const identifier = source.identifiers?.find((i) => i.id === idId);
+        if (!identifier) continue;
 
-      // Check if target already has this identifier type
-      const targetHasType = target.identifiers?.some(
-        (i) => i.identifierType === identifier.identifierType,
-      );
+        const conflictKey = `identifier:${identifier.identifierType}`;
+        const resolution = resolutionMap.get(conflictKey);
 
-      if (targetHasType && resolution === ConflictResolution.KEEP_TARGET) {
-        // Skip this identifier - keep target's
-        continue;
+        const targetIdentifier = target.identifiers?.find(
+          (i) => i.identifierType === identifier.identifierType,
+        );
+
+        if (targetIdentifier) {
+          // Conflict exists
+          if (resolution === ConflictResolution.KEEP_TARGET) {
+            // Skip source identifier - keep target's
+            continue;
+          } else if (resolution === ConflictResolution.KEEP_SOURCE) {
+            // Delete target's identifier, move source's
+            await manager.delete(EntityIdentifier, { id: targetIdentifier.id });
+          }
+          // KEEP_BOTH: For identifiers, we keep target's and skip source's
+          // (can't have duplicate identifier types for same entity)
+          else if (resolution === ConflictResolution.KEEP_BOTH) {
+            // Skip - identifiers must be unique per type
+            continue;
+          }
+        }
+
+        // Move identifier to target
+        await manager.update(EntityIdentifier, { id: identifier.id }, { entityId: targetId });
+        identifiersMoved++;
       }
 
-      // Move identifier to target
-      await this.identifierRepo.update(
-        { id: identifier.id },
-        { entityId: targetId },
-      );
-      identifiersMoved++;
-    }
+      // Process facts
+      for (const factId of includeFacts) {
+        const fact = source.facts?.find((f) => f.id === factId);
+        if (!fact) continue;
 
-    // Move selected facts
-    let factsMoved = 0;
-    for (const factId of includeFacts) {
-      const fact = source.facts?.find((f) => f.id === factId);
-      if (!fact) continue;
+        const conflictKey = `fact:${fact.factType}`;
+        const resolution = resolutionMap.get(conflictKey);
 
-      // Check for conflict
-      const conflictKey = `fact:${fact.factType}`;
-      const resolution = resolutionMap.get(conflictKey);
-
-      // Check if target already has this fact type
-      const targetHasType = target.facts?.some(
-        (f) => f.factType === fact.factType && !f.validUntil,
-      );
-
-      if (targetHasType && resolution === ConflictResolution.KEEP_TARGET) {
-        // Skip this fact - keep target's
-        continue;
-      }
-
-      if (targetHasType && resolution === ConflictResolution.KEEP_BOTH) {
-        // Mark target's fact as historical, then move source's
         const targetFact = target.facts?.find(
           (f) => f.factType === fact.factType && !f.validUntil,
         );
+
         if (targetFact) {
-          await this.factRepo.update(
-            { id: targetFact.id },
-            { validUntil: new Date() },
-          );
+          // Conflict exists
+          if (resolution === ConflictResolution.KEEP_TARGET) {
+            // Skip source fact - keep target's
+            continue;
+          } else if (resolution === ConflictResolution.KEEP_SOURCE) {
+            // Mark target's fact as historical, move source's
+            await manager.update(EntityFact, { id: targetFact.id }, { validUntil: new Date() });
+          } else if (resolution === ConflictResolution.KEEP_BOTH) {
+            // Mark target's fact as historical, move source's (preserves history)
+            await manager.update(EntityFact, { id: targetFact.id }, { validUntil: new Date() });
+          }
         }
+
+        // Move fact to target
+        await manager.update(EntityFact, { id: fact.id }, { entityId: targetId });
+        factsMoved++;
       }
 
-      // Move fact to target
-      await this.factRepo.update(
-        { id: fact.id },
-        { entityId: targetId },
+      // Transfer entity relations (entity_relation_members)
+      // Update all relation memberships from source to target
+      await manager.query(
+        `UPDATE entity_relation_members
+         SET entity_id = $1
+         WHERE entity_id = $2 AND valid_until IS NULL`,
+        [targetId, sourceId],
       );
-      factsMoved++;
-    }
 
-    // Update messages to point to target entity
-    await this.entityRepo.query(
-      `UPDATE messages SET entity_id = $1 WHERE entity_id = $2`,
-      [targetId, sourceId],
-    );
+      // Update messages - messages have sender_entity_id and recipient_entity_id, not entity_id
+      await manager.query(
+        `UPDATE messages SET sender_entity_id = $1 WHERE sender_entity_id = $2`,
+        [targetId, sourceId],
+      );
+      await manager.query(
+        `UPDATE messages SET recipient_entity_id = $1 WHERE recipient_entity_id = $2`,
+        [targetId, sourceId],
+      );
 
-    // Delete source entity
-    await this.entityRepo.remove(source);
+      // Update interactions where source was a participant
+      await manager.query(
+        `UPDATE interaction_participants SET entity_id = $1 WHERE entity_id = $2`,
+        [targetId, sourceId],
+      );
 
-    // Remove any dismissed suggestions involving the source
-    await this.dismissedRepo.delete({ primaryEntityId: sourceId });
-    await this.dismissedRepo.delete({ dismissedEntityId: sourceId });
+      // Remove any dismissed suggestions involving the source
+      await manager.delete(DismissedMergeSuggestion, { primaryEntityId: sourceId });
+      await manager.delete(DismissedMergeSuggestion, { dismissedEntityId: sourceId });
 
-    this.logger.log(
-      `Merged entity ${sourceId} into ${targetId}: ${identifiersMoved} identifiers, ${factsMoved} facts`,
-    );
+      // Delete source entity (cascade will clean up remaining references)
+      await manager.remove(EntityRecord, source);
 
-    return {
-      mergedEntityId: targetId,
-      sourceEntityDeleted: true,
-      identifiersMoved,
-      factsMoved,
-    };
+      this.logger.log(
+        `Merged entity ${sourceId} into ${targetId}: ${identifiersMoved} identifiers, ${factsMoved} facts`,
+      );
+
+      return {
+        mergedEntityId: targetId,
+        sourceEntityDeleted: true,
+        identifiersMoved,
+        factsMoved,
+      };
+    });
   }
 
   /**
@@ -366,11 +389,12 @@ export class MergeSuggestionService {
   }
 
   /**
-   * Get message count for an entity.
+   * Get message count for an entity (as sender or recipient).
    */
   private async getMessageCount(entityId: string): Promise<number> {
     const result = await this.entityRepo.query(
-      `SELECT COUNT(*) as count FROM messages WHERE entity_id = $1`,
+      `SELECT COUNT(*) as count FROM messages
+       WHERE sender_entity_id = $1 OR recipient_entity_id = $1`,
       [entityId],
     );
     return parseInt(result[0]?.count || '0', 10);
