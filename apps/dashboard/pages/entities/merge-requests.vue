@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { GitMerge, CheckCircle2 } from 'lucide-vue-next';
+import { GitMerge, CheckCircle2, Plus } from 'lucide-vue-next';
 import {
   useMergeSuggestions,
   useDismissSuggestion,
@@ -21,6 +21,9 @@ const params = computed(() => ({ limit: 50, offset: 0 }));
 const { data, isLoading, error, refetch } = useMergeSuggestions(params);
 const dismissMutation = useDismissSuggestion();
 const mergeMutation = useExecuteMerge();
+
+// Manual merge dialog state
+const showManualMergeDialog = ref(false);
 
 // Merge preview dialog state
 const showPreviewDialog = ref(false);
@@ -62,6 +65,11 @@ function openMergePreview(sourceId: string, targetId: string) {
   refetchPreview();
 }
 
+function handleManualMergeSelect(sourceId: string, targetId: string) {
+  showManualMergeDialog.value = false;
+  openMergePreview(sourceId, targetId);
+}
+
 async function handleMergeConfirm(request: MergeRequestDto) {
   try {
     const result = await mergeMutation.mutateAsync(request);
@@ -91,9 +99,15 @@ async function handleMergeConfirm(request: MergeRequestDto) {
           Обнаруженные дубликаты сущностей для объединения
         </p>
       </div>
-      <Badge v-if="data?.total" variant="secondary">
-        {{ data.total }} {{ data.total === 1 ? 'группа' : 'групп' }}
-      </Badge>
+      <div class="flex items-center gap-3">
+        <Badge v-if="data?.total" variant="secondary">
+          {{ data.total }} {{ data.total === 1 ? 'группа' : 'групп' }}
+        </Badge>
+        <Button @click="showManualMergeDialog = true">
+          <Plus class="h-4 w-4 mr-2" />
+          Объединить вручную
+        </Button>
+      </div>
     </div>
 
     <!-- Error state -->
@@ -140,6 +154,12 @@ async function handleMergeConfirm(request: MergeRequestDto) {
         @dismiss="(candidateId) => handleDismiss(group.primaryEntity.id, candidateId)"
       />
     </div>
+
+    <!-- Manual Merge Dialog -->
+    <ManualMergeDialog
+      v-model:open="showManualMergeDialog"
+      @select="handleManualMergeSelect"
+    />
 
     <!-- Merge Preview Dialog -->
     <MergePreviewDialog
