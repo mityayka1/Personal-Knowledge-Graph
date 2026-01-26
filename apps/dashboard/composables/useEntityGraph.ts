@@ -36,7 +36,7 @@ export interface EntityGraph {
  * Relation types for display labels.
  */
 export const RELATION_TYPE_LABELS: Record<string, string> = {
-  employment: 'Работает',
+  employment: 'Работа',
   reporting: 'Отчётность',
   team: 'Команда',
   marriage: 'Брак',
@@ -44,6 +44,7 @@ export const RELATION_TYPE_LABELS: Record<string, string> = {
   siblinghood: 'Родственники',
   friendship: 'Дружба',
   acquaintance: 'Знакомство',
+  mentorship: 'Наставничество',
   partnership: 'Партнёрство',
   client_vendor: 'Клиент/Поставщик',
 };

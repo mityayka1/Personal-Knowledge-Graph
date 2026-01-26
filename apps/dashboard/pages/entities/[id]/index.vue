@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network } from 'lucide-vue-next';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network, Link2 } from 'lucide-vue-next';
 import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
-import { useEntityGraph } from '~/composables/useEntityGraph';
+import { useEntityGraph, getRelationLabel } from '~/composables/useEntityGraph';
+import { useDeleteRelation, getRoleLabel, RELATION_TYPES, type RelationTypeKey } from '~/composables/useRelations';
+import AddRelationDialog from '~/components/entity/AddRelationDialog.vue';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -9,11 +11,32 @@ const router = useRouter();
 
 const entityId = computed(() => route.params.id as string);
 const { data: entity, isLoading, error, refetch } = useEntity(entityId);
-const { data: graphData, isLoading: isGraphLoading } = useEntityGraph(entityId);
+const { data: graphData, isLoading: isGraphLoading, refetch: refetchGraph } = useEntityGraph(entityId);
 
 const deleteEntity = useDeleteEntity();
 const addFact = useAddFact();
 const removeFact = useRemoveFact();
+const deleteRelation = useDeleteRelation();
+
+// Add relation dialog state
+const showAddRelationDialog = ref(false);
+
+// Handle relation created - refetch graph
+async function handleRelationCreated() {
+  await refetchGraph();
+}
+
+// Handle delete relation
+async function handleDeleteRelation(relationId: string) {
+  if (!confirm('Удалить эту связь?')) return;
+
+  try {
+    await deleteRelation.mutateAsync(relationId);
+    await refetchGraph();
+  } catch (error) {
+    console.error('Failed to delete relation:', error);
+  }
+}
 
 // Extraction settings
 const extractionSettings = ref<{ autoSaveThreshold: number; minConfidence: number } | null>(null);
@@ -314,11 +337,15 @@ function handleGraphNodeClick(nodeId: string) {
 
       <!-- Relations Graph -->
       <Card>
-        <CardHeader>
+        <CardHeader class="flex flex-row items-center justify-between">
           <CardTitle class="text-lg flex items-center gap-2">
             <Network class="h-5 w-5" />
             Граф связей
           </CardTitle>
+          <Button size="sm" variant="outline" @click="showAddRelationDialog = true">
+            <Link2 class="mr-2 h-4 w-4" />
+            Добавить связь
+          </Button>
         </CardHeader>
         <CardContent>
           <div v-if="isGraphLoading" class="h-[400px] flex items-center justify-center">
@@ -334,6 +361,48 @@ function handleGraphNodeClick(nodeId: string) {
             <p class="text-xs text-muted-foreground mt-2">
               Кликните на узел для перехода к связанной сущности
             </p>
+
+            <!-- Relations List -->
+            <div class="mt-6 border-t pt-4">
+              <h4 class="text-sm font-medium mb-3">Список связей</h4>
+              <div class="space-y-2">
+                <div
+                  v-for="edge in graphData.edges"
+                  :key="edge.id"
+                  class="flex items-center justify-between p-3 rounded-lg bg-muted/50 group"
+                >
+                  <div class="flex items-center gap-3 min-w-0">
+                    <Badge variant="outline" class="shrink-0">
+                      {{ getRelationLabel(edge.relationType) }}
+                    </Badge>
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="text-sm text-muted-foreground truncate">
+                        {{ edge.source === entityId ? getRoleLabel(edge.relationType, edge.sourceRole) : getRoleLabel(edge.relationType, edge.targetRole) }}
+                      </span>
+                      <span class="text-muted-foreground">↔</span>
+                      <NuxtLink
+                        :to="`/entities/${edge.source === entityId ? edge.target : edge.source}`"
+                        class="font-medium text-primary hover:underline truncate"
+                      >
+                        {{ graphData.nodes.find(n => n.id === (edge.source === entityId ? edge.target : edge.source))?.name || 'Неизвестно' }}
+                      </NuxtLink>
+                      <span class="text-sm text-muted-foreground truncate">
+                        ({{ edge.source === entityId ? getRoleLabel(edge.relationType, edge.targetRole) : getRoleLabel(edge.relationType, edge.sourceRole) }})
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-destructive hover:text-destructive"
+                    :disabled="deleteRelation.isPending.value"
+                    @click="handleDeleteRelation(edge.id)"
+                  >
+                    <Trash2 class="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-else class="text-muted-foreground text-center py-8">
             <Network class="h-12 w-12 mx-auto mb-3 opacity-30" />
@@ -515,6 +584,15 @@ function handleGraphNodeClick(nodeId: string) {
           </DialogContent>
         </Dialog>
       </ClientOnly>
+
+      <!-- Add Relation Dialog -->
+      <AddRelationDialog
+        v-model:open="showAddRelationDialog"
+        :current-entity-id="entity.id"
+        :current-entity-name="entity.name"
+        :current-entity-type="entity.type"
+        @success="handleRelationCreated"
+      />
 
       <!-- Events -->
       <Card>
