@@ -52,6 +52,7 @@ describe('SubjectResolverService', () => {
       profilePhoto: null,
       creationSource: CreationSource.MANUAL,
       isBot: false,
+      isOwner: false,
       identifiers: [],
       facts: [],
       participations: [],

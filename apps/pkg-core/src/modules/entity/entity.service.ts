@@ -197,6 +197,54 @@ export class EntityService {
   }
 
   /**
+   * Find the owner entity ("me").
+   * Returns null if no owner is set.
+   */
+  async findMe(): Promise<EntityRecord | null> {
+    return this.entityRepo.findOne({
+      where: { isOwner: true },
+      relations: ['organization', 'identifiers', 'facts'],
+    });
+  }
+
+  /**
+   * Set entity as the system owner ("me").
+   * Only one entity can be owner at a time.
+   * If another entity is currently owner, it will be unset first.
+   *
+   * Uses transaction to prevent race conditions when multiple
+   * requests try to set owner simultaneously.
+   *
+   * @param id - Entity ID to set as owner
+   * @returns The updated entity
+   */
+  async setOwner(id: string): Promise<EntityRecord> {
+    // Validate entity exists before starting transaction
+    await this.findOne(id);
+
+    await this.entityRepo.manager.transaction(async (manager) => {
+      // Find current owner (if any) and unset
+      const currentOwner = await manager.findOne(EntityRecord, {
+        where: { isOwner: true },
+      });
+
+      if (currentOwner && currentOwner.id !== id) {
+        currentOwner.isOwner = false;
+        await manager.save(currentOwner);
+      }
+
+      // Set new owner
+      const entity = await manager.findOne(EntityRecord, { where: { id } });
+      if (entity) {
+        entity.isOwner = true;
+        await manager.save(entity);
+      }
+    });
+
+    return this.findOne(id);
+  }
+
+  /**
    * Get entity graph for visualization.
    * Returns nodes (entities) and edges (relations) centered around the given entity.
    *
