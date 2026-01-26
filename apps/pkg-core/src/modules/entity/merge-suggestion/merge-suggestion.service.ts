@@ -1,0 +1,477 @@
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
+import {
+  EntityRecord,
+  EntityIdentifier,
+  EntityFact,
+  DismissedMergeSuggestion,
+} from '@pkg/entities';
+import {
+  MergeSuggestionGroupDto,
+  MergeSuggestionsResponseDto,
+  EntityIdentifierDto,
+  EntityFactDto,
+} from './dto/merge-suggestion.dto';
+import {
+  MergePreviewDto,
+  EntityMergeDataDto,
+  MergeConflictDto,
+} from './dto/merge-preview.dto';
+import { MergeRequestDto, ConflictResolution } from './dto/merge-request.dto';
+
+/**
+ * Regex to match orphaned Telegram entities.
+ * Format: "Telegram 1234567890" where digits are the telegram_user_id.
+ */
+const TELEGRAM_NAME_PATTERN = /^Telegram (\d+)$/;
+
+@Injectable()
+export class MergeSuggestionService {
+  private readonly logger = new Logger(MergeSuggestionService.name);
+
+  constructor(
+    @InjectRepository(EntityRecord)
+    private entityRepo: Repository<EntityRecord>,
+    @InjectRepository(EntityIdentifier)
+    private identifierRepo: Repository<EntityIdentifier>,
+    @InjectRepository(EntityFact)
+    private factRepo: Repository<EntityFact>,
+    @InjectRepository(DismissedMergeSuggestion)
+    private dismissedRepo: Repository<DismissedMergeSuggestion>,
+  ) {}
+
+  /**
+   * Get merge suggestions for orphaned Telegram entities.
+   * Returns groups where each group has a primary entity and candidates.
+   */
+  async getSuggestions(options: {
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<MergeSuggestionsResponseDto> {
+    const { limit = 50, offset = 0 } = options;
+
+    // Find orphaned Telegram entities (name matches pattern, no telegram_user_id identifier)
+    const orphanedEntities = await this.findOrphanedTelegramEntities();
+
+    if (orphanedEntities.length === 0) {
+      return { groups: [], total: 0 };
+    }
+
+    // Get dismissed pairs to filter out
+    const dismissedPairs = await this.getDismissedPairs();
+
+    // Build suggestion groups
+    const groups: MergeSuggestionGroupDto[] = [];
+
+    for (const orphan of orphanedEntities) {
+      // Extract telegram_user_id from name
+      const match = TELEGRAM_NAME_PATTERN.exec(orphan.name);
+      if (!match) continue;
+
+      const telegramUserId = match[1];
+
+      // Find entity with this telegram_user_id identifier
+      const identifier = await this.identifierRepo.findOne({
+        where: {
+          identifierType: 'telegram_user_id',
+          identifierValue: telegramUserId,
+        },
+        relations: ['entity', 'entity.identifiers'],
+      });
+
+      if (!identifier || !identifier.entity) continue;
+
+      const primaryEntity = identifier.entity;
+
+      // Skip if this pair was dismissed
+      const dismissKey = `${primaryEntity.id}:${orphan.id}`;
+      if (dismissedPairs.has(dismissKey)) continue;
+
+      // Get message count for the orphan
+      const messageCount = await this.getMessageCount(orphan.id);
+
+      // Check if group for this primary entity already exists
+      const existingGroup = groups.find(
+        (g) => g.primaryEntity.id === primaryEntity.id,
+      );
+
+      const candidate = {
+        id: orphan.id,
+        name: orphan.name,
+        extractedUserId: telegramUserId,
+        createdAt: orphan.createdAt,
+        messageCount,
+      };
+
+      if (existingGroup) {
+        existingGroup.candidates.push(candidate);
+      } else {
+        groups.push({
+          primaryEntity: {
+            id: primaryEntity.id,
+            name: primaryEntity.name,
+            type: primaryEntity.type,
+            profilePhoto: primaryEntity.profilePhoto,
+            identifiers: (primaryEntity.identifiers || []).map((i) => ({
+              id: i.id,
+              identifierType: i.identifierType,
+              identifierValue: i.identifierValue,
+            })),
+          },
+          candidates: [candidate],
+          reason: 'orphaned_telegram_id',
+        });
+      }
+    }
+
+    // Apply pagination
+    const total = groups.length;
+    const paginatedGroups = groups.slice(offset, offset + limit);
+
+    return { groups: paginatedGroups, total };
+  }
+
+  /**
+   * Dismiss a merge suggestion.
+   */
+  async dismiss(
+    primaryEntityId: string,
+    candidateId: string,
+    dismissedBy = 'user',
+  ): Promise<void> {
+    // Validate entities exist
+    const [primary, candidate] = await Promise.all([
+      this.entityRepo.findOne({ where: { id: primaryEntityId } }),
+      this.entityRepo.findOne({ where: { id: candidateId } }),
+    ]);
+
+    if (!primary) {
+      throw new NotFoundException(`Primary entity ${primaryEntityId} not found`);
+    }
+    if (!candidate) {
+      throw new NotFoundException(`Candidate entity ${candidateId} not found`);
+    }
+
+    // Check if already dismissed
+    const existing = await this.dismissedRepo.findOne({
+      where: {
+        primaryEntityId,
+        dismissedEntityId: candidateId,
+      },
+    });
+
+    if (existing) {
+      this.logger.debug(`Suggestion already dismissed: ${primaryEntityId} -> ${candidateId}`);
+      return;
+    }
+
+    // Create dismissal record
+    const dismissal = this.dismissedRepo.create({
+      primaryEntityId,
+      dismissedEntityId: candidateId,
+      dismissedBy,
+    });
+
+    await this.dismissedRepo.save(dismissal);
+    this.logger.log(`Dismissed merge suggestion: ${primaryEntityId} -> ${candidateId}`);
+  }
+
+  /**
+   * Get merge preview with detailed field information.
+   */
+  async getMergePreview(
+    sourceId: string,
+    targetId: string,
+  ): Promise<MergePreviewDto> {
+    const [source, target] = await Promise.all([
+      this.getEntityMergeData(sourceId),
+      this.getEntityMergeData(targetId),
+    ]);
+
+    // Detect conflicts
+    const conflicts = this.detectConflicts(source, target);
+
+    return { source, target, conflicts };
+  }
+
+  /**
+   * Execute merge with selected fields.
+   */
+  async mergeWithOptions(dto: MergeRequestDto): Promise<{
+    mergedEntityId: string;
+    sourceEntityDeleted: boolean;
+    identifiersMoved: number;
+    factsMoved: number;
+  }> {
+    const { sourceId, targetId, includeIdentifiers, includeFacts, conflictResolutions } = dto;
+
+    // Validate entities exist
+    const [source, target] = await Promise.all([
+      this.entityRepo.findOne({
+        where: { id: sourceId },
+        relations: ['identifiers', 'facts'],
+      }),
+      this.entityRepo.findOne({
+        where: { id: targetId },
+        relations: ['identifiers', 'facts'],
+      }),
+    ]);
+
+    if (!source) {
+      throw new NotFoundException(`Source entity ${sourceId} not found`);
+    }
+    if (!target) {
+      throw new NotFoundException(`Target entity ${targetId} not found`);
+    }
+    if (sourceId === targetId) {
+      throw new ConflictException('Cannot merge entity with itself');
+    }
+
+    // Build conflict resolution map
+    const resolutionMap = new Map<string, ConflictResolution>();
+    for (const res of conflictResolutions) {
+      const key = `${res.field}:${res.type}`;
+      resolutionMap.set(key, res.resolution);
+    }
+
+    // Move selected identifiers
+    let identifiersMoved = 0;
+    for (const idId of includeIdentifiers) {
+      const identifier = source.identifiers?.find((i) => i.id === idId);
+      if (!identifier) continue;
+
+      // Check for conflict
+      const conflictKey = `identifier:${identifier.identifierType}`;
+      const resolution = resolutionMap.get(conflictKey);
+
+      // Check if target already has this identifier type
+      const targetHasType = target.identifiers?.some(
+        (i) => i.identifierType === identifier.identifierType,
+      );
+
+      if (targetHasType && resolution === ConflictResolution.KEEP_TARGET) {
+        // Skip this identifier - keep target's
+        continue;
+      }
+
+      // Move identifier to target
+      await this.identifierRepo.update(
+        { id: identifier.id },
+        { entityId: targetId },
+      );
+      identifiersMoved++;
+    }
+
+    // Move selected facts
+    let factsMoved = 0;
+    for (const factId of includeFacts) {
+      const fact = source.facts?.find((f) => f.id === factId);
+      if (!fact) continue;
+
+      // Check for conflict
+      const conflictKey = `fact:${fact.factType}`;
+      const resolution = resolutionMap.get(conflictKey);
+
+      // Check if target already has this fact type
+      const targetHasType = target.facts?.some(
+        (f) => f.factType === fact.factType && !f.validUntil,
+      );
+
+      if (targetHasType && resolution === ConflictResolution.KEEP_TARGET) {
+        // Skip this fact - keep target's
+        continue;
+      }
+
+      if (targetHasType && resolution === ConflictResolution.KEEP_BOTH) {
+        // Mark target's fact as historical, then move source's
+        const targetFact = target.facts?.find(
+          (f) => f.factType === fact.factType && !f.validUntil,
+        );
+        if (targetFact) {
+          await this.factRepo.update(
+            { id: targetFact.id },
+            { validUntil: new Date() },
+          );
+        }
+      }
+
+      // Move fact to target
+      await this.factRepo.update(
+        { id: fact.id },
+        { entityId: targetId },
+      );
+      factsMoved++;
+    }
+
+    // Update messages to point to target entity
+    await this.entityRepo.query(
+      `UPDATE messages SET entity_id = $1 WHERE entity_id = $2`,
+      [targetId, sourceId],
+    );
+
+    // Delete source entity
+    await this.entityRepo.remove(source);
+
+    // Remove any dismissed suggestions involving the source
+    await this.dismissedRepo.delete({ primaryEntityId: sourceId });
+    await this.dismissedRepo.delete({ dismissedEntityId: sourceId });
+
+    this.logger.log(
+      `Merged entity ${sourceId} into ${targetId}: ${identifiersMoved} identifiers, ${factsMoved} facts`,
+    );
+
+    return {
+      mergedEntityId: targetId,
+      sourceEntityDeleted: true,
+      identifiersMoved,
+      factsMoved,
+    };
+  }
+
+  /**
+   * Find orphaned Telegram entities.
+   * These are entities with names like "Telegram 1234567890" but no telegram_user_id identifier.
+   */
+  private async findOrphanedTelegramEntities(): Promise<EntityRecord[]> {
+    // Use raw query for pattern matching and NOT EXISTS
+    const results = await this.entityRepo.query(`
+      SELECT e.*
+      FROM entities e
+      WHERE e.name ~ '^Telegram [0-9]+$'
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_identifiers ei
+          WHERE ei.entity_id = e.id
+            AND ei.identifier_type = 'telegram_user_id'
+        )
+      ORDER BY e.created_at DESC
+    `);
+
+    return results as EntityRecord[];
+  }
+
+  /**
+   * Get set of dismissed pairs as "primaryId:candidateId".
+   */
+  private async getDismissedPairs(): Promise<Set<string>> {
+    const dismissed = await this.dismissedRepo.find();
+    return new Set(
+      dismissed.map((d) => `${d.primaryEntityId}:${d.dismissedEntityId}`),
+    );
+  }
+
+  /**
+   * Get message count for an entity.
+   */
+  private async getMessageCount(entityId: string): Promise<number> {
+    const result = await this.entityRepo.query(
+      `SELECT COUNT(*) as count FROM messages WHERE entity_id = $1`,
+      [entityId],
+    );
+    return parseInt(result[0]?.count || '0', 10);
+  }
+
+  /**
+   * Get detailed entity data for merge preview.
+   */
+  private async getEntityMergeData(entityId: string): Promise<EntityMergeDataDto> {
+    const entity = await this.entityRepo.findOne({
+      where: { id: entityId },
+      relations: ['identifiers', 'facts'],
+    });
+
+    if (!entity) {
+      throw new NotFoundException(`Entity ${entityId} not found`);
+    }
+
+    const messageCount = await this.getMessageCount(entityId);
+    const relationsCount = await this.getRelationsCount(entityId);
+
+    // Map identifiers
+    const identifiers: EntityIdentifierDto[] = (entity.identifiers || []).map((i) => ({
+      id: i.id,
+      identifierType: i.identifierType,
+      identifierValue: i.identifierValue,
+    }));
+
+    // Map facts (only current, not historical)
+    const facts: EntityFactDto[] = (entity.facts || [])
+      .filter((f) => !f.validUntil)
+      .map((f) => ({
+        id: f.id,
+        factType: f.factType,
+        value: f.value,
+        ranking: f.rank || 'normal',
+      }));
+
+    return {
+      id: entity.id,
+      name: entity.name,
+      type: entity.type,
+      identifiers,
+      facts,
+      messageCount,
+      relationsCount,
+    };
+  }
+
+  /**
+   * Get relations count for an entity.
+   */
+  private async getRelationsCount(entityId: string): Promise<number> {
+    const result = await this.entityRepo.query(
+      `SELECT COUNT(DISTINCT relation_id) as count
+       FROM entity_relation_members
+       WHERE entity_id = $1 AND valid_until IS NULL`,
+      [entityId],
+    );
+    return parseInt(result[0]?.count || '0', 10);
+  }
+
+  /**
+   * Detect conflicts between source and target entities.
+   */
+  private detectConflicts(
+    source: EntityMergeDataDto,
+    target: EntityMergeDataDto,
+  ): MergeConflictDto[] {
+    const conflicts: MergeConflictDto[] = [];
+
+    // Check identifier conflicts (same type, different value)
+    for (const sourceId of source.identifiers) {
+      const targetId = target.identifiers.find(
+        (t) => t.identifierType === sourceId.identifierType,
+      );
+      if (targetId && targetId.identifierValue !== sourceId.identifierValue) {
+        conflicts.push({
+          field: 'identifier',
+          type: sourceId.identifierType,
+          sourceValue: sourceId.identifierValue,
+          targetValue: targetId.identifierValue,
+        });
+      }
+    }
+
+    // Check fact conflicts (same type, different value)
+    for (const sourceFact of source.facts) {
+      const targetFact = target.facts.find(
+        (t) => t.factType === sourceFact.factType,
+      );
+      if (targetFact && targetFact.value !== sourceFact.value) {
+        conflicts.push({
+          field: 'fact',
+          type: sourceFact.factType,
+          sourceValue: sourceFact.value,
+          targetValue: targetFact.value,
+        });
+      }
+    }
+
+    return conflicts;
+  }
+}
