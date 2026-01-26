@@ -16,6 +16,7 @@ export enum RelationType {
   // Социальные
   FRIENDSHIP = 'friendship', // roles: friend
   ACQUAINTANCE = 'acquaintance', // roles: acquaintance
+  MENTORSHIP = 'mentorship', // roles: mentor, mentee (учитель/ученик, тренер/подопечный)
 
   // Бизнес
   PARTNERSHIP = 'partnership', // roles: partner
@@ -41,6 +42,7 @@ export const RELATION_ROLES: Record<RelationType, string[]> = {
   [RelationType.SIBLINGHOOD]: ['sibling'],
   [RelationType.FRIENDSHIP]: ['friend'],
   [RelationType.ACQUAINTANCE]: ['acquaintance'],
+  [RelationType.MENTORSHIP]: ['mentor', 'mentee'],
   [RelationType.PARTNERSHIP]: ['partner'],
   [RelationType.CLIENT_VENDOR]: ['client', 'vendor'],
 };
@@ -60,6 +62,7 @@ export const RELATION_CARDINALITY: Record<
   [RelationType.SIBLINGHOOD]: { min: 2, max: 20 },
   [RelationType.FRIENDSHIP]: { min: 2, max: 2 },
   [RelationType.ACQUAINTANCE]: { min: 2, max: 2 },
+  [RelationType.MENTORSHIP]: { min: 2, max: 2 },
   [RelationType.PARTNERSHIP]: { min: 2, max: 10 },
   [RelationType.CLIENT_VENDOR]: { min: 2, max: 2 },
 };

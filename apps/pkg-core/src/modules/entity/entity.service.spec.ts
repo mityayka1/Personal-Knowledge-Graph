@@ -27,6 +27,7 @@ describe('EntityService', () => {
     organizationId: null,
     notes: null,
     isBot: false,
+    isOwner: false,
     identifiers: [],
     facts: [],
     createdAt: new Date(),
@@ -481,6 +482,92 @@ describe('EntityService', () => {
       await expect(serviceWithoutRelations.getGraph('any-uuid')).rejects.toThrow(
         'Entity graph is temporarily unavailable',
       );
+    });
+  });
+
+  describe('findMe', () => {
+    it('should return owner entity when exists', async () => {
+      const ownerEntity = { ...mockEntity, id: 'owner-uuid', isOwner: true };
+      mockEntityRepository.findOne.mockResolvedValue(ownerEntity);
+
+      const result = await service.findMe();
+
+      expect(result).toEqual(ownerEntity);
+      expect(entityRepo.findOne).toHaveBeenCalledWith({
+        where: { isOwner: true },
+        relations: ['organization', 'identifiers', 'facts'],
+      });
+    });
+
+    it('should return null when no owner is set', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.findMe();
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('setOwner', () => {
+    it('should set entity as owner when no current owner', async () => {
+      const newOwner = { ...mockEntity, id: 'new-owner-uuid', isOwner: false };
+      const updatedOwner = { ...newOwner, isOwner: true };
+
+      mockEntityRepository.findOne
+        .mockResolvedValueOnce(newOwner) // findOne(id)
+        .mockResolvedValueOnce(null) // findOne({ isOwner: true })
+        .mockResolvedValueOnce(updatedOwner); // return after save
+      mockEntityRepository.save.mockResolvedValue(updatedOwner);
+
+      const result = await service.setOwner('new-owner-uuid');
+
+      expect(result.isOwner).toBe(true);
+      expect(entityRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('should unset current owner and set new owner', async () => {
+      const currentOwner = { ...mockEntity, id: 'current-owner-uuid', isOwner: true };
+      const newOwner = { ...mockEntity, id: 'new-owner-uuid', isOwner: false };
+      const updatedNewOwner = { ...newOwner, isOwner: true };
+
+      mockEntityRepository.findOne
+        .mockResolvedValueOnce(newOwner) // findOne(id) for new owner
+        .mockResolvedValueOnce(currentOwner) // findOne({ isOwner: true })
+        .mockResolvedValueOnce(updatedNewOwner); // return after save
+      mockEntityRepository.save
+        .mockResolvedValueOnce({ ...currentOwner, isOwner: false }) // save old owner
+        .mockResolvedValueOnce(updatedNewOwner); // save new owner
+
+      const result = await service.setOwner('new-owner-uuid');
+
+      expect(result.isOwner).toBe(true);
+      expect(entityRepo.save).toHaveBeenCalledTimes(2);
+      // First call unsets old owner
+      expect(entityRepo.save).toHaveBeenNthCalledWith(1, expect.objectContaining({ isOwner: false }));
+      // Second call sets new owner
+      expect(entityRepo.save).toHaveBeenNthCalledWith(2, expect.objectContaining({ isOwner: true }));
+    });
+
+    it('should not unset if setting same entity as owner', async () => {
+      const currentOwner = { ...mockEntity, id: 'same-uuid', isOwner: true };
+
+      mockEntityRepository.findOne
+        .mockResolvedValueOnce(currentOwner) // findOne(id)
+        .mockResolvedValueOnce(currentOwner) // findOne({ isOwner: true })
+        .mockResolvedValueOnce(currentOwner); // return after save
+      mockEntityRepository.save.mockResolvedValue(currentOwner);
+
+      const result = await service.setOwner('same-uuid');
+
+      expect(result.isOwner).toBe(true);
+      // Only one save call (not unsetting)
+      expect(entityRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw NotFoundException for non-existent entity', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.setOwner('non-existent')).rejects.toThrow(NotFoundException);
     });
   });
 });

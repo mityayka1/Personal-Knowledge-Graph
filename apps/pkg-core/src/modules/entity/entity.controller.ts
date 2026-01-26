@@ -11,6 +11,7 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { EntityService } from './entity.service';
 import { EntityFactService } from './entity-fact/entity-fact.service';
@@ -33,6 +34,19 @@ export class EntityController {
     @Query('offset') offset?: number,
   ) {
     return this.entityService.findAll({ type, search, limit, offset });
+  }
+
+  /**
+   * Get the owner entity ("me").
+   * Returns 404 if no owner is set.
+   */
+  @Get('me')
+  async findMe() {
+    const owner = await this.entityService.findMe();
+    if (!owner) {
+      throw new NotFoundException('Owner entity not set. Use POST /entities/:id/set-owner to set one.');
+    }
+    return owner;
   }
 
   @Get(':id')
@@ -64,6 +78,15 @@ export class EntityController {
     @Param('targetId', ParseUUIDPipe) targetId: string,
   ) {
     return this.entityService.merge(id, targetId);
+  }
+
+  /**
+   * Set entity as the system owner ("me").
+   * Only one entity can be owner at a time.
+   */
+  @Post(':id/set-owner')
+  async setOwner(@Param('id', ParseUUIDPipe) id: string) {
+    return this.entityService.setOwner(id);
   }
 
   // Facts management

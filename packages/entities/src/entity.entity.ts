@@ -65,6 +65,14 @@ export class EntityRecord {
   @Index('idx_entities_is_bot', { where: '"is_bot" = true' })
   isBot: boolean;
 
+  /**
+   * Marks this entity as the system owner ("me").
+   * Only one entity can have isOwner = true (enforced by partial unique index).
+   */
+  @Column({ name: 'is_owner', type: 'boolean', default: false })
+  @Index('idx_entities_is_owner', { unique: true, where: '"is_owner" = true' })
+  isOwner: boolean;
+
   @OneToMany(() => EntityIdentifier, (identifier) => identifier.entity)
   identifiers: EntityIdentifier[];
 
