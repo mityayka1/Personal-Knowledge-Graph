@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network } from 'lucide-vue-next';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network, Link2, AlertCircle } from 'lucide-vue-next';
 import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
-import { useEntityGraph } from '~/composables/useEntityGraph';
+import { useEntityGraph, getRelationLabel } from '~/composables/useEntityGraph';
+import { useDeleteRelation, getRoleLabel } from '~/composables/useRelations';
+import AddRelationDialog from '~/components/entity/AddRelationDialog.vue';
+import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -9,11 +12,63 @@ const router = useRouter();
 
 const entityId = computed(() => route.params.id as string);
 const { data: entity, isLoading, error, refetch } = useEntity(entityId);
-const { data: graphData, isLoading: isGraphLoading } = useEntityGraph(entityId);
+const { data: graphData, isLoading: isGraphLoading, refetch: refetchGraph } = useEntityGraph(entityId);
 
 const deleteEntity = useDeleteEntity();
 const addFact = useAddFact();
 const removeFact = useRemoveFact();
+const deleteRelation = useDeleteRelation();
+
+// Add relation dialog state
+const showAddRelationDialog = ref(false);
+const relationError = ref('');
+
+// Confirm dialogs state (#5: replace native confirm)
+const showDeleteEntityConfirm = ref(false);
+const showDeleteRelationConfirm = ref(false);
+const showDeleteFactConfirm = ref(false);
+const pendingDeleteRelation = ref<{ relationId: string; otherEntityId?: string } | null>(null);
+const pendingDeleteFactId = ref<string | null>(null);
+
+// Handle relation created - refetch graph
+async function handleRelationCreated() {
+  await refetchGraph();
+}
+
+// Handle delete relation - show confirm dialog
+function handleDeleteRelation(relationId: string, otherEntityId?: string) {
+  pendingDeleteRelation.value = { relationId, otherEntityId };
+  showDeleteRelationConfirm.value = true;
+}
+
+// Confirm delete relation
+async function confirmDeleteRelation() {
+  if (!pendingDeleteRelation.value) return;
+
+  relationError.value = '';
+  const { relationId, otherEntityId } = pendingDeleteRelation.value;
+
+  try {
+    // #2: Pass affected entity IDs for targeted query invalidation
+    const affectedEntityIds = [entityId.value];
+    if (otherEntityId) {
+      affectedEntityIds.push(otherEntityId);
+    }
+
+    await deleteRelation.mutateAsync({ relationId, affectedEntityIds });
+    showDeleteRelationConfirm.value = false;
+    pendingDeleteRelation.value = null;
+    await refetchGraph();
+  } catch (error) {
+    console.error('Failed to delete relation:', error);
+    // #12: Show user-visible error feedback
+    relationError.value = error instanceof Error
+      ? error.message
+      : 'Не удалось удалить связь. Попробуйте ещё раз.';
+    showDeleteRelationConfirm.value = false;
+    pendingDeleteRelation.value = null;
+  }
+}
 
 // Extraction settings
 const extractionSettings = ref<{ autoSaveThreshold: number; minConfidence: number } | null>(null);
@@ -86,24 +141,37 @@ async function handleAddFact() {
   newFact.value = '';
 }
 
-async function handleRemoveFact(factId: string) {
-  if (!entity.value) return;
-
-  if (confirm('Удалить этот факт?')) {
-    await removeFact.mutateAsync({
-      entityId: entity.value.id,
-      factId,
-    });
-  }
+// Handle remove fact - show confirm dialog
+function handleRemoveFact(factId: string) {
+  pendingDeleteFactId.value = factId;
+  showDeleteFactConfirm.value = true;
 }
 
-async function handleDelete() {
+// Confirm remove fact
+async function confirmRemoveFact() {
+  if (!entity.value || !pendingDeleteFactId.value) return;
+
+  await removeFact.mutateAsync({
+    entityId: entity.value.id,
+    factId: pendingDeleteFactId.value,
+  });
+
+  showDeleteFactConfirm.value = false;
+  pendingDeleteFactId.value = null;
+}
+
+// Handle delete entity - show confirm dialog
+function handleDelete() {
+  showDeleteEntityConfirm.value = true;
+}
+
+// Confirm delete entity
+async function confirmDeleteEntity() {
   if (!entity.value) return;
 
-  if (confirm(`Вы уверены, что хотите удалить "${entity.value.name}"?`)) {
-    await deleteEntity.mutateAsync(entity.value.id);
-    router.push('/entities');
-  }
+  await deleteEntity.mutateAsync(entity.value.id);
+  showDeleteEntityConfirm.value = false;
+  router.push('/entities');
 }
 
 function getIdentifierIcon(type: string | undefined) {
@@ -314,11 +382,15 @@ function handleGraphNodeClick(nodeId: string) {
 
       <!-- Relations Graph -->
       <Card>
-        <CardHeader>
+        <CardHeader class="flex flex-row items-center justify-between">
           <CardTitle class="text-lg flex items-center gap-2">
             <Network class="h-5 w-5" />
             Граф связей
           </CardTitle>
+          <Button size="sm" variant="outline" @click="showAddRelationDialog = true">
+            <Link2 class="mr-2 h-4 w-4" />
+            Добавить связь
+          </Button>
         </CardHeader>
         <CardContent>
           <div v-if="isGraphLoading" class="h-[400px] flex items-center justify-center">
@@ -334,6 +406,65 @@ function handleGraphNodeClick(nodeId: string) {
             <p class="text-xs text-muted-foreground mt-2">
               Кликните на узел для перехода к связанной сущности
             </p>
+
+            <!-- Relations List -->
+            <div class="mt-6 border-t pt-4">
+              <h4 class="text-sm font-medium mb-3">Список связей</h4>
+
+              <!-- Error message (#12: user-visible feedback) -->
+              <div
+                v-if="relationError"
+                class="flex items-center gap-2 p-3 mb-3 rounded-md bg-destructive/10 text-destructive text-sm"
+              >
+                <AlertCircle class="h-4 w-4 shrink-0" />
+                <span>{{ relationError }}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-6 w-6 ml-auto"
+                  @click="relationError = ''"
+                >
+                  <X class="h-3 w-3" />
+                </Button>
+              </div>
+              <div class="space-y-2">
+                <div
+                  v-for="edge in graphData.edges"
+                  :key="edge.id"
+                  class="flex items-center justify-between p-3 rounded-lg bg-muted/50 group"
+                >
+                  <div class="flex items-center gap-3 min-w-0">
+                    <Badge variant="outline" class="shrink-0">
+                      {{ getRelationLabel(edge.relationType) }}
+                    </Badge>
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="text-sm text-muted-foreground truncate">
+                        {{ edge.source === entityId ? getRoleLabel(edge.relationType, edge.sourceRole) : getRoleLabel(edge.relationType, edge.targetRole) }}
+                      </span>
+                      <span class="text-muted-foreground">↔</span>
+                      <NuxtLink
+                        :to="`/entities/${edge.source === entityId ? edge.target : edge.source}`"
+                        class="font-medium text-primary hover:underline truncate"
+                      >
+                        {{ graphData.nodes.find(n => n.id === (edge.source === entityId ? edge.target : edge.source))?.name || 'Неизвестно' }}
+                      </NuxtLink>
+                      <span class="text-sm text-muted-foreground truncate">
+                        ({{ edge.source === entityId ? getRoleLabel(edge.relationType, edge.targetRole) : getRoleLabel(edge.relationType, edge.sourceRole) }})
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-destructive hover:text-destructive"
+                    :disabled="deleteRelation.isPending.value"
+                    @click="handleDeleteRelation(edge.id, edge.source === entityId ? edge.target : edge.source)"
+                  >
+                    <Trash2 class="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-else class="text-muted-foreground text-center py-8">
             <Network class="h-12 w-12 mx-auto mb-3 opacity-30" />
@@ -515,6 +646,48 @@ function handleGraphNodeClick(nodeId: string) {
           </DialogContent>
         </Dialog>
       </ClientOnly>
+
+      <!-- Add Relation Dialog -->
+      <AddRelationDialog
+        v-model:open="showAddRelationDialog"
+        :current-entity-id="entity.id"
+        :current-entity-name="entity.name"
+        :current-entity-type="entity.type"
+        @success="handleRelationCreated"
+      />
+
+      <!-- Confirm Delete Entity Dialog (#5) -->
+      <ConfirmDialog
+        v-model:open="showDeleteEntityConfirm"
+        title="Удалить сущность"
+        :description="`Вы уверены, что хотите удалить «${entity.name}»? Это действие нельзя отменить.`"
+        confirm-text="Удалить"
+        variant="destructive"
+        :loading="deleteEntity.isPending.value"
+        @confirm="confirmDeleteEntity"
+      />
+
+      <!-- Confirm Delete Relation Dialog (#5) -->
+      <ConfirmDialog
+        v-model:open="showDeleteRelationConfirm"
+        title="Удалить связь"
+        description="Вы уверены, что хотите удалить эту связь?"
+        confirm-text="Удалить"
+        variant="destructive"
+        :loading="deleteRelation.isPending.value"
+        @confirm="confirmDeleteRelation"
+      />
+
+      <!-- Confirm Delete Fact Dialog (#5) -->
+      <ConfirmDialog
+        v-model:open="showDeleteFactConfirm"
+        title="Удалить факт"
+        description="Вы уверены, что хотите удалить этот факт?"
+        confirm-text="Удалить"
+        variant="destructive"
+        :loading="removeFact.isPending.value"
+        @confirm="confirmRemoveFact"
+      />
 
       <!-- Events -->
       <Card>
