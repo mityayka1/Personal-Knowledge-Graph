@@ -8,6 +8,9 @@ import {
   Query,
   Body,
   ParseUUIDPipe,
+  ParseIntPipe,
+  DefaultValuePipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { EntityService } from './entity.service';
 import { EntityFactService } from './entity-fact/entity-fact.service';
@@ -102,5 +105,26 @@ export class EntityController {
     await this.entityService.findOne(id);
     const invalidated = await this.factService.invalidate(factId);
     return { invalidated, factId };
+  }
+
+  // Graph visualization
+
+  /**
+   * Get entity graph for visualization.
+   * Returns nodes (entities) and edges (relations) centered around the given entity.
+   *
+   * @param id - Entity UUID
+   * @param depth - Graph depth (1-3, currently only 1 is supported)
+   */
+  @Get(':id/graph')
+  async getGraph(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('depth', new DefaultValuePipe(1), ParseIntPipe) depth: number,
+  ) {
+    // Validate depth range
+    if (depth < 1 || depth > 3) {
+      throw new BadRequestException('depth must be between 1 and 3');
+    }
+    return this.entityService.getGraph(id, depth);
   }
 }

@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  Optional,
+  ServiceUnavailableException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EntityRecord, EntityType } from '@pkg/entities';
@@ -6,6 +13,38 @@ import { CreateEntityDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
 import { EntityIdentifierService } from './entity-identifier/entity-identifier.service';
 import { EntityFactService } from './entity-fact/entity-fact.service';
+import { EntityRelationService } from './entity-relation/entity-relation.service';
+
+/**
+ * Graph node representing an entity.
+ */
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: EntityType;
+  profilePhoto?: string | null;
+}
+
+/**
+ * Graph edge representing a relation.
+ */
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  relationType: string;
+  sourceRole: string;
+  targetRole: string;
+}
+
+/**
+ * Entity graph data for visualization.
+ */
+export interface EntityGraph {
+  centralEntityId: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
 
 @Injectable()
 export class EntityService {
@@ -14,6 +53,8 @@ export class EntityService {
     private entityRepo: Repository<EntityRecord>,
     private identifierService: EntityIdentifierService,
     private factService: EntityFactService,
+    @Optional()
+    private relationService?: EntityRelationService,
   ) {}
 
   async findAll(options: {
@@ -152,6 +193,103 @@ export class EntityService {
       sourceEntityDeleted: true,
       identifiersMoved,
       factsMoved,
+    };
+  }
+
+  /**
+   * Get entity graph for visualization.
+   * Returns nodes (entities) and edges (relations) centered around the given entity.
+   *
+   * @param entityId - Central entity ID
+   * @param depth - How many levels of relations to include (default: 1, max: 1)
+   */
+  async getGraph(entityId: string, depth = 1): Promise<EntityGraph> {
+    if (!this.relationService) {
+      throw new ServiceUnavailableException(
+        'Entity graph is temporarily unavailable. EntityRelationService is not configured.',
+      );
+    }
+
+    // Validate depth parameter
+    if (depth > 1) {
+      throw new BadRequestException(
+        'depth > 1 is not yet supported. Please use depth=1.',
+      );
+    }
+
+    const centralEntity = await this.findOne(entityId);
+
+    const nodes: Map<string, GraphNode> = new Map();
+    const edges: GraphEdge[] = [];
+
+    // Add central entity
+    nodes.set(centralEntity.id, {
+      id: centralEntity.id,
+      name: centralEntity.name,
+      type: centralEntity.type,
+      profilePhoto: centralEntity.profilePhoto,
+    });
+
+    // Get relations for central entity
+    const relations = await this.relationService.findByEntity(entityId);
+
+    for (const relation of relations) {
+      // Process all members (exclude soft-deleted)
+      const members = relation.members.filter((m) => !m.validUntil);
+
+      // First pass: add all valid nodes
+      for (const member of members) {
+        if (!nodes.has(member.entityId) && member.entity) {
+          nodes.set(member.entityId, {
+            id: member.entity.id,
+            name: member.entity.name,
+            type: member.entity.type,
+            profilePhoto: member.entity.profilePhoto,
+          });
+        }
+      }
+
+      // Second pass: create edges only between existing nodes
+      // For binary relations (2 members), create one edge
+      if (members.length === 2) {
+        const [m1, m2] = members;
+        // Only create edge if both nodes exist (prevents orphaned edges)
+        if (nodes.has(m1.entityId) && nodes.has(m2.entityId)) {
+          edges.push({
+            id: relation.id,
+            source: m1.entityId,
+            target: m2.entityId,
+            relationType: relation.relationType,
+            sourceRole: m1.role,
+            targetRole: m2.role,
+          });
+        }
+      } else if (members.length > 2) {
+        // For N-ary relations, create edges from central entity to all others
+        const centralMember = members.find((m) => m.entityId === entityId);
+        const otherMembers = members.filter((m) => m.entityId !== entityId);
+
+        for (const other of otherMembers) {
+          // Only create edge if target node exists (prevents orphaned edges)
+          if (nodes.has(other.entityId)) {
+            edges.push({
+              // Include role to prevent ID collision when same entities have multiple relations
+              id: `${relation.id}-${other.entityId}-${other.role}`,
+              source: entityId,
+              target: other.entityId,
+              relationType: relation.relationType,
+              sourceRole: centralMember?.role || 'member',
+              targetRole: other.role,
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      centralEntityId: entityId,
+      nodes: Array.from(nodes.values()),
+      edges,
     };
   }
 }
