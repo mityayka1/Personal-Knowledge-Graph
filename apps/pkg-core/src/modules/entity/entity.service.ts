@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, ConflictException, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  Optional,
+  ServiceUnavailableException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EntityRecord, EntityType } from '@pkg/entities';
@@ -194,11 +201,20 @@ export class EntityService {
    * Returns nodes (entities) and edges (relations) centered around the given entity.
    *
    * @param entityId - Central entity ID
-   * @param depth - How many levels of relations to include (default: 1)
+   * @param depth - How many levels of relations to include (default: 1, max: 1)
    */
   async getGraph(entityId: string, depth = 1): Promise<EntityGraph> {
     if (!this.relationService) {
-      throw new Error('EntityRelationService not available');
+      throw new ServiceUnavailableException(
+        'Entity graph is temporarily unavailable. EntityRelationService is not configured.',
+      );
+    }
+
+    // Validate depth parameter
+    if (depth > 1) {
+      throw new BadRequestException(
+        'depth > 1 is not yet supported. Please use depth=1.',
+      );
     }
 
     const centralEntity = await this.findOne(entityId);
@@ -218,54 +234,57 @@ export class EntityService {
     const relations = await this.relationService.findByEntity(entityId);
 
     for (const relation of relations) {
-      // Process all members
+      // Process all members (exclude soft-deleted)
       const members = relation.members.filter((m) => !m.validUntil);
 
+      // First pass: add all valid nodes
       for (const member of members) {
-        // Add node if not already present
-        if (!nodes.has(member.entityId)) {
-          const entity = member.entity;
-          if (entity) {
-            nodes.set(member.entityId, {
-              id: entity.id,
-              name: entity.name,
-              type: entity.type,
-              profilePhoto: entity.profilePhoto,
-            });
-          }
+        if (!nodes.has(member.entityId) && member.entity) {
+          nodes.set(member.entityId, {
+            id: member.entity.id,
+            name: member.entity.name,
+            type: member.entity.type,
+            profilePhoto: member.entity.profilePhoto,
+          });
         }
       }
 
-      // Create edges between members
+      // Second pass: create edges only between existing nodes
       // For binary relations (2 members), create one edge
       if (members.length === 2) {
-        edges.push({
-          id: relation.id,
-          source: members[0].entityId,
-          target: members[1].entityId,
-          relationType: relation.relationType,
-          sourceRole: members[0].role,
-          targetRole: members[1].role,
-        });
+        const [m1, m2] = members;
+        // Only create edge if both nodes exist (prevents orphaned edges)
+        if (nodes.has(m1.entityId) && nodes.has(m2.entityId)) {
+          edges.push({
+            id: relation.id,
+            source: m1.entityId,
+            target: m2.entityId,
+            relationType: relation.relationType,
+            sourceRole: m1.role,
+            targetRole: m2.role,
+          });
+        }
       } else if (members.length > 2) {
         // For N-ary relations, create edges from central entity to all others
         const centralMember = members.find((m) => m.entityId === entityId);
         const otherMembers = members.filter((m) => m.entityId !== entityId);
 
         for (const other of otherMembers) {
-          edges.push({
-            id: `${relation.id}-${other.entityId}`,
-            source: entityId,
-            target: other.entityId,
-            relationType: relation.relationType,
-            sourceRole: centralMember?.role || 'member',
-            targetRole: other.role,
-          });
+          // Only create edge if target node exists (prevents orphaned edges)
+          if (nodes.has(other.entityId)) {
+            edges.push({
+              // Include role to prevent ID collision when same entities have multiple relations
+              id: `${relation.id}-${other.entityId}-${other.role}`,
+              source: entityId,
+              target: other.entityId,
+              relationType: relation.relationType,
+              sourceRole: centralMember?.role || 'member',
+              targetRole: other.role,
+            });
+          }
         }
       }
     }
-
-    // TODO: If depth > 1, recursively fetch relations for connected entities
 
     return {
       centralEntityId: entityId,

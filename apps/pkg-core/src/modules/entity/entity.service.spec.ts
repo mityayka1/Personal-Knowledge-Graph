@@ -1,7 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  NotFoundException,
+  ConflictException,
+  ServiceUnavailableException,
+  BadRequestException,
+} from '@nestjs/common';
 import { EntityService } from './entity.service';
 import { EntityIdentifierService } from './entity-identifier/entity-identifier.service';
 import { EntityFactService } from './entity-fact/entity-fact.service';
@@ -388,6 +393,94 @@ describe('EntityService', () => {
       // Only central entity, no edges (employer is soft-deleted)
       expect(result.nodes).toHaveLength(1);
       expect(result.edges).toHaveLength(0);
+    });
+
+    it('should throw BadRequestException when depth > 1', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([]);
+
+      await expect(service.getGraph('central-uuid', 2)).rejects.toThrow(BadRequestException);
+      await expect(service.getGraph('central-uuid', 2)).rejects.toThrow(
+        'depth > 1 is not yet supported',
+      );
+    });
+
+    it('should filter out orphaned edges (member.entity is null)', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([
+        {
+          id: 'relation-1',
+          relationType: RelationType.FRIENDSHIP,
+          members: [
+            { entityId: 'central-uuid', role: 'friend', validUntil: null, entity: centralEntity },
+            { entityId: 'orphan-uuid', role: 'friend', validUntil: null, entity: null }, // Entity not loaded/deleted
+          ],
+        },
+      ]);
+
+      const result = await service.getGraph('central-uuid');
+
+      // Only central entity node, no edge (orphan has no entity data)
+      expect(result.nodes).toHaveLength(1);
+      expect(result.edges).toHaveLength(0);
+    });
+
+    it('should include role in edge ID for N-ary relations to prevent collision', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(centralEntity);
+      mockRelationService.findByEntity.mockResolvedValue([
+        {
+          id: 'team-relation',
+          relationType: RelationType.TEAM,
+          members: [
+            { entityId: 'central-uuid', role: 'lead', validUntil: null, entity: centralEntity },
+            { entityId: 'related-uuid', role: 'member', validUntil: null, entity: relatedEntity },
+            { entityId: 'org-uuid', role: 'sponsor', validUntil: null, entity: orgEntity },
+          ],
+        },
+      ]);
+
+      const result = await service.getGraph('central-uuid');
+
+      // N-ary edge IDs should include role to prevent collision
+      expect(result.edges).toHaveLength(2);
+      expect(result.edges.map((e) => e.id)).toContain('team-relation-related-uuid-member');
+      expect(result.edges.map((e) => e.id)).toContain('team-relation-org-uuid-sponsor');
+    });
+  });
+
+  describe('getGraph without relationService', () => {
+    let serviceWithoutRelations: EntityService;
+
+    beforeEach(async () => {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          EntityService,
+          {
+            provide: getRepositoryToken(EntityRecord),
+            useValue: mockEntityRepository,
+          },
+          {
+            provide: EntityIdentifierService,
+            useValue: mockIdentifierService,
+          },
+          {
+            provide: EntityFactService,
+            useValue: mockFactService,
+          },
+          // EntityRelationService NOT provided
+        ],
+      }).compile();
+
+      serviceWithoutRelations = module.get<EntityService>(EntityService);
+    });
+
+    it('should throw ServiceUnavailableException when relationService is undefined', async () => {
+      await expect(serviceWithoutRelations.getGraph('any-uuid')).rejects.toThrow(
+        ServiceUnavailableException,
+      );
+      await expect(serviceWithoutRelations.getGraph('any-uuid')).rejects.toThrow(
+        'Entity graph is temporarily unavailable',
+      );
     });
   });
 });

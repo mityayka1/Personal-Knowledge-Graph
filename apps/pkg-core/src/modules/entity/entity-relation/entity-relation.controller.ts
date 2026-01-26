@@ -7,6 +7,7 @@ import {
   Query,
   Body,
   ParseUUIDPipe,
+  ParseEnumPipe,
   NotFoundException,
 } from '@nestjs/common';
 import { EntityRelationService } from './entity-relation.service';
@@ -32,11 +33,15 @@ export class EntityRelationController {
   /**
    * Get all relations for an entity.
    * Returns relations with context (other members, current role).
+   *
+   * @param entityId - Entity UUID
+   * @param type - Optional relation type filter (e.g., 'employment', 'friendship')
    */
   @Get()
   async findByEntity(
     @Query('entityId', ParseUUIDPipe) entityId: string,
-    @Query('type') type?: RelationType,
+    @Query('type', new ParseEnumPipe(RelationType, { optional: true }))
+    type?: RelationType,
   ) {
     if (type) {
       return this.relationService.findByType(entityId, type);
