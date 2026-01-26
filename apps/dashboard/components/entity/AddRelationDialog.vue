@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { Search, Loader2, User, Building2 } from 'lucide-vue-next';
+import { Search, Loader2, User, Building2, AlertCircle } from 'lucide-vue-next';
 import {
   RELATION_TYPES,
   type RelationTypeKey,
   isSymmetricRelation,
   getRoleLabel,
   useCreateRelation,
+  isRelationTypeCompatible,
+  getAllowedTargetTypes,
 } from '~/composables/useRelations';
 import { useEntities, type Entity } from '~/composables/useEntities';
 
@@ -26,6 +28,7 @@ const selectedRelationType = ref<RelationTypeKey | ''>('');
 const selectedTargetEntity = ref<Entity | null>(null);
 const currentEntityRole = ref('');
 const targetEntityRole = ref('');
+const errorMessage = ref('');
 
 // Entity search
 const searchQuery = ref('');
@@ -37,19 +40,32 @@ const searchParams = computed(() => ({
 const { data: searchResults, isLoading: isSearching } = useEntities(searchParams);
 const createRelation = useCreateRelation();
 
-// Filter out current entity from search results
+// Filter out current entity and incompatible types from search results (#6)
 const filteredResults = computed(() => {
   if (!searchResults.value?.items) return [];
-  return searchResults.value.items.filter(e => e.id !== props.currentEntityId);
+
+  let results = searchResults.value.items.filter(e => e.id !== props.currentEntityId);
+
+  // If relation type is selected, filter by allowed target types
+  if (selectedRelationType.value) {
+    const allowedTypes = getAllowedTargetTypes(selectedRelationType.value);
+    if (allowedTypes) {
+      results = results.filter(e => allowedTypes.includes(e.type));
+    }
+  }
+
+  return results;
 });
 
-// Relation type options for select
+// Relation type options for select (#6: filter by current entity type)
 const relationTypeOptions = computed(() => {
-  return Object.entries(RELATION_TYPES).map(([key, value]) => ({
-    value: key as RelationTypeKey,
-    label: value.label,
-    description: value.description,
-  }));
+  return Object.entries(RELATION_TYPES)
+    .filter(([key]) => isRelationTypeCompatible(key, props.currentEntityType))
+    .map(([key, value]) => ({
+      value: key as RelationTypeKey,
+      label: value.label,
+      description: value.description,
+    }));
 });
 
 // Available roles for selected relation type
@@ -67,7 +83,7 @@ const isSymmetric = computed((): boolean => {
   return !!selectedRelationType.value && isSymmetricRelation(selectedRelationType.value);
 });
 
-// Watch relation type changes to set default roles
+// Watch relation type changes to set default roles and validate target (#6, #9)
 watch(selectedRelationType, (newType) => {
   if (!newType) {
     currentEntityRole.value = '';
@@ -75,12 +91,20 @@ watch(selectedRelationType, (newType) => {
     return;
   }
 
+  // Clear selected entity if it's no longer compatible with new relation type (#6)
+  if (selectedTargetEntity.value) {
+    const allowedTypes = getAllowedTargetTypes(newType);
+    if (allowedTypes && !allowedTypes.includes(selectedTargetEntity.value.type)) {
+      selectedTargetEntity.value = null;
+    }
+  }
+
   const roles = RELATION_TYPES[newType].roles;
   if (roles.length === 1) {
     // Symmetric relation - both have same role
     currentEntityRole.value = roles[0];
     targetEntityRole.value = roles[0];
-  } else if (roles.length === 2) {
+  } else if (roles.length >= 2) {
     // Asymmetric relation - set first role as default for current entity
     currentEntityRole.value = roles[0];
     targetEntityRole.value = roles[1];
@@ -109,6 +133,8 @@ const canSubmit = computed(() => {
 async function handleSubmit() {
   if (!canSubmit.value || !selectedTargetEntity.value) return;
 
+  errorMessage.value = '';
+
   try {
     await createRelation.mutateAsync({
       relationType: selectedRelationType.value,
@@ -125,6 +151,10 @@ async function handleSubmit() {
     emit('success');
   } catch (error) {
     console.error('Failed to create relation:', error);
+    // #3: Show user-visible error feedback
+    errorMessage.value = error instanceof Error
+      ? error.message
+      : 'Не удалось создать связь. Попробуйте ещё раз.';
   }
 }
 
@@ -135,7 +165,15 @@ function resetForm() {
   currentEntityRole.value = '';
   targetEntityRole.value = '';
   searchQuery.value = '';
+  errorMessage.value = '';
 }
+
+// Reset form when dialog closes (#4)
+watch(open, (isOpen) => {
+  if (!isOpen) {
+    resetForm();
+  }
+});
 
 // Select entity from search results
 function selectEntity(entity: Entity) {
@@ -288,12 +326,13 @@ function clearSelectedEntity() {
                 </select>
               </div>
 
-              <!-- Swap button -->
+              <!-- Swap button (#10: accessibility) -->
               <Button
                 v-if="!isSymmetric"
                 variant="ghost"
                 size="icon"
                 class="h-8 w-8"
+                aria-label="Поменять роли местами"
                 @click="swapRoles"
               >
                 ⇄
@@ -330,6 +369,15 @@ function clearSelectedEntity() {
               </template>
             </p>
           </div>
+        </div>
+
+        <!-- Error message (#3: user-visible feedback) -->
+        <div
+          v-if="errorMessage"
+          class="flex items-center gap-2 p-3 rounded-md bg-destructive/10 text-destructive text-sm"
+        >
+          <AlertCircle class="h-4 w-4 shrink-0" />
+          <span>{{ errorMessage }}</span>
         </div>
 
         <DialogFooter>

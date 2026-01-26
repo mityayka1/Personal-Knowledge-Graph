@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network, Link2 } from 'lucide-vue-next';
+import { ArrowLeft, Edit, Trash2, User, Building2, Mail, Phone, Calendar, Tag, Plus, X, Sparkles, Loader2, Check, XCircle, Network, Link2, AlertCircle } from 'lucide-vue-next';
 import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactDto } from '~/composables/useEntities';
 import { useEntityGraph, getRelationLabel } from '~/composables/useEntityGraph';
-import { useDeleteRelation, getRoleLabel, RELATION_TYPES, type RelationTypeKey } from '~/composables/useRelations';
+import { useDeleteRelation, getRoleLabel } from '~/composables/useRelations';
 import AddRelationDialog from '~/components/entity/AddRelationDialog.vue';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
@@ -20,6 +20,7 @@ const deleteRelation = useDeleteRelation();
 
 // Add relation dialog state
 const showAddRelationDialog = ref(false);
+const relationError = ref('');
 
 // Handle relation created - refetch graph
 async function handleRelationCreated() {
@@ -27,14 +28,26 @@ async function handleRelationCreated() {
 }
 
 // Handle delete relation
-async function handleDeleteRelation(relationId: string) {
+async function handleDeleteRelation(relationId: string, otherEntityId?: string) {
   if (!confirm('Удалить эту связь?')) return;
 
+  relationError.value = '';
+
   try {
-    await deleteRelation.mutateAsync(relationId);
+    // #2: Pass affected entity IDs for targeted query invalidation
+    const affectedEntityIds = [entityId.value];
+    if (otherEntityId) {
+      affectedEntityIds.push(otherEntityId);
+    }
+
+    await deleteRelation.mutateAsync({ relationId, affectedEntityIds });
     await refetchGraph();
   } catch (error) {
     console.error('Failed to delete relation:', error);
+    // #12: Show user-visible error feedback
+    relationError.value = error instanceof Error
+      ? error.message
+      : 'Не удалось удалить связь. Попробуйте ещё раз.';
   }
 }
 
@@ -365,6 +378,23 @@ function handleGraphNodeClick(nodeId: string) {
             <!-- Relations List -->
             <div class="mt-6 border-t pt-4">
               <h4 class="text-sm font-medium mb-3">Список связей</h4>
+
+              <!-- Error message (#12: user-visible feedback) -->
+              <div
+                v-if="relationError"
+                class="flex items-center gap-2 p-3 mb-3 rounded-md bg-destructive/10 text-destructive text-sm"
+              >
+                <AlertCircle class="h-4 w-4 shrink-0" />
+                <span>{{ relationError }}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-6 w-6 ml-auto"
+                  @click="relationError = ''"
+                >
+                  <X class="h-3 w-3" />
+                </Button>
+              </div>
               <div class="space-y-2">
                 <div
                   v-for="edge in graphData.edges"
@@ -396,7 +426,7 @@ function handleGraphNodeClick(nodeId: string) {
                     size="icon"
                     class="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-destructive hover:text-destructive"
                     :disabled="deleteRelation.isPending.value"
-                    @click="handleDeleteRelation(edge.id)"
+                    @click="handleDeleteRelation(edge.id, edge.source === entityId ? edge.target : edge.source)"
                   >
                     <Trash2 class="h-4 w-4" />
                   </Button>
