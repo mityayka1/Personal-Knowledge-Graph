@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Search, Loader2, User, Building2, AlertCircle } from 'lucide-vue-next';
+import { useDebounceFn } from '@vueuse/core';
 import {
   RELATION_TYPES,
   type RelationTypeKey,
@@ -30,12 +31,21 @@ const currentEntityRole = ref('');
 const targetEntityRole = ref('');
 const errorMessage = ref('');
 
-// Entity search
-const searchQuery = ref('');
+// Entity search with debounce (#11)
+const searchInput = ref('');
+const debouncedSearchQuery = ref('');
+const debouncedSearch = useDebounceFn((value: string) => {
+  debouncedSearchQuery.value = value;
+}, 300);
 const searchParams = computed(() => ({
-  search: searchQuery.value,
+  search: debouncedSearchQuery.value,
   limit: 10,
 }));
+
+// Watch search input and debounce
+watch(searchInput, (value) => {
+  debouncedSearch(value);
+});
 
 const { data: searchResults, isLoading: isSearching } = useEntities(searchParams);
 const createRelation = useCreateRelation();
@@ -164,7 +174,8 @@ function resetForm() {
   selectedTargetEntity.value = null;
   currentEntityRole.value = '';
   targetEntityRole.value = '';
-  searchQuery.value = '';
+  searchInput.value = '';
+  debouncedSearchQuery.value = '';
   errorMessage.value = '';
 }
 
@@ -178,7 +189,8 @@ watch(open, (isOpen) => {
 // Select entity from search results
 function selectEntity(entity: Entity) {
   selectedTargetEntity.value = entity;
-  searchQuery.value = '';
+  searchInput.value = '';
+  debouncedSearchQuery.value = '';
 }
 
 // Clear selected entity
@@ -253,7 +265,7 @@ function clearSelectedEntity() {
               <div class="relative">
                 <Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  v-model="searchQuery"
+                  v-model="searchInput"
                   placeholder="Поиск по имени..."
                   class="pl-9"
                 />
@@ -265,7 +277,7 @@ function clearSelectedEntity() {
 
               <!-- Search results -->
               <div
-                v-if="searchQuery && filteredResults.length > 0"
+                v-if="searchInput && filteredResults.length > 0"
                 class="max-h-48 overflow-y-auto rounded-md border bg-popover"
               >
                 <button
@@ -295,7 +307,7 @@ function clearSelectedEntity() {
 
               <!-- No results -->
               <div
-                v-else-if="searchQuery && !isSearching && filteredResults.length === 0"
+                v-else-if="searchInput && !isSearching && filteredResults.length === 0"
                 class="text-center py-4 text-sm text-muted-foreground"
               >
                 Ничего не найдено

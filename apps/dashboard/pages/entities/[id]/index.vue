@@ -4,6 +4,7 @@ import { useEntity, useDeleteEntity, useAddFact, useRemoveFact, type CreateFactD
 import { useEntityGraph, getRelationLabel } from '~/composables/useEntityGraph';
 import { useDeleteRelation, getRoleLabel } from '~/composables/useRelations';
 import AddRelationDialog from '~/components/entity/AddRelationDialog.vue';
+import { ConfirmDialog } from '~/components/ui/confirm-dialog';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -22,16 +23,30 @@ const deleteRelation = useDeleteRelation();
 const showAddRelationDialog = ref(false);
 const relationError = ref('');
 
+// Confirm dialogs state (#5: replace native confirm)
+const showDeleteEntityConfirm = ref(false);
+const showDeleteRelationConfirm = ref(false);
+const showDeleteFactConfirm = ref(false);
+const pendingDeleteRelation = ref<{ relationId: string; otherEntityId?: string } | null>(null);
+const pendingDeleteFactId = ref<string | null>(null);
+
 // Handle relation created - refetch graph
 async function handleRelationCreated() {
   await refetchGraph();
 }
 
-// Handle delete relation
-async function handleDeleteRelation(relationId: string, otherEntityId?: string) {
-  if (!confirm('Удалить эту связь?')) return;
+// Handle delete relation - show confirm dialog
+function handleDeleteRelation(relationId: string, otherEntityId?: string) {
+  pendingDeleteRelation.value = { relationId, otherEntityId };
+  showDeleteRelationConfirm.value = true;
+}
+
+// Confirm delete relation
+async function confirmDeleteRelation() {
+  if (!pendingDeleteRelation.value) return;
 
   relationError.value = '';
+  const { relationId, otherEntityId } = pendingDeleteRelation.value;
 
   try {
     // #2: Pass affected entity IDs for targeted query invalidation
@@ -41,6 +56,8 @@ async function handleDeleteRelation(relationId: string, otherEntityId?: string) 
     }
 
     await deleteRelation.mutateAsync({ relationId, affectedEntityIds });
+    showDeleteRelationConfirm.value = false;
+    pendingDeleteRelation.value = null;
     await refetchGraph();
   } catch (error) {
     console.error('Failed to delete relation:', error);
@@ -48,6 +65,8 @@ async function handleDeleteRelation(relationId: string, otherEntityId?: string) 
     relationError.value = error instanceof Error
       ? error.message
       : 'Не удалось удалить связь. Попробуйте ещё раз.';
+    showDeleteRelationConfirm.value = false;
+    pendingDeleteRelation.value = null;
   }
 }
 
@@ -122,24 +141,37 @@ async function handleAddFact() {
   newFact.value = '';
 }
 
-async function handleRemoveFact(factId: string) {
-  if (!entity.value) return;
-
-  if (confirm('Удалить этот факт?')) {
-    await removeFact.mutateAsync({
-      entityId: entity.value.id,
-      factId,
-    });
-  }
+// Handle remove fact - show confirm dialog
+function handleRemoveFact(factId: string) {
+  pendingDeleteFactId.value = factId;
+  showDeleteFactConfirm.value = true;
 }
 
-async function handleDelete() {
+// Confirm remove fact
+async function confirmRemoveFact() {
+  if (!entity.value || !pendingDeleteFactId.value) return;
+
+  await removeFact.mutateAsync({
+    entityId: entity.value.id,
+    factId: pendingDeleteFactId.value,
+  });
+
+  showDeleteFactConfirm.value = false;
+  pendingDeleteFactId.value = null;
+}
+
+// Handle delete entity - show confirm dialog
+function handleDelete() {
+  showDeleteEntityConfirm.value = true;
+}
+
+// Confirm delete entity
+async function confirmDeleteEntity() {
   if (!entity.value) return;
 
-  if (confirm(`Вы уверены, что хотите удалить "${entity.value.name}"?`)) {
-    await deleteEntity.mutateAsync(entity.value.id);
-    router.push('/entities');
-  }
+  await deleteEntity.mutateAsync(entity.value.id);
+  showDeleteEntityConfirm.value = false;
+  router.push('/entities');
 }
 
 function getIdentifierIcon(type: string | undefined) {
@@ -622,6 +654,39 @@ function handleGraphNodeClick(nodeId: string) {
         :current-entity-name="entity.name"
         :current-entity-type="entity.type"
         @success="handleRelationCreated"
+      />
+
+      <!-- Confirm Delete Entity Dialog (#5) -->
+      <ConfirmDialog
+        v-model:open="showDeleteEntityConfirm"
+        title="Удалить сущность"
+        :description="`Вы уверены, что хотите удалить «${entity.name}»? Это действие нельзя отменить.`"
+        confirm-text="Удалить"
+        variant="destructive"
+        :loading="deleteEntity.isPending.value"
+        @confirm="confirmDeleteEntity"
+      />
+
+      <!-- Confirm Delete Relation Dialog (#5) -->
+      <ConfirmDialog
+        v-model:open="showDeleteRelationConfirm"
+        title="Удалить связь"
+        description="Вы уверены, что хотите удалить эту связь?"
+        confirm-text="Удалить"
+        variant="destructive"
+        :loading="deleteRelation.isPending.value"
+        @confirm="confirmDeleteRelation"
+      />
+
+      <!-- Confirm Delete Fact Dialog (#5) -->
+      <ConfirmDialog
+        v-model:open="showDeleteFactConfirm"
+        title="Удалить факт"
+        description="Вы уверены, что хотите удалить этот факт?"
+        confirm-text="Удалить"
+        variant="destructive"
+        :loading="removeFact.isPending.value"
+        @confirm="confirmRemoveFact"
       />
 
       <!-- Events -->
