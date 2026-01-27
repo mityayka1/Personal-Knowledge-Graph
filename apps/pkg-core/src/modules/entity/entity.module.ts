@@ -35,7 +35,7 @@ import { NotificationModule } from '../notification/notification.module';
     forwardRef(() => ClaudeAgentModule),
     forwardRef(() => NotificationModule),
   ],
-  controllers: [EntityController, EntityRelationController, MergeSuggestionController],
+  controllers: [MergeSuggestionController, EntityController, EntityRelationController],
   providers: [
     EntityService,
     EntityIdentifierService,
