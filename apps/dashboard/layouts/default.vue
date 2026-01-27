@@ -12,13 +12,16 @@ import {
   Settings,
   LogOut,
   User,
+  GitMerge,
 } from 'lucide-vue-next';
+import Toaster from '~/components/ui/toast/Toaster.vue';
 
 const route = useRoute();
 const { user, logout } = useAuth();
 
 const navigation = [
   { name: 'Сущности', href: '/entities', icon: Users },
+  { name: 'Слияние', href: '/entities/merge-requests', icon: GitMerge },
   { name: 'Взаимодействия', href: '/interactions', icon: MessageSquare },
   { name: 'Чаты', href: '/chats', icon: MessagesSquare },
   { name: 'Поиск', href: '/search', icon: Search },
@@ -127,5 +130,8 @@ function isActive(href: string) {
         </div>
       </div>
     </main>
+
+    <!-- Toast notifications -->
+    <Toaster />
   </div>
 </template>

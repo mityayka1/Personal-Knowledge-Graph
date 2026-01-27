@@ -24,6 +24,7 @@ export { ClaudeCliRun } from './claude-cli-run.entity';
 export * from './claude-agent-run.entity';
 export * from './user.entity';
 export * from './pending-confirmation.entity';
+export * from './dismissed-merge-suggestion.entity';
 export * from './brief.types';
 export * from './brief.constants';
 export * from './confidence.constants';
