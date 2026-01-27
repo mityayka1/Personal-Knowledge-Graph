@@ -274,6 +274,7 @@ export class MergeSuggestionService {
     }
 
     // Execute merge in transaction
+    try {
     return await this.dataSource.transaction(async (manager) => {
       let identifiersMoved = 0;
       let factsMoved = 0;
@@ -344,7 +345,21 @@ export class MergeSuggestionService {
       }
 
       // Transfer entity relations (entity_relation_members)
-      // Update all relation memberships from source to target
+      // First, remove source memberships that would conflict with existing target memberships
+      // (same relation_id + role = duplicate composite PK)
+      await manager.query(
+        `DELETE FROM entity_relation_members
+         WHERE entity_id = $1 AND valid_until IS NULL
+           AND EXISTS (
+             SELECT 1 FROM entity_relation_members t
+             WHERE t.relation_id = entity_relation_members.relation_id
+               AND t.role = entity_relation_members.role
+               AND t.entity_id = $2
+               AND t.valid_until IS NULL
+           )`,
+        [sourceId, targetId],
+      );
+      // Then update remaining source memberships to target
       await manager.query(
         `UPDATE entity_relation_members
          SET entity_id = $1
@@ -363,6 +378,18 @@ export class MergeSuggestionService {
       );
 
       // Update interactions where source was a participant
+      // First, remove source participations where target already participates
+      // in the same interaction (prevents duplicate entity_id per interaction)
+      await manager.query(
+        `DELETE FROM interaction_participants
+         WHERE entity_id = $1
+           AND interaction_id IN (
+             SELECT interaction_id FROM interaction_participants
+             WHERE entity_id = $2
+           )`,
+        [sourceId, targetId],
+      );
+      // Then update remaining source participations to target
       await manager.query(
         `UPDATE interaction_participants SET entity_id = $1 WHERE entity_id = $2`,
         [targetId, sourceId],
@@ -386,6 +413,14 @@ export class MergeSuggestionService {
         factsMoved,
       };
     });
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        `Merge failed: source=${sourceId}, target=${targetId}, error=${err.message}`,
+        err.stack,
+      );
+      throw error;
+    }
   }
 
   /**
