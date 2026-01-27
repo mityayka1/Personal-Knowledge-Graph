@@ -166,6 +166,7 @@ async function handleMergeConfirm(request: MergeRequestDto) {
       v-model:open="showPreviewDialog"
       :preview="previewData || null"
       :loading="mergeMutation.isPending.value"
+      :preview-loading="previewLoading"
       @close="showPreviewDialog = false"
       @confirm="handleMergeConfirm"
     />

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { ArrowRight, AlertTriangle, User, Building2, MessageSquare, Link2 } from 'lucide-vue-next';
+import { ArrowRight, AlertTriangle, User, Building2, MessageSquare, Link2, Loader2 } from 'lucide-vue-next';
 import type {
   MergePreviewDto,
   MergeRequestDto,
@@ -11,6 +11,7 @@ import type {
 const props = defineProps<{
   preview: MergePreviewDto | null;
   loading?: boolean;
+  previewLoading?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -325,8 +326,13 @@ function formatFactType(type: string): string {
       </div>
 
       <!-- Loading state -->
+      <div v-else-if="previewLoading" class="flex items-center justify-center py-12">
+        <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+
+      <!-- No preview state -->
       <div v-else class="flex items-center justify-center py-12">
-        <div class="text-muted-foreground">Загрузка...</div>
+        <div class="text-muted-foreground">Нет данных для отображения</div>
       </div>
 
       <DialogFooter>
