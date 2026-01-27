@@ -184,7 +184,7 @@ const canConfirm = computed(() => {
                   <div class="font-medium">{{ selectedSource.name }}</div>
                   <div class="text-xs text-muted-foreground">
                     {{ selectedSource.type === 'person' ? 'Человек' : 'Организация' }}
-                    <span v-if="selectedSource.identifiers.length">
+                    <span v-if="selectedSource.identifiers?.length">
                       · {{ selectedSource.identifiers.length }} идент.
                     </span>
                   </div>
@@ -236,7 +236,7 @@ const canConfirm = computed(() => {
                     <div class="font-medium truncate">{{ entity.name }}</div>
                     <div class="text-xs text-muted-foreground">
                       {{ entity.type === 'person' ? 'Человек' : 'Организация' }}
-                      <span v-if="entity.identifiers.length">
+                      <span v-if="entity.identifiers?.length">
                         · {{ entity.identifiers.length }} идент.
                       </span>
                     </div>
@@ -285,7 +285,7 @@ const canConfirm = computed(() => {
                   <div class="font-medium">{{ selectedTarget.name }}</div>
                   <div class="text-xs text-muted-foreground">
                     {{ selectedTarget.type === 'person' ? 'Человек' : 'Организация' }}
-                    <span v-if="selectedTarget.identifiers.length">
+                    <span v-if="selectedTarget.identifiers?.length">
                       · {{ selectedTarget.identifiers.length }} идент.
                     </span>
                   </div>
@@ -337,7 +337,7 @@ const canConfirm = computed(() => {
                     <div class="font-medium truncate">{{ entity.name }}</div>
                     <div class="text-xs text-muted-foreground">
                       {{ entity.type === 'person' ? 'Человек' : 'Организация' }}
-                      <span v-if="entity.identifiers.length">
+                      <span v-if="entity.identifiers?.length">
                         · {{ entity.identifiers.length }} идент.
                       </span>
                     </div>
