@@ -5,11 +5,12 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import {
   EntityRecord,
   EntityIdentifier,
   EntityFact,
+  EntityType,
   DismissedMergeSuggestion,
 } from '@pkg/entities';
 import {
@@ -24,12 +25,6 @@ import {
   MergeConflictDto,
 } from './dto/merge-preview.dto';
 import { MergeRequestDto, ConflictResolution } from './dto/merge-request.dto';
-
-/**
- * Regex to match orphaned Telegram entities.
- * Format: "Telegram 1234567890" where digits are the telegram_user_id.
- */
-const TELEGRAM_NAME_PATTERN = /^Telegram (\d+)$/;
 
 @Injectable()
 export class MergeSuggestionService {
@@ -50,6 +45,9 @@ export class MergeSuggestionService {
   /**
    * Get merge suggestions for orphaned Telegram entities.
    * Returns groups where each group has a primary entity and candidates.
+   *
+   * Optimized: single CTE query with DB-level pagination + batch lookups
+   * instead of N+1 queries per orphan.
    */
   async getSuggestions(options: {
     limit?: number;
@@ -57,85 +55,118 @@ export class MergeSuggestionService {
   } = {}): Promise<MergeSuggestionsResponseDto> {
     const { limit = 50, offset = 0 } = options;
 
-    // Find orphaned Telegram entities (name matches pattern, no telegram_user_id identifier)
-    const orphanedEntities = await this.findOrphanedTelegramEntities();
+    // Single CTE query: find orphan→primary pairs, filter dismissed, paginate by primary entity
+    const rows: Array<{
+      orphan_id: string;
+      orphan_name: string;
+      orphan_created_at: Date;
+      telegram_user_id: string;
+      primary_id: string;
+      primary_name: string;
+      primary_type: string;
+      primary_profile_photo: string | null;
+      total_groups: string;
+    }> = await this.entityRepo.query(
+      `
+      WITH orphan_primary_pairs AS (
+        SELECT
+          e.id AS orphan_id,
+          e.name AS orphan_name,
+          e.created_at AS orphan_created_at,
+          (regexp_match(e.name, '^Telegram (\\d+)$'))[1] AS telegram_user_id,
+          ei.entity_id AS primary_id
+        FROM entities e
+        JOIN entity_identifiers ei
+          ON ei.identifier_type = 'telegram_user_id'
+          AND ei.identifier_value = (regexp_match(e.name, '^Telegram (\\d+)$'))[1]
+        WHERE e.name ~ '^Telegram [0-9]+$'
+          AND NOT EXISTS (
+            SELECT 1 FROM entity_identifiers ei2
+            WHERE ei2.entity_id = e.id
+              AND ei2.identifier_type = 'telegram_user_id'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM dismissed_merge_suggestions dms
+            WHERE dms.primary_entity_id = ei.entity_id
+              AND dms.dismissed_entity_id = e.id
+          )
+      ),
+      grouped AS (
+        SELECT DISTINCT primary_id FROM orphan_primary_pairs
+      ),
+      total AS (
+        SELECT COUNT(*) AS cnt FROM grouped
+      ),
+      paginated AS (
+        SELECT primary_id FROM grouped
+        ORDER BY primary_id
+        LIMIT $1 OFFSET $2
+      )
+      SELECT
+        opp.orphan_id,
+        opp.orphan_name,
+        opp.orphan_created_at,
+        opp.telegram_user_id,
+        opp.primary_id,
+        pe.name AS primary_name,
+        pe.type AS primary_type,
+        pe.profile_photo AS primary_profile_photo,
+        (SELECT cnt FROM total) AS total_groups
+      FROM orphan_primary_pairs opp
+      JOIN paginated p ON p.primary_id = opp.primary_id
+      JOIN entities pe ON pe.id = opp.primary_id
+      ORDER BY opp.primary_id, opp.orphan_created_at DESC
+      `,
+      [limit, offset],
+    );
 
-    if (orphanedEntities.length === 0) {
+    if (rows.length === 0) {
       return { groups: [], total: 0 };
     }
 
-    // Get dismissed pairs to filter out
-    const dismissedPairs = await this.getDismissedPairs();
+    const totalGroups = parseInt(rows[0].total_groups || '0', 10);
 
-    // Build suggestion groups
-    const groups: MergeSuggestionGroupDto[] = [];
+    // Collect entity IDs for batch lookups
+    const orphanIds = [...new Set(rows.map((r) => r.orphan_id))];
+    const primaryIds = [...new Set(rows.map((r) => r.primary_id))];
 
-    for (const orphan of orphanedEntities) {
-      // Extract telegram_user_id from name
-      const match = TELEGRAM_NAME_PATTERN.exec(orphan.name);
-      if (!match) continue;
+    // Two batch queries instead of N+1
+    const [messageCounts, primaryIdentifiers] = await Promise.all([
+      this.getMessageCountsBatch(orphanIds),
+      this.getIdentifiersBatch(primaryIds),
+    ]);
 
-      const telegramUserId = match[1];
+    // Build groups from flat rows
+    const groupsMap = new Map<string, MergeSuggestionGroupDto>();
 
-      // Find entity with this telegram_user_id identifier
-      const identifier = await this.identifierRepo.findOne({
-        where: {
-          identifierType: 'telegram_user_id',
-          identifierValue: telegramUserId,
-        },
-        relations: ['entity', 'entity.identifiers'],
-      });
-
-      if (!identifier || !identifier.entity) continue;
-
-      const primaryEntity = identifier.entity;
-
-      // Skip if this pair was dismissed
-      const dismissKey = `${primaryEntity.id}:${orphan.id}`;
-      if (dismissedPairs.has(dismissKey)) continue;
-
-      // Get message count for the orphan
-      const messageCount = await this.getMessageCount(orphan.id);
-
-      // Check if group for this primary entity already exists
-      const existingGroup = groups.find(
-        (g) => g.primaryEntity.id === primaryEntity.id,
-      );
-
-      const candidate = {
-        id: orphan.id,
-        name: orphan.name,
-        extractedUserId: telegramUserId,
-        createdAt: orphan.createdAt,
-        messageCount,
-      };
-
-      if (existingGroup) {
-        existingGroup.candidates.push(candidate);
-      } else {
-        groups.push({
+    for (const row of rows) {
+      if (!groupsMap.has(row.primary_id)) {
+        groupsMap.set(row.primary_id, {
           primaryEntity: {
-            id: primaryEntity.id,
-            name: primaryEntity.name,
-            type: primaryEntity.type,
-            profilePhoto: primaryEntity.profilePhoto,
-            identifiers: (primaryEntity.identifiers || []).map((i) => ({
-              id: i.id,
-              identifierType: i.identifierType,
-              identifierValue: i.identifierValue,
-            })),
+            id: row.primary_id,
+            name: row.primary_name,
+            type: row.primary_type as EntityType,
+            profilePhoto: row.primary_profile_photo,
+            identifiers: primaryIdentifiers.get(row.primary_id) || [],
           },
-          candidates: [candidate],
+          candidates: [],
           reason: 'orphaned_telegram_id',
         });
       }
+
+      groupsMap.get(row.primary_id)!.candidates.push({
+        id: row.orphan_id,
+        name: row.orphan_name,
+        extractedUserId: row.telegram_user_id,
+        createdAt: row.orphan_created_at,
+        messageCount: messageCounts.get(row.orphan_id) || 0,
+      });
     }
 
-    // Apply pagination
-    const total = groups.length;
-    const paginatedGroups = groups.slice(offset, offset + limit);
-
-    return { groups: paginatedGroups, total };
+    return {
+      groups: Array.from(groupsMap.values()),
+      total: totalGroups,
+    };
   }
 
   /**
@@ -358,38 +389,65 @@ export class MergeSuggestionService {
   }
 
   /**
-   * Find orphaned Telegram entities.
-   * These are entities with names like "Telegram 1234567890" but no telegram_user_id identifier.
+   * Get message counts for multiple entities in a single query.
    */
-  private async findOrphanedTelegramEntities(): Promise<EntityRecord[]> {
-    // Use raw query for pattern matching and NOT EXISTS
-    const results = await this.entityRepo.query(`
-      SELECT e.*
-      FROM entities e
-      WHERE e.name ~ '^Telegram [0-9]+$'
-        AND NOT EXISTS (
-          SELECT 1 FROM entity_identifiers ei
-          WHERE ei.entity_id = e.id
-            AND ei.identifier_type = 'telegram_user_id'
-        )
-      ORDER BY e.created_at DESC
-    `);
+  private async getMessageCountsBatch(
+    entityIds: string[],
+  ): Promise<Map<string, number>> {
+    if (entityIds.length === 0) return new Map();
 
-    return results as EntityRecord[];
+    const results: Array<{ entity_id: string; count: string }> =
+      await this.entityRepo.query(
+        `SELECT entity_id, SUM(cnt)::int AS count FROM (
+          SELECT sender_entity_id AS entity_id, COUNT(*) AS cnt
+          FROM messages
+          WHERE sender_entity_id = ANY($1)
+          GROUP BY sender_entity_id
+          UNION ALL
+          SELECT recipient_entity_id AS entity_id, COUNT(*) AS cnt
+          FROM messages
+          WHERE recipient_entity_id = ANY($1)
+          GROUP BY recipient_entity_id
+        ) sub
+        GROUP BY entity_id`,
+        [entityIds],
+      );
+
+    const map = new Map<string, number>();
+    for (const row of results) {
+      map.set(row.entity_id, parseInt(row.count, 10));
+    }
+    return map;
   }
 
   /**
-   * Get set of dismissed pairs as "primaryId:candidateId".
+   * Get identifiers for multiple entities in a single query.
    */
-  private async getDismissedPairs(): Promise<Set<string>> {
-    const dismissed = await this.dismissedRepo.find();
-    return new Set(
-      dismissed.map((d) => `${d.primaryEntityId}:${d.dismissedEntityId}`),
-    );
+  private async getIdentifiersBatch(
+    entityIds: string[],
+  ): Promise<Map<string, EntityIdentifierDto[]>> {
+    if (entityIds.length === 0) return new Map();
+
+    const identifiers = await this.identifierRepo.find({
+      where: { entityId: In(entityIds) },
+    });
+
+    const map = new Map<string, EntityIdentifierDto[]>();
+    for (const ident of identifiers) {
+      if (!map.has(ident.entityId)) {
+        map.set(ident.entityId, []);
+      }
+      map.get(ident.entityId)!.push({
+        id: ident.id,
+        identifierType: ident.identifierType,
+        identifierValue: ident.identifierValue,
+      });
+    }
+    return map;
   }
 
   /**
-   * Get message count for an entity (as sender or recipient).
+   * Get message count for a single entity (as sender or recipient).
    */
   private async getMessageCount(entityId: string): Promise<number> {
     const result = await this.entityRepo.query(
@@ -413,8 +471,10 @@ export class MergeSuggestionService {
       throw new NotFoundException(`Entity ${entityId} not found`);
     }
 
-    const messageCount = await this.getMessageCount(entityId);
-    const relationsCount = await this.getRelationsCount(entityId);
+    const [messageCount, relationsCount] = await Promise.all([
+      this.getMessageCount(entityId),
+      this.getRelationsCount(entityId),
+    ]);
 
     // Map identifiers
     const identifiers: EntityIdentifierDto[] = (entity.identifiers || []).map((i) => ({
