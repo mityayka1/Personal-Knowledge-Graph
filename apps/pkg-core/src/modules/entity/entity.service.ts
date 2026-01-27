@@ -67,6 +67,7 @@ export class EntityService {
 
     const qb = this.entityRepo.createQueryBuilder('entity')
       .leftJoinAndSelect('entity.organization', 'organization')
+      .leftJoinAndSelect('entity.identifiers', 'identifiers')
       .take(limit)
       .skip(offset)
       .orderBy('entity.updatedAt', 'DESC');
@@ -79,28 +80,25 @@ export class EntityService {
       // Check if search is a username (starts with @)
       if (search.startsWith('@')) {
         const username = search.slice(1); // Remove @
-        qb.leftJoin('entity.identifiers', 'identifier')
-          .andWhere(
-            '(identifier.identifierType = :usernameType AND identifier.identifierValue ILIKE :username)',
-            { usernameType: 'telegram_username', username: `%${username}%` },
-          );
+        qb.andWhere(
+          '(identifiers.identifierType = :usernameType AND identifiers.identifierValue ILIKE :username)',
+          { usernameType: 'telegram_username', username: `%${username}%` },
+        );
       }
       // Check if search looks like a phone number
       else if (/^\+?\d[\d\s-]{5,}$/.test(search)) {
         const phone = search.replace(/[\s-]/g, ''); // Remove spaces and dashes
-        qb.leftJoin('entity.identifiers', 'identifier')
-          .andWhere(
-            '(identifier.identifierType = :phoneType AND identifier.identifierValue LIKE :phone)',
-            { phoneType: 'phone', phone: `%${phone}%` },
-          );
+        qb.andWhere(
+          '(identifiers.identifierType = :phoneType AND identifiers.identifierValue LIKE :phone)',
+          { phoneType: 'phone', phone: `%${phone}%` },
+        );
       }
       // Default: search by name OR by any identifier value
       else {
-        qb.leftJoin('entity.identifiers', 'identifier')
-          .andWhere(
-            '(entity.name ILIKE :search OR identifier.identifierValue ILIKE :search)',
-            { search: `%${search}%` },
-          );
+        qb.andWhere(
+          '(entity.name ILIKE :search OR identifiers.identifierValue ILIKE :search)',
+          { search: `%${search}%` },
+        );
       }
     }
 
