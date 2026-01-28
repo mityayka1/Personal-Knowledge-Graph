@@ -126,61 +126,47 @@ export class UnifiedExtractionService {
 
     this.logger.debug(`[unified-extraction] Prompt:\n${prompt}`);
 
-    // 6. Call agent
-    try {
-      const { data, usage, turns, toolsUsed } = await this.claudeAgentService.call<UnifiedExtractionResponse>({
-        mode: 'agent',
-        taskType: 'unified_extraction',
-        prompt,
-        model: 'haiku',
-        maxTurns: 15,
-        timeout: 180_000,
-        referenceType: 'interaction',
-        referenceId: interactionId,
-        customMcp: {
-          name: EXTRACTION_MCP_NAME,
-          server: mcpServer,
-          toolNames,
-        },
-        outputFormat: {
-          type: 'json_schema',
-          schema: UNIFIED_EXTRACTION_SCHEMA,
-          strict: true,
-        },
-      });
+    // 6. Call agent — errors propagate to caller (BullMQ retry)
+    const { data, usage, turns, toolsUsed } = await this.claudeAgentService.call<UnifiedExtractionResponse>({
+      mode: 'agent',
+      taskType: 'unified_extraction',
+      prompt,
+      model: 'haiku',
+      maxTurns: 15,
+      timeout: 180_000,
+      referenceType: 'interaction',
+      referenceId: interactionId,
+      customMcp: {
+        name: EXTRACTION_MCP_NAME,
+        server: mcpServer,
+        toolNames,
+      },
+      outputFormat: {
+        type: 'json_schema',
+        schema: UNIFIED_EXTRACTION_SCHEMA,
+        strict: true,
+      },
+    });
 
-      const result: UnifiedExtractionResult = {
-        factsCreated: data?.factsCreated ?? 0,
-        eventsCreated: data?.eventsCreated ?? 0,
-        relationsCreated: data?.relationsCreated ?? 0,
-        pendingEntities: data?.pendingEntities ?? 0,
-        turns: turns ?? 0,
-        toolsUsed: toolsUsed ?? [],
-        tokensUsed: (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
-      };
+    const result: UnifiedExtractionResult = {
+      factsCreated: data?.factsCreated ?? 0,
+      eventsCreated: data?.eventsCreated ?? 0,
+      relationsCreated: data?.relationsCreated ?? 0,
+      pendingEntities: data?.pendingEntities ?? 0,
+      turns: turns ?? 0,
+      toolsUsed: toolsUsed ?? [],
+      tokensUsed: (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0),
+    };
 
-      this.logger.log(
-        `[unified-extraction] Done for ${entityName}: ` +
-          `${result.factsCreated} facts, ${result.eventsCreated} events, ` +
-          `${result.relationsCreated} relations, ${result.pendingEntities} pending | ` +
-          `${result.turns} turns, tools: [${result.toolsUsed.join(', ')}] | ` +
-          `${result.tokensUsed} tokens`,
-      );
+    this.logger.log(
+      `[unified-extraction] Done for ${entityName}: ` +
+        `${result.factsCreated} facts, ${result.eventsCreated} events, ` +
+        `${result.relationsCreated} relations, ${result.pendingEntities} pending | ` +
+        `${result.turns} turns, tools: [${result.toolsUsed.join(', ')}] | ` +
+        `${result.tokensUsed} tokens`,
+    );
 
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Unified extraction failed: ${message}`);
-      return {
-        factsCreated: 0,
-        eventsCreated: 0,
-        relationsCreated: 0,
-        pendingEntities: 0,
-        turns: 0,
-        toolsUsed: [],
-        tokensUsed: 0,
-      };
-    }
+    return result;
   }
 
   /**
@@ -211,8 +197,10 @@ export class UnifiedExtractionService {
     // Batch-load reply-to info
     const replyToInfoMap = await this.promiseRecipientService.loadReplyToInfo(messages, interactionId);
 
-    return Promise.all(
-      messages.map(async (m) => {
+    const enriched: EnrichedMessage[] = [];
+
+    for (const m of messages) {
+      try {
         const replyToInfo = m.replyToSourceMessageId
           ? replyToInfoMap.get(m.replyToSourceMessageId)
           : undefined;
@@ -227,16 +215,26 @@ export class UnifiedExtractionService {
           replyToSenderEntityId: replyToInfo?.senderEntityId,
         });
 
-        return {
+        enriched.push({
           ...m,
           entityId: messageEntityId,
           entityName: messageEntityName,
           promiseToEntityId,
           replyToContent: replyToInfo?.content,
           replyToSenderName: replyToInfo?.senderName,
-        };
-      }),
-    );
+        });
+      } catch (error) {
+        this.logger.warn(`Failed to enrich message ${m.id}: ${error}`);
+        // Still include message with minimal enrichment
+        enriched.push({
+          ...m,
+          entityId: m.senderEntityId || defaultEntityId,
+          entityName: m.senderEntityName || defaultEntityName,
+        });
+      }
+    }
+
+    return enriched;
   }
 
   /**
@@ -296,13 +294,15 @@ ${relationsSection}
 ══════════════════════════════════════════
 § СОБЫТИЯ — правила извлечения
 ══════════════════════════════════════════
+Сегодняшняя дата: ${new Date().toISOString().split('T')[0]}
+
 1. ТИПЫ:
    - meeting: встречи, созвоны, переговоры
    - promise_by_me: обещание в ИСХОДЯЩЕМ сообщении (→)
    - promise_by_them: обещание во ВХОДЯЩЕМ сообщении (←)
-   - deadline: дедлайны, сроки
-   - birthday: дни рождения
-   - general: прочие события
+   - task: задача, запрос — "можешь глянуть?", "нужно сделать"
+   - fact: личный факт — "у меня ДР 15 марта", "переехал в Москву"
+   - cancellation: отмена/перенос — "давай перенесём", "не получится"
 
 2. ОПРЕДЕЛЕНИЕ ТИПА ОБЕЩАНИЙ — ТОЛЬКО по направлению сообщения:
    - Сообщение "→ ИСХОДЯЩЕЕ" + обещание → promise_by_me

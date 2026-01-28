@@ -363,16 +363,6 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Build system prompt for oneshot mode
-   */
-  private buildOneshotSystemPrompt(schema: object): string {
-    return `CRITICAL: Your entire response must be a single valid JSON object. No explanations, no markdown, no text before or after the JSON. Output ONLY the JSON object.
-
-Schema:
-${JSON.stringify(schema, null, 2)}`;
-  }
-
-  /**
    * Build system prompt for agent mode
    */
   private buildAgentSystemPrompt(taskType: ClaudeTaskType): string {
