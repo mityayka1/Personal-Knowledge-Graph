@@ -508,7 +508,9 @@ Pending entity будет ожидать ручного связывания с 
             sourceQuote: args.sourceQuote?.substring(0, 200) || null,
             confidence: Math.min(1, Math.max(0, args.confidence)),
             status: ExtractedEventStatus.PENDING,
-            needsContext: false,
+            needsContext: args.needsEnrichment,
+            // Set enrichmentData for enrichment pipeline to find events needing context
+            enrichmentData: args.needsEnrichment ? { enrichmentSuccess: false } : null,
           });
 
           const saved = await this.extractedEventRepo.save(event);

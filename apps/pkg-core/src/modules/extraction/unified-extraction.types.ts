@@ -3,21 +3,7 @@
  * that replaces 3 separate extraction flows (facts, events, second-brain).
  */
 
-/**
- * Input message format from ExtractionJobData.
- * Matches the message shape provided by FactExtractionProcessor.
- */
-export interface ExtractionMessage {
-  id: string;
-  content: string;
-  timestamp?: string;
-  isOutgoing?: boolean;
-  senderEntityId?: string;
-  senderEntityName?: string;
-  isBotSender?: boolean;
-  replyToSourceMessageId?: string;
-  topicName?: string;
-}
+import { MessageData } from './extraction.types';
 
 /**
  * Parameters for unified extraction.
@@ -25,14 +11,14 @@ export interface ExtractionMessage {
 export interface UnifiedExtractionParams {
   entityId: string;
   entityName: string;
-  messages: ExtractionMessage[];
+  messages: MessageData[];
   interactionId: string;
 }
 
 /**
  * Enriched message with resolved promise recipient and reply-to context.
  */
-export interface EnrichedMessage extends ExtractionMessage {
+export interface EnrichedMessage extends MessageData {
   /** Resolved entity ID for this message sender */
   entityId: string;
   /** Resolved entity name for this message sender */

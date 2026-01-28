@@ -177,13 +177,18 @@ export class ClaudeAgentService {
     const maxTurns = params.maxTurns || 15;
     const timeout = params.timeout || 300000; // 5 minutes default for agent
     const toolCategories = params.toolCategories || ['all'];
+    const budgetUsd = params.budgetUsd;
 
-    this.logger.debug(`Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}, tools=${toolCategories.join(',')}`);
+    this.logger.debug(
+      `Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}, ` +
+      `tools=${toolCategories.join(',')}, budget=${budgetUsd ?? 'unlimited'}`
+    );
 
     const usage: UsageStats = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
     const toolsUsed: string[] = [];
     let turns = 0;
     let result: T | undefined;
+    let budgetExceeded = false;
 
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), timeout);
@@ -234,6 +239,16 @@ export class ClaudeAgentService {
       })) {
         this.accumulateUsage(message, usage);
 
+        // Budget check: abort if cost exceeds limit
+        if (budgetUsd !== undefined && usage.totalCostUsd > budgetUsd) {
+          this.logger.warn(
+            `Budget exceeded: $${usage.totalCostUsd.toFixed(4)} > $${budgetUsd}, aborting`
+          );
+          budgetExceeded = true;
+          abortController.abort();
+          break;
+        }
+
         if (message.type === 'assistant') {
           turns++;
           await this.processAssistantMessage(
@@ -245,6 +260,11 @@ export class ClaudeAgentService {
           if (params.hooks?.onTurn) {
             await params.hooks.onTurn(turns);
           }
+        }
+
+        // Handle tool results for onToolResult hook
+        if (message.type === 'user' && params.hooks?.onToolResult) {
+          await this.processToolResults(message, params.hooks.onToolResult);
         }
 
         if (message.type === 'result') {
@@ -288,6 +308,9 @@ export class ClaudeAgentService {
     }
 
     if (result === undefined) {
+      if (budgetExceeded) {
+        throw new Error(`Budget exceeded: $${usage.totalCostUsd.toFixed(4)} > $${budgetUsd}`);
+      }
       throw new Error('Agent finished without result');
     }
 
@@ -327,6 +350,62 @@ export class ClaudeAgentService {
         const approval = await hooks.onToolUse(cleanName, toolUse.input);
         if (!approval.approve) {
           this.logger.warn(`Tool ${cleanName} not approved: ${approval.reason}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Process tool results from user message and call onToolResult hook
+   * SDK user messages contain tool_result blocks with tool execution results
+   */
+  private async processToolResults(
+    message: SDKMessage,
+    onToolResult: (toolName: string, result: string) => Promise<void>,
+  ): Promise<void> {
+    const messageAny = message as Record<string, unknown>;
+    const content = messageAny.message && typeof messageAny.message === 'object'
+      ? (messageAny.message as Record<string, unknown>).content
+      : undefined;
+
+    if (!content || !Array.isArray(content)) {
+      return;
+    }
+
+    for (const block of content) {
+      if (
+        typeof block === 'object' &&
+        block !== null &&
+        'type' in block &&
+        (block as { type: unknown }).type === 'tool_result'
+      ) {
+        const toolResultBlock = block as {
+          type: 'tool_result';
+          tool_use_id?: string;
+          content?: string | Array<{ type: string; text?: string }>;
+        };
+
+        // Extract tool name from tool_use_id if available (format: toolu_xxx)
+        // Note: SDK doesn't always include tool name in result, so we use id as fallback
+        const toolId = toolResultBlock.tool_use_id || 'unknown';
+
+        // Extract result text
+        let resultText: string;
+        if (typeof toolResultBlock.content === 'string') {
+          resultText = toolResultBlock.content;
+        } else if (Array.isArray(toolResultBlock.content)) {
+          resultText = toolResultBlock.content
+            .filter((c): c is { type: string; text: string } => c.type === 'text' && typeof c.text === 'string')
+            .map(c => c.text)
+            .join('\n');
+        } else {
+          resultText = '';
+        }
+
+        try {
+          await onToolResult(toolId, resultText);
+        } catch (error) {
+          this.logger.warn(`onToolResult hook error for ${toolId}: ${error}`);
         }
       }
     }

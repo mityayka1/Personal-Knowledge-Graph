@@ -8,9 +8,9 @@ import {
   UnifiedExtractionParams,
   UnifiedExtractionResult,
   UnifiedExtractionResponse,
-  ExtractionMessage,
   EnrichedMessage,
 } from './unified-extraction.types';
+import { MessageData } from './extraction.types';
 
 /** Minimum message length to process */
 const MIN_MESSAGE_LENGTH = 20;
@@ -189,7 +189,7 @@ export class UnifiedExtractionService {
    * Moves this logic from FactExtractionProcessor into the service.
    */
   private async enrichMessages(
-    messages: ExtractionMessage[],
+    messages: MessageData[],
     interactionId: string,
     defaultEntityId: string,
     defaultEntityName: string,
