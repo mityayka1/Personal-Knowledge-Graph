@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { ScheduleModule } from '@nestjs/schedule';
 import {
   InteractionSummary,
   Interaction,
@@ -45,7 +44,6 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
         backoff: { type: 'exponential', delay: 120000 },
       },
     }),
-    ScheduleModule.forRoot(),
     ClaudeAgentModule,
   ],
   controllers: [SummarizationController],

@@ -223,8 +223,10 @@ export class DigestService {
       return;
     }
 
-    // Single event - use regular format
-    const message = this.formatHourlyDigest(events);
+    // Single event - use enhanced format with full context
+    const event = events[0];
+    const enhancedContent = await this.notificationService.formatEnhancedEventNotification(event);
+    const message = '<b>Новые события:</b>\n\n' + enhancedContent;
     const buttons = await this.getDigestButtons(events);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
@@ -263,8 +265,10 @@ export class DigestService {
       return;
     }
 
-    // Single event - use regular format
-    const message = this.formatDailyDigest(allEvents);
+    // Single event - use enhanced format with full context
+    const event = allEvents[0];
+    const enhancedContent = await this.notificationService.formatEnhancedEventNotification(event);
+    const message = '<b>Дайджест за день</b>\n\n' + enhancedContent;
     const buttons = await this.getBatchDigestButtons(allEvents);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
