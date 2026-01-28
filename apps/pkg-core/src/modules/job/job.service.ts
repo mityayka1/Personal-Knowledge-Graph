@@ -5,28 +5,14 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { Job, JobType, JobStatus } from '@pkg/entities';
 import { SettingsService } from '../settings/settings.service';
+import { MessageData } from '../extraction/extraction.types';
 
 export interface ExtractionJobData {
   interactionId: string;
   /** @deprecated Use message-level senderEntityId instead. Kept for backward compatibility. */
   entityId: string;
   messageIds: string[];
-  messages: Array<{
-    id: string;
-    content: string;
-    timestamp: string;
-    isOutgoing: boolean;
-    /** Source message ID this message is replying to (from Telegram) */
-    replyToSourceMessageId?: string;
-    /** Forum topic name for context (if message is from a forum) */
-    topicName?: string;
-    /** Entity ID of the message sender (for proper attribution in group chats) */
-    senderEntityId?: string;
-    /** Name of the message sender */
-    senderEntityName?: string;
-    /** Is the sender a bot? Bot messages should be skipped in extraction */
-    isBotSender?: boolean;
-  }>;
+  messages: MessageData[];
 }
 
 @Injectable()

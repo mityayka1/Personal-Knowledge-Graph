@@ -40,6 +40,15 @@ describe('ExtractionToolsProvider', () => {
     }),
   };
 
+  const mockExtractedEventRepo = {
+    create: jest.fn().mockReturnValue({ id: 'event-uuid-1' }),
+    save: jest.fn().mockResolvedValue({ id: 'event-uuid-1' }),
+  };
+
+  const mockEnrichmentQueueService = {
+    queueForEnrichment: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -50,6 +59,8 @@ describe('ExtractionToolsProvider', () => {
       mockEntityService as any,
       mockEntityRelationService as any,
       mockPendingResolutionService as any,
+      mockExtractedEventRepo as any,
+      mockEnrichmentQueueService as any,
     );
   });
 
@@ -60,7 +71,7 @@ describe('ExtractionToolsProvider', () => {
       const tools = provider.getTools(testContext);
 
       expect(Array.isArray(tools)).toBe(true);
-      expect(tools.length).toBe(5);
+      expect(tools.length).toBe(6);
     });
 
     it('should create new tools for each context (no singleton caching)', () => {
@@ -84,7 +95,7 @@ describe('ExtractionToolsProvider', () => {
       const tools = provider.getTools();
 
       expect(Array.isArray(tools)).toBe(true);
-      expect(tools.length).toBe(5);
+      expect(tools.length).toBe(6);
     });
   });
 
@@ -92,7 +103,7 @@ describe('ExtractionToolsProvider', () => {
     it('should return MCP-formatted tool names', () => {
       const toolNames = provider.getToolNames();
 
-      expect(toolNames.length).toBe(5);
+      expect(toolNames.length).toBe(6);
       toolNames.forEach((name) => {
         expect(name).toMatch(new RegExp(`^mcp__${EXTRACTION_MCP_NAME}__`));
       });

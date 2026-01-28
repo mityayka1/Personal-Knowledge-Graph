@@ -18,6 +18,7 @@ import { RelationInferenceService } from './relation-inference.service';
 import { ExtractionController } from './extraction.controller';
 import { ExtractedEventController } from './extracted-event.controller';
 import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
+import { UnifiedExtractionService } from './unified-extraction.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
@@ -66,6 +67,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     SubjectResolverService,
     RelationInferenceService,
     ExtractionToolsProvider,
+    UnifiedExtractionService,
   ],
   exports: [
     FactExtractionService,
@@ -81,6 +83,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     SubjectResolverService,
     RelationInferenceService,
     ExtractionToolsProvider,
+    UnifiedExtractionService,
   ],
 })
 export class ExtractionModule {}

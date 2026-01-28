@@ -1,36 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Job as BullJob } from 'bullmq';
 import { FactExtractionProcessor } from './fact-extraction.processor';
-import { FactExtractionService } from '../../extraction/fact-extraction.service';
-import { EventExtractionService } from '../../extraction/event-extraction.service';
-import { SecondBrainExtractionService } from '../../extraction/second-brain-extraction.service';
-import { PromiseRecipientService } from '../../extraction/promise-recipient.service';
+import { UnifiedExtractionService } from '../../extraction/unified-extraction.service';
 import { EntityService } from '../../entity/entity.service';
 import { ExtractionJobData } from '../job.service';
 
 describe('FactExtractionProcessor', () => {
   let processor: FactExtractionProcessor;
-  let factExtractionService: jest.Mocked<FactExtractionService>;
-  let eventExtractionService: jest.Mocked<EventExtractionService>;
-  let secondBrainExtractionService: jest.Mocked<SecondBrainExtractionService>;
-  let promiseRecipientService: jest.Mocked<PromiseRecipientService>;
+  let unifiedExtractionService: jest.Mocked<UnifiedExtractionService>;
   let entityService: jest.Mocked<EntityService>;
 
-  const mockFactExtractionService = {
-    extractFactsAgentBatch: jest.fn(),
-  };
-
-  const mockEventExtractionService = {
-    extractEventsBatch: jest.fn(),
-  };
-
-  const mockSecondBrainExtractionService = {
-    extractFromMessages: jest.fn(),
-  };
-
-  const mockPromiseRecipientService = {
-    loadReplyToInfo: jest.fn(),
-    resolveRecipient: jest.fn(),
+  const mockUnifiedExtractionService = {
+    extract: jest.fn(),
   };
 
   const mockEntityService = {
@@ -44,20 +25,8 @@ describe('FactExtractionProcessor', () => {
       providers: [
         FactExtractionProcessor,
         {
-          provide: FactExtractionService,
-          useValue: mockFactExtractionService,
-        },
-        {
-          provide: EventExtractionService,
-          useValue: mockEventExtractionService,
-        },
-        {
-          provide: SecondBrainExtractionService,
-          useValue: mockSecondBrainExtractionService,
-        },
-        {
-          provide: PromiseRecipientService,
-          useValue: mockPromiseRecipientService,
+          provide: UnifiedExtractionService,
+          useValue: mockUnifiedExtractionService,
         },
         {
           provide: EntityService,
@@ -67,10 +36,7 @@ describe('FactExtractionProcessor', () => {
     }).compile();
 
     processor = module.get<FactExtractionProcessor>(FactExtractionProcessor);
-    factExtractionService = module.get(FactExtractionService);
-    eventExtractionService = module.get(EventExtractionService);
-    secondBrainExtractionService = module.get(SecondBrainExtractionService);
-    promiseRecipientService = module.get(PromiseRecipientService);
+    unifiedExtractionService = module.get(UnifiedExtractionService);
     entityService = module.get(EntityService);
   });
 
@@ -100,13 +66,15 @@ describe('FactExtractionProcessor', () => {
         name: 'Test User',
         isBot: false,
       });
-      mockFactExtractionService.extractFactsAgentBatch.mockResolvedValue({ factsCreated: 0 });
-      mockEventExtractionService.extractEventsBatch.mockResolvedValue({ events: [] });
-      mockPromiseRecipientService.loadReplyToInfo.mockResolvedValue(new Map());
-      mockPromiseRecipientService.resolveRecipient.mockResolvedValue(null);
-      mockSecondBrainExtractionService.extractFromMessages.mockResolvedValue([
-        { extractedEvents: [] },
-      ]);
+      mockUnifiedExtractionService.extract.mockResolvedValue({
+        factsCreated: 0,
+        eventsCreated: 0,
+        relationsCreated: 0,
+        pendingEntities: 0,
+        turns: 1,
+        toolsUsed: [],
+        tokensUsed: 100,
+      });
     });
 
     it('should process extraction job successfully', async () => {
@@ -116,15 +84,19 @@ describe('FactExtractionProcessor', () => {
 
       expect(result).toEqual({
         success: true,
-        factsExtracted: 0,
-        eventsExtracted: 0,
-        pendingEventsExtracted: 0,
+        factsCreated: 0,
+        eventsCreated: 0,
+        relationsCreated: 0,
+        pendingEntities: 0,
       });
 
       expect(mockEntityService.findOne).toHaveBeenCalledWith('entity-456');
-      expect(mockFactExtractionService.extractFactsAgentBatch).toHaveBeenCalled();
-      expect(mockEventExtractionService.extractEventsBatch).toHaveBeenCalled();
-      expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalled();
+      expect(mockUnifiedExtractionService.extract).toHaveBeenCalledWith({
+        entityId: 'entity-456',
+        entityName: 'Test User',
+        messages: baseJobData.messages,
+        interactionId: 'interaction-123',
+      });
     });
 
     describe('bot entity handling', () => {
@@ -144,302 +116,32 @@ describe('FactExtractionProcessor', () => {
 
         expect(result).toEqual({
           success: true,
-          factsExtracted: 0,
-          eventsExtracted: 0,
-          pendingEventsExtracted: 0,
           skipped: 'bot',
         });
 
-        // Extraction services should NOT be called for bots
-        expect(mockFactExtractionService.extractFactsAgentBatch).not.toHaveBeenCalled();
-        expect(mockEventExtractionService.extractEventsBatch).not.toHaveBeenCalled();
-        expect(mockSecondBrainExtractionService.extractFromMessages).not.toHaveBeenCalled();
+        expect(mockUnifiedExtractionService.extract).not.toHaveBeenCalled();
       });
 
       it('should process extraction for non-bot entities', async () => {
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'entity-456',
-          name: 'Human User',
-          isBot: false,
-        });
-
         const job = createMockJob(baseJobData);
 
         await processor.process(job);
 
-        expect(mockFactExtractionService.extractFactsAgentBatch).toHaveBeenCalled();
-        expect(mockEventExtractionService.extractEventsBatch).toHaveBeenCalled();
-        expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalled();
+        expect(mockUnifiedExtractionService.extract).toHaveBeenCalled();
       });
     });
 
-    describe('sender attribution in group chats', () => {
-      it('should use message-level senderEntityId when available', async () => {
-        const jobData: ExtractionJobData = {
-          interactionId: 'group-chat-123',
-          entityId: 'first-sender', // Job-level entityId (deprecated)
-          messageIds: ['msg-1'],
-          messages: [
-            {
-              id: 'msg-1',
-              content: 'Message from specific sender',
-              timestamp: '2026-01-20T10:00:00Z',
-              isOutgoing: false,
-              senderEntityId: 'actual-sender-entity',
-              senderEntityName: 'Лёха Перформанс',
-            },
-          ],
-        };
-
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'first-sender',
-          name: 'First Sender Name',
-          isBot: false,
+    describe('extraction results', () => {
+      it('should return counts from unified extraction', async () => {
+        mockUnifiedExtractionService.extract.mockResolvedValue({
+          factsCreated: 3,
+          eventsCreated: 2,
+          relationsCreated: 1,
+          pendingEntities: 1,
+          turns: 5,
+          toolsUsed: ['create_fact', 'create_event', 'create_relation'],
+          tokensUsed: 2500,
         });
-
-        const job = createMockJob(jobData);
-
-        await processor.process(job);
-
-        // Check that secondBrainExtractionService receives message-level entityId
-        expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalledWith(
-          expect.arrayContaining([
-            expect.objectContaining({
-              entityId: 'actual-sender-entity',
-              entityName: 'Лёха Перформанс',
-            }),
-          ]),
-        );
-      });
-
-      it('should fallback to job-level entityId when senderEntityId is not provided', async () => {
-        const jobData: ExtractionJobData = {
-          interactionId: 'private-chat-123',
-          entityId: 'job-level-entity',
-          messageIds: ['msg-1'],
-          messages: [
-            {
-              id: 'msg-1',
-              content: 'Message without sender info',
-              timestamp: '2026-01-20T10:00:00Z',
-              isOutgoing: false,
-              // No senderEntityId or senderEntityName
-            },
-          ],
-        };
-
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'job-level-entity',
-          name: 'Entity from DB',
-          isBot: false,
-        });
-
-        const job = createMockJob(jobData);
-
-        await processor.process(job);
-
-        // Should fallback to job-level entityId and loaded entity name
-        expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalledWith(
-          expect.arrayContaining([
-            expect.objectContaining({
-              entityId: 'job-level-entity',
-              entityName: 'Entity from DB',
-            }),
-          ]),
-        );
-      });
-
-      it('should handle mixed senders in a batch correctly', async () => {
-        const jobData: ExtractionJobData = {
-          interactionId: 'group-chat-456',
-          entityId: 'entity-alice', // First message sender
-          messageIds: ['msg-1', 'msg-2', 'msg-3'],
-          messages: [
-            {
-              id: 'msg-1',
-              content: 'Message from Alice',
-              timestamp: '2026-01-20T10:00:00Z',
-              isOutgoing: false,
-              senderEntityId: 'entity-alice',
-              senderEntityName: 'Alice',
-            },
-            {
-              id: 'msg-2',
-              content: 'Message from Bob',
-              timestamp: '2026-01-20T10:01:00Z',
-              isOutgoing: false,
-              senderEntityId: 'entity-bob',
-              senderEntityName: 'Bob',
-            },
-            {
-              id: 'msg-3',
-              content: 'Another from Alice',
-              timestamp: '2026-01-20T10:02:00Z',
-              isOutgoing: false,
-              senderEntityId: 'entity-alice',
-              senderEntityName: 'Alice',
-            },
-          ],
-        };
-
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'entity-alice',
-          name: 'Alice (from DB)',
-          isBot: false,
-        });
-
-        const job = createMockJob(jobData);
-
-        await processor.process(job);
-
-        const extractFromMessagesCall = mockSecondBrainExtractionService.extractFromMessages.mock.calls[0][0];
-
-        // Verify each message has correct attribution
-        expect(extractFromMessagesCall[0].entityId).toBe('entity-alice');
-        expect(extractFromMessagesCall[0].entityName).toBe('Alice');
-
-        expect(extractFromMessagesCall[1].entityId).toBe('entity-bob');
-        expect(extractFromMessagesCall[1].entityName).toBe('Bob');
-
-        expect(extractFromMessagesCall[2].entityId).toBe('entity-alice');
-        expect(extractFromMessagesCall[2].entityName).toBe('Alice');
-      });
-
-      it('should use senderEntityId for promiseRecipient resolution', async () => {
-        const jobData: ExtractionJobData = {
-          interactionId: 'group-chat-789',
-          entityId: 'first-entity',
-          messageIds: ['msg-1'],
-          messages: [
-            {
-              id: 'msg-1',
-              content: 'Я сделаю это завтра',
-              timestamp: '2026-01-20T10:00:00Z',
-              isOutgoing: true,
-              senderEntityId: 'my-entity',
-              senderEntityName: 'Me',
-            },
-          ],
-        };
-
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'first-entity',
-          name: 'First Entity',
-          isBot: false,
-        });
-
-        const job = createMockJob(jobData);
-
-        await processor.process(job);
-
-        // Verify promiseRecipient uses message-level entityId
-        expect(mockPromiseRecipientService.resolveRecipient).toHaveBeenCalledWith(
-          expect.objectContaining({
-            entityId: 'my-entity',
-            isOutgoing: true,
-          }),
-        );
-      });
-    });
-
-    describe('reply-to context', () => {
-      it('should load reply-to info for messages with replyToSourceMessageId', async () => {
-        const jobData: ExtractionJobData = {
-          interactionId: 'interaction-123',
-          entityId: 'entity-456',
-          messageIds: ['msg-reply'],
-          messages: [
-            {
-              id: 'msg-reply',
-              content: 'This is a reply',
-              timestamp: '2026-01-20T10:00:00Z',
-              isOutgoing: false,
-              replyToSourceMessageId: 'original-msg-id',
-            },
-          ],
-        };
-
-        const replyToMap = new Map([
-          ['original-msg-id', { content: 'Original message', senderName: 'Sender', senderEntityId: 'sender-entity' }],
-        ]);
-        mockPromiseRecipientService.loadReplyToInfo.mockResolvedValue(replyToMap);
-
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'entity-456',
-          name: 'Test User',
-          isBot: false,
-        });
-
-        const job = createMockJob(jobData);
-
-        await processor.process(job);
-
-        expect(mockPromiseRecipientService.loadReplyToInfo).toHaveBeenCalledWith(
-          jobData.messages,
-          'interaction-123',
-        );
-
-        expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalledWith(
-          expect.arrayContaining([
-            expect.objectContaining({
-              replyToContent: 'Original message',
-              replyToSenderName: 'Sender',
-            }),
-          ]),
-        );
-      });
-    });
-
-    describe('topic name handling', () => {
-      it('should pass topicName to second brain extraction', async () => {
-        const jobData: ExtractionJobData = {
-          interactionId: 'forum-interaction',
-          entityId: 'entity-456',
-          messageIds: ['msg-1'],
-          messages: [
-            {
-              id: 'msg-1',
-              content: 'Message in forum topic',
-              timestamp: '2026-01-20T10:00:00Z',
-              isOutgoing: false,
-              topicName: 'Рабочие вопросы',
-            },
-          ],
-        };
-
-        mockEntityService.findOne.mockResolvedValue({
-          id: 'entity-456',
-          name: 'Test User',
-          isBot: false,
-        });
-
-        const job = createMockJob(jobData);
-
-        await processor.process(job);
-
-        expect(mockSecondBrainExtractionService.extractFromMessages).toHaveBeenCalledWith(
-          expect.arrayContaining([
-            expect.objectContaining({
-              topicName: 'Рабочие вопросы',
-            }),
-          ]),
-        );
-      });
-    });
-
-    describe('extraction results aggregation', () => {
-      it('should count extracted facts, events, and pending events', async () => {
-        mockFactExtractionService.extractFactsAgentBatch.mockResolvedValue({
-          factsCreated: 2,
-        });
-
-        mockEventExtractionService.extractEventsBatch.mockResolvedValue({
-          events: [{ id: 'event-1' }],
-        });
-
-        mockSecondBrainExtractionService.extractFromMessages.mockResolvedValue([
-          { extractedEvents: [{ id: 'pending-1' }, { id: 'pending-2' }, { id: 'pending-3' }] },
-        ]);
 
         const job = createMockJob(baseJobData);
 
@@ -447,32 +149,40 @@ describe('FactExtractionProcessor', () => {
 
         expect(result).toEqual({
           success: true,
-          factsExtracted: 2,
-          eventsExtracted: 1,
-          pendingEventsExtracted: 3,
+          factsCreated: 3,
+          eventsCreated: 2,
+          relationsCreated: 1,
+          pendingEntities: 1,
         });
       });
 
-      it('should aggregate pending events from multiple messages', async () => {
+      it('should pass entity name and messages to unified extraction', async () => {
         const jobData: ExtractionJobData = {
-          ...baseJobData,
+          interactionId: 'interaction-789',
+          entityId: 'entity-abc',
           messageIds: ['msg-1', 'msg-2'],
           messages: [
-            { id: 'msg-1', content: 'First', timestamp: '2026-01-20T10:00:00Z', isOutgoing: false },
-            { id: 'msg-2', content: 'Second', timestamp: '2026-01-20T10:01:00Z', isOutgoing: false },
+            { id: 'msg-1', content: 'First message', timestamp: '2026-01-20T10:00:00Z', isOutgoing: false },
+            { id: 'msg-2', content: 'Second message', timestamp: '2026-01-20T10:01:00Z', isOutgoing: true },
           ],
         };
 
-        mockSecondBrainExtractionService.extractFromMessages.mockResolvedValue([
-          { extractedEvents: [{ id: 'e1' }, { id: 'e2' }] },
-          { extractedEvents: [{ id: 'e3' }] },
-        ]);
+        mockEntityService.findOne.mockResolvedValue({
+          id: 'entity-abc',
+          name: 'Алексей',
+          isBot: false,
+        });
 
         const job = createMockJob(jobData);
 
-        const result = await processor.process(job);
+        await processor.process(job);
 
-        expect(result.pendingEventsExtracted).toBe(3);
+        expect(mockUnifiedExtractionService.extract).toHaveBeenCalledWith({
+          entityId: 'entity-abc',
+          entityName: 'Алексей',
+          messages: jobData.messages,
+          interactionId: 'interaction-789',
+        });
       });
     });
 
@@ -485,8 +195,8 @@ describe('FactExtractionProcessor', () => {
         await expect(processor.process(job)).rejects.toThrow('Entity not found');
       });
 
-      it('should throw error when extraction fails', async () => {
-        mockFactExtractionService.extractFactsAgentBatch.mockRejectedValue(
+      it('should throw error when unified extraction fails', async () => {
+        mockUnifiedExtractionService.extract.mockRejectedValue(
           new Error('LLM service unavailable'),
         );
 

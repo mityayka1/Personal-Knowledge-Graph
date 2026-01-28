@@ -1,4 +1,6 @@
 import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import {
@@ -12,7 +14,16 @@ import { EntityFactService } from '../../entity/entity-fact/entity-fact.service'
 import { EntityService } from '../../entity/entity.service';
 import { EntityRelationService } from '../../entity/entity-relation/entity-relation.service';
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
-import { FactSource, RelationType, RelationSource, FactCategory } from '@pkg/entities';
+import { EnrichmentQueueService } from '../enrichment-queue.service';
+import {
+  FactSource,
+  RelationType,
+  RelationSource,
+  FactCategory,
+  ExtractedEvent,
+  ExtractedEventType,
+  ExtractedEventStatus,
+} from '@pkg/entities';
 
 /** MCP server name for extraction tools */
 export const EXTRACTION_MCP_NAME = 'extraction-tools';
@@ -49,6 +60,10 @@ export class ExtractionToolsProvider {
     @Optional()
     @Inject(forwardRef(() => PendingResolutionService))
     private readonly pendingResolutionService: PendingResolutionService | null,
+    @InjectRepository(ExtractedEvent)
+    private readonly extractedEventRepo: Repository<ExtractedEvent>,
+    @Optional()
+    private readonly enrichmentQueueService: EnrichmentQueueService | null,
   ) {}
 
   /**
@@ -107,6 +122,7 @@ export class ExtractionToolsProvider {
       this.createFactTool(),
       this.createRelationTool(),
       this.createPendingEntityTool(context),
+      this.createEventTool(context),
     ] as ToolDefinition[];
   }
 
@@ -424,5 +440,169 @@ Pending entity будет ожидать ручного связывания с 
         }
       },
     );
+  }
+
+  /**
+   * create_event - Create an extracted event (meeting, promise, deadline, etc.).
+   *
+   * @param context - Message/interaction context for source tracking
+   */
+  private createEventTool(context: ExtractionContext) {
+    return tool(
+      'create_event',
+      `Создать событие (встреча, обещание, дедлайн, день рождения и т.д.)
+
+ТИПЫ СОБЫТИЙ:
+- meeting: встречи, созвоны, переговоры — "давай созвонимся", "встреча в 15:00"
+- promise_by_me: обещание в ИСХОДЯЩЕМ сообщении (→) — "я пришлю завтра"
+- promise_by_them: обещание во ВХОДЯЩЕМ сообщении (←) — "пришлю документы"
+- task: задача/запрос — "можешь глянуть документ?"
+- fact: личный факт — "у меня ДР 15 марта"
+- cancellation: отмена/перенос — "давай перенесём"
+
+ПРАВИЛА ОБЕЩАНИЙ:
+- promise_by_me: автор ИСХОДЯЩЕГО сообщения обещает что-то сделать
+- promise_by_them: автор ВХОДЯЩЕГО сообщения обещает что-то сделать
+- ОПРЕДЕЛЯЙ тип ТОЛЬКО по isOutgoing флагу сообщения, НЕ по тексту
+
+АБСТРАКТНЫЕ СОБЫТИЯ (needsEnrichment=true):
+- "давай встретимся" без даты → meeting + needsEnrichment=true
+- "надо обсудить" без деталей → meeting + needsEnrichment=true
+- "встреча 15 января в 14:00" → meeting + needsEnrichment=false`,
+      {
+        eventType: z
+          .enum(['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact', 'cancellation'])
+          .describe('Тип события'),
+        title: z.string().describe('Краткое название события (например: "Созвон с командой", "Прислать отчёт")'),
+        description: z.string().optional().describe('Подробное описание если есть'),
+        date: z.string().optional().describe('Дата/время ISO 8601 если известна (например: "2025-01-30T14:00:00")'),
+        entityId: z.string().uuid().describe('UUID сущности-владельца события'),
+        sourceMessageId: z.string().uuid().describe('UUID исходного сообщения (msgId из метаданных)'),
+        confidence: z.number().min(0).max(1).describe('Уверенность 0-1'),
+        sourceQuote: z.string().max(200).optional().describe('Цитата из сообщения (до 200 символов)'),
+        needsEnrichment: z
+          .boolean()
+          .default(false)
+          .describe('true если событие абстрактное (нет даты/деталей) и требует уточнения'),
+        promiseToEntityId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('UUID получателя обещания (для promise_by_me, берётся из promiseToEntityId сообщения)'),
+        metadata: z.record(z.string(), z.unknown()).optional().describe('Доп. данные (participants, location и т.д.)'),
+      },
+      async (args) => {
+        try {
+          const eventType = args.eventType as ExtractedEventType;
+
+          // Build extractedData based on event type
+          const extractedData = this.buildEventData(eventType, args);
+
+          const event = this.extractedEventRepo.create({
+            sourceMessageId: args.sourceMessageId,
+            sourceInteractionId: context.interactionId,
+            entityId: args.entityId,
+            promiseToEntityId: args.promiseToEntityId || null,
+            eventType,
+            extractedData,
+            sourceQuote: args.sourceQuote?.substring(0, 200) || null,
+            confidence: Math.min(1, Math.max(0, args.confidence)),
+            status: ExtractedEventStatus.PENDING,
+            needsContext: args.needsEnrichment,
+            // Set enrichmentData for enrichment pipeline to find events needing context
+            enrichmentData: args.needsEnrichment ? { enrichmentSuccess: false } : null,
+          });
+
+          const saved = await this.extractedEventRepo.save(event);
+
+          // Queue for enrichment if event is abstract
+          if (args.needsEnrichment && this.enrichmentQueueService) {
+            try {
+              await this.enrichmentQueueService.queueForEnrichment(saved.id);
+              this.logger.debug(`Queued event ${saved.id} for context enrichment`);
+            } catch (queueError) {
+              this.logger.warn(`Failed to queue event for enrichment: ${queueError}`);
+            }
+          }
+
+          this.logger.log(
+            `Created event ${eventType} "${args.title}" for entity ${args.entityId} (id: ${saved.id})`,
+          );
+
+          return toolSuccess({
+            eventId: saved.id,
+            eventType: saved.eventType,
+            status: saved.status,
+            needsEnrichment: args.needsEnrichment,
+          });
+        } catch (error) {
+          return handleToolError(error, this.logger, 'create_event');
+        }
+      },
+    );
+  }
+
+  /**
+   * Build type-specific extractedData for an event.
+   */
+  private buildEventData(
+    eventType: ExtractedEventType,
+    args: {
+      title: string;
+      description?: string;
+      date?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): Record<string, unknown> {
+    const base: Record<string, unknown> = {};
+
+    switch (eventType) {
+      case ExtractedEventType.MEETING:
+        return {
+          ...base,
+          topic: args.title,
+          datetime: args.date || undefined,
+          dateText: args.description || undefined,
+          participants: (args.metadata?.participants as string[]) || undefined,
+        };
+
+      case ExtractedEventType.PROMISE_BY_ME:
+      case ExtractedEventType.PROMISE_BY_THEM:
+        return {
+          ...base,
+          what: args.title,
+          deadline: args.date || undefined,
+          deadlineText: args.description || undefined,
+        };
+
+      case ExtractedEventType.TASK:
+        return {
+          ...base,
+          what: args.title,
+          deadline: args.date || undefined,
+          deadlineText: args.description || undefined,
+          priority: (args.metadata?.priority as string) || undefined,
+        };
+
+      case ExtractedEventType.FACT:
+        return {
+          ...base,
+          factType: (args.metadata?.factType as string) || 'general',
+          value: args.title,
+          quote: args.description || '',
+        };
+
+      case ExtractedEventType.CANCELLATION:
+        return {
+          ...base,
+          what: args.title,
+          newDateTime: args.date || undefined,
+          newDateText: args.description || undefined,
+          reason: (args.metadata?.reason as string) || undefined,
+        };
+
+      default:
+        return { ...base, title: args.title, description: args.description };
+    }
   }
 }

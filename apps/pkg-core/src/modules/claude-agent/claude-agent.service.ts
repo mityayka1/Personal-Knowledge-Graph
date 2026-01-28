@@ -96,7 +96,9 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Execute oneshot call with structured output
+   * Execute oneshot call with structured output.
+   * Uses SDK outputFormat for guaranteed JSON schema compliance
+   * (constrained decoding — model cannot produce invalid JSON).
    */
   private async executeOneshot<T>(params: OneshotParams<T>): Promise<Omit<CallResult<T>, 'run'>> {
     const model = this.getModelString(params.model);
@@ -104,7 +106,6 @@ export class ClaudeAgentService {
 
     this.logger.debug(`Oneshot call: task=${params.taskType}, model=${model}`);
 
-    const systemPrompt = this.buildOneshotSystemPrompt(params.schema);
     const usage: UsageStats = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
     let result: T | undefined;
     let rawResult: string | undefined;
@@ -113,15 +114,23 @@ export class ClaudeAgentService {
     const timeoutId = setTimeout(() => abortController.abort(), timeout);
 
     try {
+      // Use SDK outputFormat for reliable structured output.
+      // No manual "output JSON only" system prompt needed —
+      // SDK handles format enforcement via constrained decoding.
+      const queryOptions: Record<string, unknown> = {
+        model,
+        maxTurns: params.maxTurns || 1,
+        abortController,
+        outputFormat: {
+          type: 'json_schema',
+          schema: params.schema,
+          strict: true,
+        },
+      };
+
       for await (const message of query({
         prompt: params.prompt,
-        options: {
-          model,
-          maxTurns: params.maxTurns || 1,
-          systemPrompt,
-          allowedTools: [], // No tools in oneshot mode
-          abortController,
-        },
+        options: queryOptions as Parameters<typeof query>[0]['options'],
       })) {
         this.accumulateUsage(message, usage);
 
@@ -131,11 +140,19 @@ export class ClaudeAgentService {
           // Extract usage from result message (SDK puts usage here, not in assistant)
           this.accumulateUsageFromResult(resultMessage, usage);
 
-          // Check if it's a success result
-          if (resultMessage.subtype === 'success' && 'result' in resultMessage) {
-            rawResult = (resultMessage as { result?: string }).result || '';
-            this.logger.debug(`[oneshot] Raw result (first 500): ${rawResult.slice(0, 500)}`);
-            result = this.parseStructuredOutput<T>(rawResult, params.schema);
+          if (resultMessage.subtype === 'success') {
+            const msgAny = resultMessage as Record<string, unknown>;
+
+            // Primary: SDK structured_output (constrained decoding, schema-validated)
+            if (msgAny.structured_output !== undefined && msgAny.structured_output !== null) {
+              result = msgAny.structured_output as T;
+              this.logger.debug('[oneshot] Got structured output from SDK');
+            } else {
+              // Fallback: text parsing (safety net if SDK doesn't return structured_output)
+              rawResult = (msgAny.result as string) || '';
+              this.logger.warn(`[oneshot] No structured_output, text fallback: ${rawResult.slice(0, 200)}`);
+              result = this.parseStructuredOutput<T>(rawResult, params.schema);
+            }
           } else if (resultMessage.subtype.startsWith('error')) {
             throw new Error(`Claude returned error: ${resultMessage.subtype}`);
           }
@@ -160,13 +177,18 @@ export class ClaudeAgentService {
     const maxTurns = params.maxTurns || 15;
     const timeout = params.timeout || 300000; // 5 minutes default for agent
     const toolCategories = params.toolCategories || ['all'];
+    const budgetUsd = params.budgetUsd;
 
-    this.logger.debug(`Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}, tools=${toolCategories.join(',')}`);
+    this.logger.debug(
+      `Agent call: task=${params.taskType}, model=${model}, maxTurns=${maxTurns}, ` +
+      `tools=${toolCategories.join(',')}, budget=${budgetUsd ?? 'unlimited'}`
+    );
 
     const usage: UsageStats = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
     const toolsUsed: string[] = [];
     let turns = 0;
     let result: T | undefined;
+    let budgetExceeded = false;
 
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), timeout);
@@ -217,6 +239,16 @@ export class ClaudeAgentService {
       })) {
         this.accumulateUsage(message, usage);
 
+        // Budget check: abort if cost exceeds limit
+        if (budgetUsd !== undefined && usage.totalCostUsd > budgetUsd) {
+          this.logger.warn(
+            `Budget exceeded: $${usage.totalCostUsd.toFixed(4)} > $${budgetUsd}, aborting`
+          );
+          budgetExceeded = true;
+          abortController.abort();
+          break;
+        }
+
         if (message.type === 'assistant') {
           turns++;
           await this.processAssistantMessage(
@@ -228,6 +260,11 @@ export class ClaudeAgentService {
           if (params.hooks?.onTurn) {
             await params.hooks.onTurn(turns);
           }
+        }
+
+        // Handle tool results for onToolResult hook
+        if (message.type === 'user' && params.hooks?.onToolResult) {
+          await this.processToolResults(message, params.hooks.onToolResult);
         }
 
         if (message.type === 'result') {
@@ -271,6 +308,9 @@ export class ClaudeAgentService {
     }
 
     if (result === undefined) {
+      if (budgetExceeded) {
+        throw new Error(`Budget exceeded: $${usage.totalCostUsd.toFixed(4)} > $${budgetUsd}`);
+      }
       throw new Error('Agent finished without result');
     }
 
@@ -316,6 +356,62 @@ export class ClaudeAgentService {
   }
 
   /**
+   * Process tool results from user message and call onToolResult hook
+   * SDK user messages contain tool_result blocks with tool execution results
+   */
+  private async processToolResults(
+    message: SDKMessage,
+    onToolResult: (toolName: string, result: string) => Promise<void>,
+  ): Promise<void> {
+    const messageAny = message as Record<string, unknown>;
+    const content = messageAny.message && typeof messageAny.message === 'object'
+      ? (messageAny.message as Record<string, unknown>).content
+      : undefined;
+
+    if (!content || !Array.isArray(content)) {
+      return;
+    }
+
+    for (const block of content) {
+      if (
+        typeof block === 'object' &&
+        block !== null &&
+        'type' in block &&
+        (block as { type: unknown }).type === 'tool_result'
+      ) {
+        const toolResultBlock = block as {
+          type: 'tool_result';
+          tool_use_id?: string;
+          content?: string | Array<{ type: string; text?: string }>;
+        };
+
+        // Extract tool name from tool_use_id if available (format: toolu_xxx)
+        // Note: SDK doesn't always include tool name in result, so we use id as fallback
+        const toolId = toolResultBlock.tool_use_id || 'unknown';
+
+        // Extract result text
+        let resultText: string;
+        if (typeof toolResultBlock.content === 'string') {
+          resultText = toolResultBlock.content;
+        } else if (Array.isArray(toolResultBlock.content)) {
+          resultText = toolResultBlock.content
+            .filter((c): c is { type: string; text: string } => c.type === 'text' && typeof c.text === 'string')
+            .map(c => c.text)
+            .join('\n');
+        } else {
+          resultText = '';
+        }
+
+        try {
+          await onToolResult(toolId, resultText);
+        } catch (error) {
+          this.logger.warn(`onToolResult hook error for ${toolId}: ${error}`);
+        }
+      }
+    }
+  }
+
+  /**
    * Accumulate usage stats from SDK assistant message
    * @see sdk-transformer.ts for snake_case → camelCase transformation
    */
@@ -346,16 +442,6 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Build system prompt for oneshot mode
-   */
-  private buildOneshotSystemPrompt(schema: object): string {
-    return `You must respond with valid JSON that matches the following schema. Do not include any other text, only the JSON object.
-
-Schema:
-${JSON.stringify(schema, null, 2)}`;
-  }
-
-  /**
    * Build system prompt for agent mode
    */
   private buildAgentSystemPrompt(taskType: ClaudeTaskType): string {
@@ -369,34 +455,51 @@ ${JSON.stringify(schema, null, 2)}`;
       context_synthesis: 'You synthesize context from multiple sources to prepare for an interaction.',
       fact_extraction: 'You extract structured facts (like job title, company, contact info) from messages.',
       fact_fusion: 'You analyze two facts about the same entity and decide how to merge them: confirm, enrich, supersede, coexist, or flag as conflict.',
+      unified_extraction: 'You extract facts, events, and relations from messages using the provided tools. Follow the sectioned instructions in the prompt.',
     };
     return prompts[taskType] || '';
   }
 
   /**
-   * Parse structured output from text response
+   * Parse structured output from text response.
+   * Tries multiple extraction strategies when Claude returns
+   * JSON embedded in conversational text.
    */
   private parseStructuredOutput<T>(result: string, schema: object): T {
     if (!result) {
       throw new Error('Empty result from Claude');
     }
 
-    // Try direct JSON parse first
+    // Strategy 1: Direct JSON parse (clean response)
     try {
       return JSON.parse(result) as T;
     } catch {
-      // Try extracting from markdown code block
-      const jsonMatch = result.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (jsonMatch?.[1]) {
-        try {
-          return JSON.parse(jsonMatch[1].trim()) as T;
-        } catch {
-          // Fall through to error
-        }
-      }
-
-      throw new Error(`Failed to parse JSON from result: ${result.slice(0, 200)}`);
+      // Not valid JSON, try extraction strategies
     }
+
+    // Strategy 2: Extract from markdown code block (```json ... ```)
+    const codeBlockMatch = result.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch?.[1]) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim()) as T;
+      } catch {
+        // Not valid JSON inside code block
+      }
+    }
+
+    // Strategy 3: Find outermost JSON object in mixed text
+    // Handles cases like: "Here are the results:\n{...}\nLet me know if..."
+    const firstBrace = result.indexOf('{');
+    const lastBrace = result.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(result.slice(firstBrace, lastBrace + 1)) as T;
+      } catch {
+        // Braces found but content not valid JSON
+      }
+    }
+
+    throw new Error(`Failed to parse JSON from result: ${result.slice(0, 200)}`);
   }
 
   /**
