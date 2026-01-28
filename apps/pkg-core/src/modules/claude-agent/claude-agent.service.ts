@@ -96,7 +96,9 @@ export class ClaudeAgentService {
   }
 
   /**
-   * Execute oneshot call with structured output
+   * Execute oneshot call with structured output.
+   * Uses SDK outputFormat for guaranteed JSON schema compliance
+   * (constrained decoding — model cannot produce invalid JSON).
    */
   private async executeOneshot<T>(params: OneshotParams<T>): Promise<Omit<CallResult<T>, 'run'>> {
     const model = this.getModelString(params.model);
@@ -104,7 +106,6 @@ export class ClaudeAgentService {
 
     this.logger.debug(`Oneshot call: task=${params.taskType}, model=${model}`);
 
-    const systemPrompt = this.buildOneshotSystemPrompt(params.schema);
     const usage: UsageStats = { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 };
     let result: T | undefined;
     let rawResult: string | undefined;
@@ -113,15 +114,23 @@ export class ClaudeAgentService {
     const timeoutId = setTimeout(() => abortController.abort(), timeout);
 
     try {
+      // Use SDK outputFormat for reliable structured output.
+      // No manual "output JSON only" system prompt needed —
+      // SDK handles format enforcement via constrained decoding.
+      const queryOptions: Record<string, unknown> = {
+        model,
+        maxTurns: params.maxTurns || 1,
+        abortController,
+        outputFormat: {
+          type: 'json_schema',
+          schema: params.schema,
+          strict: true,
+        },
+      };
+
       for await (const message of query({
         prompt: params.prompt,
-        options: {
-          model,
-          maxTurns: params.maxTurns || 1,
-          systemPrompt,
-          allowedTools: [], // No tools in oneshot mode
-          abortController,
-        },
+        options: queryOptions as Parameters<typeof query>[0]['options'],
       })) {
         this.accumulateUsage(message, usage);
 
@@ -131,11 +140,19 @@ export class ClaudeAgentService {
           // Extract usage from result message (SDK puts usage here, not in assistant)
           this.accumulateUsageFromResult(resultMessage, usage);
 
-          // Check if it's a success result
-          if (resultMessage.subtype === 'success' && 'result' in resultMessage) {
-            rawResult = (resultMessage as { result?: string }).result || '';
-            this.logger.debug(`[oneshot] Raw result (first 500): ${rawResult.slice(0, 500)}`);
-            result = this.parseStructuredOutput<T>(rawResult, params.schema);
+          if (resultMessage.subtype === 'success') {
+            const msgAny = resultMessage as Record<string, unknown>;
+
+            // Primary: SDK structured_output (constrained decoding, schema-validated)
+            if (msgAny.structured_output !== undefined && msgAny.structured_output !== null) {
+              result = msgAny.structured_output as T;
+              this.logger.debug('[oneshot] Got structured output from SDK');
+            } else {
+              // Fallback: text parsing (safety net if SDK doesn't return structured_output)
+              rawResult = (msgAny.result as string) || '';
+              this.logger.warn(`[oneshot] No structured_output, text fallback: ${rawResult.slice(0, 200)}`);
+              result = this.parseStructuredOutput<T>(rawResult, params.schema);
+            }
           } else if (resultMessage.subtype.startsWith('error')) {
             throw new Error(`Claude returned error: ${resultMessage.subtype}`);
           }
@@ -349,7 +366,7 @@ export class ClaudeAgentService {
    * Build system prompt for oneshot mode
    */
   private buildOneshotSystemPrompt(schema: object): string {
-    return `You must respond with valid JSON that matches the following schema. Do not include any other text, only the JSON object.
+    return `CRITICAL: Your entire response must be a single valid JSON object. No explanations, no markdown, no text before or after the JSON. Output ONLY the JSON object.
 
 Schema:
 ${JSON.stringify(schema, null, 2)}`;
@@ -369,34 +386,51 @@ ${JSON.stringify(schema, null, 2)}`;
       context_synthesis: 'You synthesize context from multiple sources to prepare for an interaction.',
       fact_extraction: 'You extract structured facts (like job title, company, contact info) from messages.',
       fact_fusion: 'You analyze two facts about the same entity and decide how to merge them: confirm, enrich, supersede, coexist, or flag as conflict.',
+      unified_extraction: 'You extract facts, events, and relations from messages using the provided tools. Follow the sectioned instructions in the prompt.',
     };
     return prompts[taskType] || '';
   }
 
   /**
-   * Parse structured output from text response
+   * Parse structured output from text response.
+   * Tries multiple extraction strategies when Claude returns
+   * JSON embedded in conversational text.
    */
   private parseStructuredOutput<T>(result: string, schema: object): T {
     if (!result) {
       throw new Error('Empty result from Claude');
     }
 
-    // Try direct JSON parse first
+    // Strategy 1: Direct JSON parse (clean response)
     try {
       return JSON.parse(result) as T;
     } catch {
-      // Try extracting from markdown code block
-      const jsonMatch = result.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (jsonMatch?.[1]) {
-        try {
-          return JSON.parse(jsonMatch[1].trim()) as T;
-        } catch {
-          // Fall through to error
-        }
-      }
-
-      throw new Error(`Failed to parse JSON from result: ${result.slice(0, 200)}`);
+      // Not valid JSON, try extraction strategies
     }
+
+    // Strategy 2: Extract from markdown code block (```json ... ```)
+    const codeBlockMatch = result.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch?.[1]) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim()) as T;
+      } catch {
+        // Not valid JSON inside code block
+      }
+    }
+
+    // Strategy 3: Find outermost JSON object in mixed text
+    // Handles cases like: "Here are the results:\n{...}\nLet me know if..."
+    const firstBrace = result.indexOf('{');
+    const lastBrace = result.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(result.slice(firstBrace, lastBrace + 1)) as T;
+      } catch {
+        // Braces found but content not valid JSON
+      }
+    }
+
+    throw new Error(`Failed to parse JSON from result: ${result.slice(0, 200)}`);
   }
 
   /**

@@ -1,7 +1,8 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, In } from 'typeorm';
 import {
+  EntityRecord,
   EntityRelation,
   EntityRelationMember,
   RelationType,
@@ -25,6 +26,8 @@ export class EntityRelationService {
   private readonly logger = new Logger(EntityRelationService.name);
 
   constructor(
+    @InjectRepository(EntityRecord)
+    private readonly entityRepo: Repository<EntityRecord>,
     @InjectRepository(EntityRelation)
     private readonly relationRepo: Repository<EntityRelation>,
     @InjectRepository(EntityRelationMember)
@@ -45,6 +48,9 @@ export class EntityRelationService {
         `Invalid number of members (${dto.members.length}) for relation type ${dto.relationType}`,
       );
     }
+
+    // Validate that all entity IDs exist in database
+    await this.validateEntityIds(dto.members.map((m) => m.entityId));
 
     // Check for duplicate relation
     const existing = await this.findDuplicate(dto);
@@ -207,6 +213,9 @@ export class EntityRelationService {
       throw new NotFoundException(`Relation ${relationId} not found`);
     }
 
+    // Validate entity exists
+    await this.validateEntityIds([dto.entityId]);
+
     // Validate role
     if (!isValidRole(relation.relationType, dto.role)) {
       throw new BadRequestException(
@@ -303,6 +312,29 @@ export class EntityRelationService {
     }
 
     return null;
+  }
+
+  /**
+   * Validate that all entity IDs exist in the database.
+   * Prevents FK constraint violations when LLM passes non-existent IDs.
+   */
+  private async validateEntityIds(entityIds: string[]): Promise<void> {
+    const uniqueIds = [...new Set(entityIds)];
+    const existing = await this.entityRepo.find({
+      where: { id: In(uniqueIds) },
+      select: ['id'],
+    });
+
+    const existingIds = new Set(existing.map((e) => e.id));
+    const missing = uniqueIds.filter((id) => !existingIds.has(id));
+
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Entity IDs not found: ${missing.join(', ')}. ` +
+          `Use find_entity_by_name to search for entities first, ` +
+          `or create_pending_entity for unknown people.`,
+      );
+    }
   }
 
   /**

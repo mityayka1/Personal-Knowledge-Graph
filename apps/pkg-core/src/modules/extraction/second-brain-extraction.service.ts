@@ -189,7 +189,10 @@ export class SecondBrainExtractionService {
   ) {}
 
   /**
-   * Extract events from a single message
+   * Extract events from a single message.
+   *
+   * @deprecated Replaced by UnifiedExtractionService.extract() which handles
+   * facts, events, and relations in a single agent call.
    */
   async extractFromMessage(params: {
     messageId: string;
@@ -232,6 +235,16 @@ export class SecondBrainExtractionService {
       return { sourceMessageId: messageId, extractedEvents: [], tokensUsed: 0 };
     }
 
+    // Get entity context for better extraction (facts, history, relations)
+    let entityContext = '';
+    if (this.entityFactService && entityId) {
+      try {
+        entityContext = await this.entityFactService.getContextForExtraction(entityId);
+      } catch (e) {
+        this.logger.warn(`Failed to get entity context for extraction: ${e}`);
+      }
+    }
+
     const prompt = this.buildPrompt(
       entityName,
       messageContent,
@@ -240,6 +253,7 @@ export class SecondBrainExtractionService {
       replyToContent,
       topicName,
       replyToSenderName,
+      entityContext,
     );
 
     try {
@@ -347,7 +361,10 @@ export class SecondBrainExtractionService {
   }
 
   /**
-   * Batch extract events from multiple messages
+   * Batch extract events from multiple messages.
+   *
+   * @deprecated Replaced by UnifiedExtractionService.extract() which handles
+   * facts, events, and relations in a single agent call.
    */
   async extractFromMessages(
     messages: Array<{
@@ -893,7 +910,10 @@ ${crossChatContext}
   }
 
   /**
-   * Build extraction prompt
+   * Build extraction prompt.
+   *
+   * @deprecated Replaced by UnifiedExtractionService.buildUnifiedPrompt() which
+   * includes sectioned instructions for facts, events, and relations.
    */
   private buildPrompt(
     entityName: string,
@@ -903,10 +923,22 @@ ${crossChatContext}
     replyToContent?: string,
     topicName?: string,
     replyToSenderName?: string,
+    entityContext?: string,
   ): string {
     const sender = isOutgoing ? 'я (пользователь)' : entityName;
     const cleanContent = content.replace(/\n/g, ' ').substring(0, maxContentLength);
     const today = new Date().toISOString().split('T')[0];
+
+    // Build entity knowledge section if available
+    let knowledgeSection = '';
+    if (entityContext) {
+      knowledgeSection = `═══════════════════════════════════════════════════════════════
+ИЗВЕСТНЫЕ ФАКТЫ О СОБЕСЕДНИКЕ:
+${entityContext}
+═══════════════════════════════════════════════════════════════
+
+`;
+    }
 
     // Build topic context section if available
     let topicContext = '';
@@ -939,7 +971,7 @@ ${crossChatContext}
     }
 
     return `Проанализируй сообщение и извлеки события для "второй памяти".
-${topicContext}${replyContext}
+${knowledgeSection}${topicContext}${replyContext}
 Собеседник: ${entityName}
 Автор сообщения: ${sender}
 ${recipientContext}Сегодня: ${today}

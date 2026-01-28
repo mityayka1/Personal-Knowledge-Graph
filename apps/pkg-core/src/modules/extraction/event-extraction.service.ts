@@ -58,7 +58,10 @@ interface EventsExtractionResponse {
 }
 
 /**
- * Extracts events (meetings, deadlines, commitments) from messages
+ * Extracts events (meetings, deadlines, commitments) from messages.
+ *
+ * @deprecated Replaced by UnifiedExtractionService which combines fact, event,
+ * and relation extraction into a single agent call. Will be removed in next cleanup.
  */
 @Injectable()
 export class EventExtractionService {
