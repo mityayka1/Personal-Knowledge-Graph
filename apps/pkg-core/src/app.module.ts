@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { RedisModule } from '@nestjs-modules/ioredis';
@@ -85,6 +86,9 @@ import { ConfirmationModule } from './modules/confirmation/confirmation.module';
         limit: 100, // 100 requests per minute
       },
     ]),
+
+    // Cron scheduling (single instance for entire app)
+    ScheduleModule.forRoot(),
 
     // Auth module
     AuthModule,

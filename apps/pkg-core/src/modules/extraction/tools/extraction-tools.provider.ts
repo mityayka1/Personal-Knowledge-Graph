@@ -479,7 +479,7 @@ Pending entity будет ожидать ручного связывания с 
         entityId: z.string().uuid().describe('UUID сущности-владельца события'),
         sourceMessageId: z.string().uuid().describe('UUID исходного сообщения (msgId из метаданных)'),
         confidence: z.number().min(0).max(1).describe('Уверенность 0-1'),
-        sourceQuote: z.string().max(200).optional().describe('Цитата из сообщения (до 200 символов)'),
+        sourceQuote: z.string().max(200).describe('Цитата из сообщения — ОБЯЗАТЕЛЬНО (до 200 символов)'),
         needsEnrichment: z
           .boolean()
           .default(false)
@@ -505,7 +505,7 @@ Pending entity будет ожидать ручного связывания с 
             promiseToEntityId: args.promiseToEntityId || null,
             eventType,
             extractedData,
-            sourceQuote: args.sourceQuote?.substring(0, 200) || null,
+            sourceQuote: args.sourceQuote.substring(0, 200),
             confidence: Math.min(1, Math.max(0, args.confidence)),
             status: ExtractedEventStatus.PENDING,
             needsContext: args.needsEnrichment,

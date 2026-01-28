@@ -470,8 +470,9 @@ export class NotificationService {
   /**
    * Format enhanced event notification with contact links, message deep links,
    * needsContext warning, and enrichment synthesis.
+   * Public method for use by DigestService for rich single-event formatting.
    */
-  private async formatEnhancedEventNotification(event: ExtractedEvent): Promise<string> {
+  async formatEnhancedEventNotification(event: ExtractedEvent): Promise<string> {
     const [contactInfo, messageLinkInfo] = await Promise.all([
       this.getContactInfo(event),
       this.getMessageLinkInfo(event),
