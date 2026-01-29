@@ -3,14 +3,11 @@ import { Context } from 'telegraf';
 import { Message } from 'telegraf/typings/core/types/typegram';
 import { PkgCoreApiService, RecallSource } from '../../api/pkg-core-api.service';
 
-interface DailySession {
+interface DailyContext {
   dateStr: string;
   lastAnswer: string;
   sources: RecallSource[];
-  createdAt: number;
 }
-
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Handler for /daily command — comprehensive daily summary using LLM recall
@@ -18,14 +15,17 @@ const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
  * Features:
  * - AI-powered daily summary via /agent/recall
  * - Optional focus topic: /daily [topic]
- * - Follow-up questions support (reply to continue dialog)
+ * - Reply-based follow-up: reply to any bot message to continue dialog
  */
 @Injectable()
 export class DailySummaryHandler {
   private readonly logger = new Logger(DailySummaryHandler.name);
 
-  /** Active sessions by chatId for follow-up questions */
-  private sessions = new Map<number, DailySession>();
+  /**
+   * Context stored by bot's messageId.
+   * Allows reply to any message in the conversation chain.
+   */
+  private contextByMessageId = new Map<number, DailyContext>();
 
   constructor(private readonly pkgCoreApi: PkgCoreApiService) {}
 
@@ -61,48 +61,35 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Handle follow-up message (text reply after /daily)
-   * @returns true if handled, false if no active session
+   * Handle reply to a bot message (follow-up question)
+   * @returns true if this was a reply to a daily message, false otherwise
    */
-  async handleFollowUp(ctx: Context, text: string): Promise<boolean> {
+  async handleReply(ctx: Context): Promise<boolean> {
+    const message = ctx.message as Message.TextMessage;
+    if (!message?.reply_to_message) return false;
+
+    const replyToMessageId = message.reply_to_message.message_id;
+    const dailyContext = this.contextByMessageId.get(replyToMessageId);
+
+    if (!dailyContext) return false;
+
     const chatId = ctx.chat?.id;
     if (!chatId) return false;
 
-    const session = this.sessions.get(chatId);
-    if (!session) return false;
-
-    // Check session timeout
-    if (Date.now() - session.createdAt > SESSION_TIMEOUT_MS) {
-      this.sessions.delete(chatId);
-      return false;
-    }
+    const text = message.text;
+    if (!text) return false;
 
     // Build follow-up query with context
-    const query = `Контекст: ранее ты подготовил саммари за ${session.dateStr}.
+    const query = `Контекст: ранее ты подготовил саммари за ${dailyContext.dateStr}.
 
 Предыдущий ответ (краткое содержание):
-${this.truncate(session.lastAnswer, 500)}
+${this.truncate(dailyContext.lastAnswer, 500)}
 
 Уточняющий вопрос/инструкция пользователя: "${text}"
 
 Используй поиск чтобы найти дополнительную информацию и ответить на вопрос. Отвечай конкретно на вопрос пользователя.`;
 
-    await this.executeQuery(ctx, chatId, query, session.dateStr, false);
-    return true;
-  }
-
-  /**
-   * Check if chat has active daily session
-   */
-  hasActiveSession(chatId: number): boolean {
-    const session = this.sessions.get(chatId);
-    if (!session) return false;
-
-    if (Date.now() - session.createdAt > SESSION_TIMEOUT_MS) {
-      this.sessions.delete(chatId);
-      return false;
-    }
-
+    await this.executeQuery(ctx, chatId, query, dailyContext.dateStr, false);
     return true;
   }
 
@@ -132,19 +119,20 @@ ${this.truncate(session.lastAnswer, 500)}
 
       const { answer, sources } = response.data;
 
-      // Save session for follow-up
-      this.sessions.set(chatId, {
-        dateStr,
-        lastAnswer: answer,
-        sources,
-        createdAt: Date.now(),
-      });
-
       // Format and send response
       const formattedResponse = this.formatResponse(answer, sources, dateStr, isInitial);
 
       await ctx.telegram.deleteMessage(chatId, statusMessage.message_id);
-      await this.sendMessage(ctx, formattedResponse);
+      const sentMessages = await this.sendMessage(ctx, formattedResponse);
+
+      // Save context for each sent message (for reply-based follow-up)
+      const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources };
+      for (const sentMessage of sentMessages) {
+        this.contextByMessageId.set(sentMessage.message_id, dailyContext);
+      }
+
+      // Cleanup old contexts (keep last 100)
+      this.cleanupOldContexts();
 
       this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} completed for user ${ctx.from?.id}`);
     } catch (error) {
@@ -179,8 +167,8 @@ ${this.truncate(session.lastAnswer, 500)}
       result += `\n📎 <i>Источников: ${sources.length}</i>`;
     }
 
-    // Add hint for follow-up
-    result += '\n\n💬 <i>Можешь задать уточняющий вопрос</i>';
+    // Add hint for follow-up (reply-based)
+    result += '\n\n💬 <i>Ответь на это сообщение чтобы задать уточняющий вопрос</i>';
 
     return result;
   }
@@ -216,27 +204,32 @@ ${this.truncate(session.lastAnswer, 500)}
   }
 
   /**
-   * Send message, splitting if too long
+   * Send message, splitting if too long. Returns all sent messages.
    */
-  private async sendMessage(ctx: Context, text: string): Promise<void> {
+  private async sendMessage(ctx: Context, text: string): Promise<Message.TextMessage[]> {
     const MAX_LENGTH = 4000;
+    const sentMessages: Message.TextMessage[] = [];
 
     if (text.length <= MAX_LENGTH) {
-      await this.trySendHtml(ctx, text);
-      return;
+      const msg = await this.trySendHtml(ctx, text);
+      if (msg) sentMessages.push(msg);
+      return sentMessages;
     }
 
     // Split by paragraphs
     const parts = this.splitMessage(text, MAX_LENGTH);
 
     for (const part of parts) {
-      await this.trySendHtml(ctx, part);
+      const msg = await this.trySendHtml(ctx, part);
+      if (msg) sentMessages.push(msg);
     }
+
+    return sentMessages;
   }
 
-  private async trySendHtml(ctx: Context, text: string): Promise<void> {
+  private async trySendHtml(ctx: Context, text: string): Promise<Message.TextMessage | null> {
     try {
-      await ctx.reply(text, { parse_mode: 'HTML' });
+      return (await ctx.reply(text, { parse_mode: 'HTML' })) as Message.TextMessage;
     } catch (error) {
       // If HTML parsing fails, send as plain text
       this.logger.warn(`HTML parse failed, sending plain text: ${(error as Error).message}`);
@@ -247,7 +240,7 @@ ${this.truncate(session.lastAnswer, 500)}
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>');
-      await ctx.reply(plainText);
+      return (await ctx.reply(plainText)) as Message.TextMessage;
     }
   }
 
@@ -293,5 +286,20 @@ ${this.truncate(session.lastAnswer, 500)}
       );
     }
     return false;
+  }
+
+  /**
+   * Cleanup old contexts to prevent memory leak.
+   * Keeps only the last 100 message contexts.
+   */
+  private cleanupOldContexts(): void {
+    const MAX_CONTEXTS = 100;
+    if (this.contextByMessageId.size > MAX_CONTEXTS) {
+      const keysToDelete = Array.from(this.contextByMessageId.keys())
+        .slice(0, this.contextByMessageId.size - MAX_CONTEXTS);
+      for (const key of keysToDelete) {
+        this.contextByMessageId.delete(key);
+      }
+    }
   }
 }
