@@ -1838,13 +1838,84 @@ export class SummarizationController {
 
 ## 8. Оценка затрат
 
-### LLM costs (Claude Haiku)
+### LLM costs (Claude Sonnet)
 
 | Операция | Tokens in | Tokens out | Cost/op | Frequency | Monthly cost |
 |----------|-----------|------------|---------|-----------|--------------|
-| Summarization | ~3000 | ~500 | $0.003 | 600/mo | $1.80 |
-| Profile aggregation | ~2000 | ~300 | $0.002 | 200/mo | $0.40 |
-| Context synthesis | ~4000 | ~500 | $0.004 | 300/mo | $1.20 |
-| **Total** | | | | | **~$3.40/mo** |
+| Summarization | ~3000 | ~500 | $0.018 | 600/mo | $10.80 |
+| Profile aggregation | ~2000 | ~300 | $0.012 | 200/mo | $2.40 |
+| Context synthesis | ~4000 | ~500 | $0.024 | 300/mo | $7.20 |
+| **Total** | | | | | **~$20.40/mo** |
 
-При активном использовании (1000+ interactions/месяц) затраты вырастут до ~$10-15/месяц.
+При активном использовании (1000+ interactions/месяц) затраты вырастут до ~$50-70/месяц.
+
+> **Примечание:** Изначально планировалось использовать Haiku (~$3.40/мес), но для лучшего качества суммаризации используется Sonnet.
+
+---
+
+## 9. Важные замечания по реализации
+
+### 9.1 ScheduleModule — singleton pattern
+
+**КРИТИЧНО:** `ScheduleModule.forRoot()` должен быть зарегистрирован **только один раз** в `AppModule`.
+
+```typescript
+// ✅ ПРАВИЛЬНО — только в AppModule
+@Module({
+  imports: [
+    ScheduleModule.forRoot(),  // Единственная регистрация
+    SummarizationModule,
+    NotificationModule,
+  ],
+})
+export class AppModule {}
+
+// ❌ НЕПРАВИЛЬНО — дублирование в доменных модулях
+@Module({
+  imports: [ScheduleModule.forRoot()],  // НЕ ДЕЛАТЬ ТАК!
+})
+export class SummarizationModule {}
+```
+
+Каждая регистрация `forRoot()` создаёт отдельный scheduler, что приводит к **многократному выполнению** `@Cron()` декораторов.
+
+**Подробнее:** [docs/solutions/integration-issues/duplicate-notifications-missing-context-20260129.md](docs/solutions/integration-issues/duplicate-notifications-missing-context-20260129.md)
+
+### 9.2 Временная зона cron jobs
+
+Все cron jobs используют `timeZone: 'Europe/Moscow'`:
+
+```typescript
+@Cron('0 3 * * *', { timeZone: 'Europe/Moscow' })  // 03:00 MSK
+async scheduleDailySummarization() { ... }
+
+@Cron('0 4 * * 0', { timeZone: 'Europe/Moscow' })  // Воскресенье 04:00 MSK
+async scheduleWeeklyProfileUpdate() { ... }
+```
+
+### 9.3 BullMQ Queues
+
+| Queue | Назначение | Rate Limit |
+|-------|------------|------------|
+| `summarization` | Суммаризация interactions | 20/day |
+| `entity-profile` | Агрегация профилей | 10/week |
+
+### 9.4 Фильтрация ботов
+
+Суммаризация **исключает** interactions с ботами на этапе планирования:
+
+```sql
+-- NOT EXISTS check в scheduleDailySummarization()
+NOT EXISTS (
+  SELECT 1 FROM interaction_participants ip
+  INNER JOIN entities e ON e.id = ip.entity_id
+  WHERE ip.interaction_id = i.id AND e.is_bot = true
+)
+```
+
+### 9.5 Минимальные требования
+
+| Процесс | Требование |
+|---------|------------|
+| Interaction Summarization | ≥ 3 сообщений |
+| Entity Profile Aggregation | ≥ 3 summarized interactions |

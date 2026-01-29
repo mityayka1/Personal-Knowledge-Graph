@@ -55,3 +55,4 @@
 - [CLAUDE.md](../../CLAUDE.md) — основные инструкции проекта
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — архитектура системы
 - [API_CONTRACTS.md](../API_CONTRACTS.md) — API контракты
+- [SUMMARIZATION.md](../SUMMARIZATION.md) — система суммаризации и агрегации профилей
