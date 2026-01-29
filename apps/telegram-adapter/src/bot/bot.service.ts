@@ -6,6 +6,7 @@ import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
 import { ActHandler } from './handlers/act.handler';
 import { DigestHandler } from './handlers/digest.handler';
+import { DailySummaryHandler } from './handlers/daily-summary.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
@@ -32,6 +33,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly prepareHandler: PrepareHandler,
     private readonly actHandler: ActHandler,
     private readonly digestHandler: DigestHandler,
+    private readonly dailySummaryHandler: DailySummaryHandler,
     private readonly eventCallbackHandler: EventCallbackHandler,
     @Inject(forwardRef(() => CarouselCallbackHandler))
     private readonly carouselCallbackHandler: CarouselCallbackHandler,
@@ -110,7 +112,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       { command: 'act', description: 'Выполнить действие (написать, напомнить)' },
       { command: 'morning', description: 'Утренний бриф' },
       { command: 'digest', description: 'Дайджест pending событий' },
-      { command: 'daily', description: 'Дневной дайджест' },
+      { command: 'daily', description: 'AI-саммари дня (взаимодействия, задачи, договорённости)' },
     ]);
     this.logger.log('Bot commands registered with Telegram');
 
@@ -154,7 +156,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           '*Брифы и дайджесты:*\n' +
           '`/morning` — утренний бриф\n' +
           '`/digest` — дайджест pending событий\n' +
-          '`/daily` — дневной дайджест',
+          '`/daily [тема]` — AI-саммари дня',
         { parse_mode: 'Markdown' },
       );
     });
@@ -173,8 +175,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           'Выполнить действие: написать контакту, напоминание.\n' +
           'Пример: `/act напиши Сергею что встреча переносится`\n\n' +
           '`/morning` — утренний бриф\n' +
-          '`/digest` — дайджест pending событий\n' +
-          '`/daily` — дневной дайджест',
+          '`/digest` — дайджест pending событий\n\n' +
+          '`/daily [тема]`\n' +
+          'AI-саммари дня: задачи, договорённости, важное.\n' +
+          'Пример: `/daily` или `/daily по проекту X`',
         { parse_mode: 'Markdown' },
       );
     });
@@ -212,13 +216,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       await this.digestHandler.handleDigest(ctx);
     });
 
-    // /daily command (owner-only)
+    // /daily command (owner-only) — comprehensive AI-powered daily summary
     this.bot.command('daily', async (ctx) => {
       if (!this.isOwner(ctx.from?.id)) {
         await ctx.reply('⛔ Эта команда доступна только владельцу бота.');
         return;
       }
-      await this.digestHandler.handleDaily(ctx);
+      await this.dailySummaryHandler.handle(ctx);
     });
 
     this.logger.log('Bot commands registered: /start, /help, /recall, /prepare, /act, /morning, /digest, /daily');

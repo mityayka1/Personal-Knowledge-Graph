@@ -6,6 +6,7 @@ import { RecallHandler } from './handlers/recall.handler';
 import { PrepareHandler } from './handlers/prepare.handler';
 import { ActHandler } from './handlers/act.handler';
 import { DigestHandler } from './handlers/digest.handler';
+import { DailySummaryHandler } from './handlers/daily-summary.handler';
 import { EventCallbackHandler } from './handlers/event-callback.handler';
 import { CarouselCallbackHandler } from './handlers/carousel-callback.handler';
 import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
@@ -24,6 +25,7 @@ import { ApiKeyGuard } from '../common/guards/api-key.guard';
     PrepareHandler,
     ActHandler,
     DigestHandler,
+    DailySummaryHandler,
     EventCallbackHandler,
     CarouselCallbackHandler,
     ApprovalCallbackHandler,
