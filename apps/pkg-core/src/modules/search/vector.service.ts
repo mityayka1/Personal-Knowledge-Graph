@@ -32,6 +32,11 @@ export class VectorService {
       LEFT JOIN interactions i ON m.interaction_id = i.id
       WHERE m.embedding IS NOT NULL
         AND (e.is_bot = false OR e.is_bot IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM interaction_participants ip
+          JOIN entities bot_e ON ip.entity_id = bot_e.id
+          WHERE ip.interaction_id = m.interaction_id AND bot_e.is_bot = true
+        )
     `;
 
     const params: any[] = [JSON.stringify(embedding)];

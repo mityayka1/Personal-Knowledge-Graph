@@ -32,6 +32,12 @@ export class FtsService {
       LEFT JOIN entities e ON m.sender_entity_id = e.id
       LEFT JOIN interactions i ON m.interaction_id = i.id
       WHERE to_tsvector('russian', m.content) @@ plainto_tsquery('russian', $1)
+        AND (e.is_bot = false OR e.is_bot IS NULL)
+        AND NOT EXISTS (
+          SELECT 1 FROM interaction_participants ip
+          JOIN entities bot_e ON ip.entity_id = bot_e.id
+          WHERE ip.interaction_id = m.interaction_id AND bot_e.is_bot = true
+        )
     `;
 
     const params: any[] = [query];
