@@ -43,6 +43,9 @@ export enum FactType {
   COMMUNICATION_PREFERENCE = 'communication_preference',
   TIMEZONE = 'timezone',
   LANGUAGE = 'language',
+
+  // AI-generated
+  DAILY_SUMMARY = 'daily_summary',
 }
 
 export enum FactCategory {

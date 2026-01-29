@@ -281,12 +281,21 @@ export class PkgCoreApiService {
    * Recall - natural language search through past conversations
    * @param query Natural language query
    * @param timeout Optional timeout in ms (default: 120000 for agent operations)
+   * @param model Optional Claude model (haiku, sonnet, opus)
    */
-  async recall(query: string, timeout = 120000): Promise<RecallResponse> {
+  async recall(
+    query: string,
+    timeout = 120000,
+    model?: 'haiku' | 'sonnet' | 'opus',
+  ): Promise<RecallResponse> {
     return this.withRetry(async () => {
+      const body: { query: string; model?: string } = { query };
+      if (model) {
+        body.model = model;
+      }
       const response = await this.client.post<RecallResponse>(
         '/agent/recall',
-        { query } as RecallRequestDto,
+        body,
         { timeout },
       );
       return response.data;
@@ -739,5 +748,65 @@ export class PkgCoreApiService {
       );
       return response.data;
     });
+  }
+
+  // ============================================
+  // Daily Summary API Methods
+  // ============================================
+
+  /**
+   * Get owner entity ("me")
+   */
+  async getOwnerEntity(): Promise<{ id: string; name: string } | null> {
+    try {
+      const response = await this.client.get<{ id: string; name: string }>('/entities/me');
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Save daily summary as a fact for owner entity
+   * @param content Summary content to save
+   * @param dateStr Date string for the summary (e.g., "28 января 2025")
+   */
+  async saveDailySummary(
+    content: string,
+    dateStr: string,
+  ): Promise<{ success: boolean; factId?: string; error?: string }> {
+    try {
+      // Get owner entity
+      const owner = await this.getOwnerEntity();
+      if (!owner) {
+        return { success: false, error: 'Owner entity not found' };
+      }
+
+      // Create fact with daily_summary type
+      const response = await this.client.post<{ id: string }>(
+        `/entities/${owner.id}/facts`,
+        {
+          type: 'daily_summary',
+          category: 'personal',
+          value: content.slice(0, 500), // Short preview
+          valueJson: {
+            fullContent: content,
+            dateStr,
+            savedAt: new Date().toISOString(),
+          },
+          source: 'extracted',
+          confidence: 1.0,
+        },
+      );
+
+      return { success: true, factId: response.data.id };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to save daily summary: ${errorMessage}`);
+      return { success: false, error: errorMessage };
+    }
   }
 }

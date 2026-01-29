@@ -6,6 +6,7 @@ import {
   IsInt,
   Min,
   Max,
+  IsIn,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -41,6 +42,15 @@ export class RecallRequestDto {
   @Min(1)
   @Max(20)
   maxTurns?: number;
+
+  @ApiPropertyOptional({
+    description: 'Claude model to use',
+    enum: ['haiku', 'sonnet', 'opus'],
+    default: 'sonnet',
+  })
+  @IsOptional()
+  @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
+  model?: 'haiku' | 'sonnet' | 'opus';
 }
 
 /**

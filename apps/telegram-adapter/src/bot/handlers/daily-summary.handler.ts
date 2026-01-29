@@ -3,10 +3,17 @@ import { Context } from 'telegraf';
 import { Message } from 'telegraf/typings/core/types/typegram';
 import { PkgCoreApiService, RecallSource } from '../../api/pkg-core-api.service';
 
+/** Callback prefix for daily summary actions */
+const DAILY_CALLBACK_PREFIX = 'ds_';
+
+/** Valid model values */
+type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
+
 interface DailyContext {
   dateStr: string;
   lastAnswer: string;
   sources: RecallSource[];
+  model?: ClaudeModel;
 }
 
 /**
@@ -16,6 +23,7 @@ interface DailyContext {
  * - AI-powered daily summary via /agent/recall
  * - Optional focus topic: /daily [topic]
  * - Reply-based follow-up: reply to any bot message to continue dialog
+ * - Save insights: save conclusions as facts to owner entity
  */
 @Injectable()
 export class DailySummaryHandler {
@@ -30,14 +38,98 @@ export class DailySummaryHandler {
   constructor(private readonly pkgCoreApi: PkgCoreApiService) {}
 
   /**
+   * Check if this handler can process the callback
+   */
+  canHandle(callbackData: string): boolean {
+    return callbackData.startsWith(DAILY_CALLBACK_PREFIX);
+  }
+
+  /**
+   * Handle callback query (save action)
+   */
+  async handleCallback(ctx: Context): Promise<void> {
+    const callbackQuery = ctx.callbackQuery;
+    if (!callbackQuery || !('data' in callbackQuery)) {
+      return;
+    }
+
+    const callbackData = callbackQuery.data;
+
+    // Parse callback: ds_save:{messageId}
+    const match = callbackData.match(/^ds_save:(\d+)$/);
+    if (!match) {
+      this.logger.warn(`Invalid daily summary callback: ${callbackData}`);
+      await ctx.answerCbQuery('Неверный формат');
+      return;
+    }
+
+    const messageId = parseInt(match[1], 10);
+    const dailyContext = this.contextByMessageId.get(messageId);
+
+    if (!dailyContext) {
+      await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
+      return;
+    }
+
+    await ctx.answerCbQuery('💾 Сохраняю...');
+
+    try {
+      const result = await this.pkgCoreApi.saveDailySummary(
+        dailyContext.lastAnswer,
+        dailyContext.dateStr,
+      );
+
+      if (result.success) {
+        // Update message to show saved status
+        await this.updateButtonToSaved(ctx, messageId);
+        this.logger.log(`Daily summary saved, factId: ${result.factId}`);
+      } else {
+        await ctx.reply(`❌ Ошибка сохранения: ${result.error}`);
+        this.logger.error(`Failed to save daily summary: ${result.error}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Save daily summary error: ${errorMessage}`);
+      await ctx.reply('❌ Ошибка при сохранении');
+    }
+  }
+
+  /**
+   * Update message to show saved status (remove save button)
+   */
+  private async updateButtonToSaved(ctx: Context, messageId: number): Promise<void> {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    try {
+      // Remove the inline keyboard (button was pressed)
+      await ctx.telegram.editMessageReplyMarkup(chatId, messageId, undefined, {
+        inline_keyboard: [[{ text: '✅ Сохранено', callback_data: 'ds_noop' }]],
+      });
+    } catch (error) {
+      // Message might not be modifiable, that's okay
+      this.logger.debug(`Could not update button: ${(error as Error).message}`);
+    }
+  }
+
+  /**
    * Handle /daily command
+   * Supports: /daily [topic] [--model haiku|sonnet|opus]
    */
   async handle(ctx: Context): Promise<void> {
     const message = ctx.message as Message.TextMessage;
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
-    const args = message.text.replace(/^\/daily\s*/, '').trim();
+    let args = message.text.replace(/^\/daily\s*/, '').trim();
+
+    // Parse --model flag
+    let model: ClaudeModel | undefined;
+    const modelMatch = args.match(/--model\s+(haiku|sonnet|opus)/i);
+    if (modelMatch) {
+      model = modelMatch[1].toLowerCase() as ClaudeModel;
+      args = args.replace(/--model\s+(haiku|sonnet|opus)/i, '').trim();
+    }
 
     // Build the date string
     const today = new Date();
@@ -57,7 +149,7 @@ export class DailySummaryHandler {
       query += ` Особый фокус на: ${args}`;
     }
 
-    await this.executeQuery(ctx, chatId, query, dateStr, true);
+    await this.executeQuery(ctx, chatId, query, dateStr, true, model);
   }
 
   /**
@@ -89,7 +181,8 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
 
 Используй поиск чтобы найти дополнительную информацию и ответить на вопрос. Отвечай конкретно на вопрос пользователя.`;
 
-    await this.executeQuery(ctx, chatId, query, dailyContext.dateStr, false);
+    // Use same model as initial request
+    await this.executeQuery(ctx, chatId, query, dailyContext.dateStr, false, dailyContext.model);
     return true;
   }
 
@@ -102,15 +195,17 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
     query: string,
     dateStr: string,
     isInitial: boolean,
+    model?: ClaudeModel,
   ): Promise<void> {
     const statusEmoji = isInitial ? '📊' : '🔍';
-    const statusText = isInitial ? 'Готовлю саммари дня...' : 'Ищу информацию...';
+    const modelNote = model ? ` (${model})` : '';
+    const statusText = isInitial ? `Готовлю саммари дня${modelNote}...` : `Ищу информацию${modelNote}...`;
     const statusMessage = await ctx.reply(`${statusEmoji} ${statusText}`);
 
     try {
-      this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} request from user ${ctx.from?.id}`);
+      this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} request from user ${ctx.from?.id}${model ? `, model=${model}` : ''}`);
 
-      const response = await this.pkgCoreApi.recall(query, 180000);
+      const response = await this.pkgCoreApi.recall(query, 180000, model);
 
       if (!response.success) {
         await this.editMessage(ctx, statusMessage.message_id, '❌ Ошибка при обработке запроса.');
@@ -123,10 +218,10 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
       const formattedResponse = this.formatResponse(answer, sources, dateStr, isInitial);
 
       await ctx.telegram.deleteMessage(chatId, statusMessage.message_id);
-      const sentMessages = await this.sendMessage(ctx, formattedResponse);
+      const sentMessages = await this.sendMessage(ctx, formattedResponse, isInitial);
 
-      // Save context for each sent message (for reply-based follow-up)
-      const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources };
+      // Save context for each sent message (for reply-based follow-up and save action)
+      const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources, model };
       for (const sentMessage of sentMessages) {
         this.contextByMessageId.set(sentMessage.message_id, dailyContext);
       }
@@ -205,13 +300,18 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
 
   /**
    * Send message, splitting if too long. Returns all sent messages.
+   * Adds save button to the last message if isInitial is true.
    */
-  private async sendMessage(ctx: Context, text: string): Promise<Message.TextMessage[]> {
+  private async sendMessage(
+    ctx: Context,
+    text: string,
+    addSaveButton: boolean,
+  ): Promise<Message.TextMessage[]> {
     const MAX_LENGTH = 4000;
     const sentMessages: Message.TextMessage[] = [];
 
     if (text.length <= MAX_LENGTH) {
-      const msg = await this.trySendHtml(ctx, text);
+      const msg = await this.trySendHtml(ctx, text, addSaveButton);
       if (msg) sentMessages.push(msg);
       return sentMessages;
     }
@@ -219,17 +319,44 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
     // Split by paragraphs
     const parts = this.splitMessage(text, MAX_LENGTH);
 
-    for (const part of parts) {
-      const msg = await this.trySendHtml(ctx, part);
+    for (let i = 0; i < parts.length; i++) {
+      const isLast = i === parts.length - 1;
+      const msg = await this.trySendHtml(ctx, parts[i], addSaveButton && isLast);
       if (msg) sentMessages.push(msg);
     }
 
     return sentMessages;
   }
 
-  private async trySendHtml(ctx: Context, text: string): Promise<Message.TextMessage | null> {
+  private async trySendHtml(
+    ctx: Context,
+    text: string,
+    addSaveButton: boolean,
+  ): Promise<Message.TextMessage | null> {
+    const replyMarkup = addSaveButton
+      ? {
+          inline_keyboard: [[{ text: '💾 Сохранить выводы', callback_data: 'ds_save:PLACEHOLDER' }]],
+        }
+      : undefined;
+
     try {
-      return (await ctx.reply(text, { parse_mode: 'HTML' })) as Message.TextMessage;
+      const msg = (await ctx.reply(text, {
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+      })) as Message.TextMessage;
+
+      // Update callback_data with actual messageId (need to edit message)
+      if (addSaveButton && msg) {
+        try {
+          await ctx.telegram.editMessageReplyMarkup(ctx.chat?.id, msg.message_id, undefined, {
+            inline_keyboard: [[{ text: '💾 Сохранить выводы', callback_data: `ds_save:${msg.message_id}` }]],
+          });
+        } catch (editError) {
+          this.logger.debug(`Could not update callback_data: ${(editError as Error).message}`);
+        }
+      }
+
+      return msg;
     } catch (error) {
       // If HTML parsing fails, send as plain text
       this.logger.warn(`HTML parse failed, sending plain text: ${(error as Error).message}`);

@@ -249,6 +249,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await this.briefCallbackHandler.handle(ctx);
       } else if (this.factCallbackHandler.canHandle(callbackData)) {
         await this.factCallbackHandler.handle(ctx);
+      } else if (this.dailySummaryHandler.canHandle(callbackData)) {
+        await this.dailySummaryHandler.handleCallback(ctx);
       } else if (this.eventCallbackHandler.canHandle(callbackData)) {
         await this.eventCallbackHandler.handle(ctx);
       } else {
