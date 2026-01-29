@@ -209,7 +209,7 @@ export class AgentController {
         taskType: 'recall',
         prompt: this.buildRecallPrompt(dto.query, dto.entityId),
         toolCategories: ['search', 'context', 'entities', 'events'],
-        model: 'sonnet',
+        model: dto.model || 'sonnet',
         maxTurns: dto.maxTurns || 15,
         outputFormat: {
           type: 'json_schema',

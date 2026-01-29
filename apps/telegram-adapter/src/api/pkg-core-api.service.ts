@@ -281,12 +281,21 @@ export class PkgCoreApiService {
    * Recall - natural language search through past conversations
    * @param query Natural language query
    * @param timeout Optional timeout in ms (default: 120000 for agent operations)
+   * @param model Optional Claude model (haiku, sonnet, opus)
    */
-  async recall(query: string, timeout = 120000): Promise<RecallResponse> {
+  async recall(
+    query: string,
+    timeout = 120000,
+    model?: 'haiku' | 'sonnet' | 'opus',
+  ): Promise<RecallResponse> {
     return this.withRetry(async () => {
+      const body: { query: string; model?: string } = { query };
+      if (model) {
+        body.model = model;
+      }
       const response = await this.client.post<RecallResponse>(
         '/agent/recall',
-        { query } as RecallRequestDto,
+        body,
         { timeout },
       );
       return response.data;

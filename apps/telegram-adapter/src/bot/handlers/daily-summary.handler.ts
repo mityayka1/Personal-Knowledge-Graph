@@ -6,10 +6,14 @@ import { PkgCoreApiService, RecallSource } from '../../api/pkg-core-api.service'
 /** Callback prefix for daily summary actions */
 const DAILY_CALLBACK_PREFIX = 'ds_';
 
+/** Valid model values */
+type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
+
 interface DailyContext {
   dateStr: string;
   lastAnswer: string;
   sources: RecallSource[];
+  model?: ClaudeModel;
 }
 
 /**
@@ -110,13 +114,22 @@ export class DailySummaryHandler {
 
   /**
    * Handle /daily command
+   * Supports: /daily [topic] [--model haiku|sonnet|opus]
    */
   async handle(ctx: Context): Promise<void> {
     const message = ctx.message as Message.TextMessage;
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
-    const args = message.text.replace(/^\/daily\s*/, '').trim();
+    let args = message.text.replace(/^\/daily\s*/, '').trim();
+
+    // Parse --model flag
+    let model: ClaudeModel | undefined;
+    const modelMatch = args.match(/--model\s+(haiku|sonnet|opus)/i);
+    if (modelMatch) {
+      model = modelMatch[1].toLowerCase() as ClaudeModel;
+      args = args.replace(/--model\s+(haiku|sonnet|opus)/i, '').trim();
+    }
 
     // Build the date string
     const today = new Date();
@@ -136,7 +149,7 @@ export class DailySummaryHandler {
       query += ` Особый фокус на: ${args}`;
     }
 
-    await this.executeQuery(ctx, chatId, query, dateStr, true);
+    await this.executeQuery(ctx, chatId, query, dateStr, true, model);
   }
 
   /**
@@ -168,7 +181,8 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
 
 Используй поиск чтобы найти дополнительную информацию и ответить на вопрос. Отвечай конкретно на вопрос пользователя.`;
 
-    await this.executeQuery(ctx, chatId, query, dailyContext.dateStr, false);
+    // Use same model as initial request
+    await this.executeQuery(ctx, chatId, query, dailyContext.dateStr, false, dailyContext.model);
     return true;
   }
 
@@ -181,15 +195,17 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
     query: string,
     dateStr: string,
     isInitial: boolean,
+    model?: ClaudeModel,
   ): Promise<void> {
     const statusEmoji = isInitial ? '📊' : '🔍';
-    const statusText = isInitial ? 'Готовлю саммари дня...' : 'Ищу информацию...';
+    const modelNote = model ? ` (${model})` : '';
+    const statusText = isInitial ? `Готовлю саммари дня${modelNote}...` : `Ищу информацию${modelNote}...`;
     const statusMessage = await ctx.reply(`${statusEmoji} ${statusText}`);
 
     try {
-      this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} request from user ${ctx.from?.id}`);
+      this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} request from user ${ctx.from?.id}${model ? `, model=${model}` : ''}`);
 
-      const response = await this.pkgCoreApi.recall(query, 180000);
+      const response = await this.pkgCoreApi.recall(query, 180000, model);
 
       if (!response.success) {
         await this.editMessage(ctx, statusMessage.message_id, '❌ Ошибка при обработке запроса.');
@@ -205,7 +221,7 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
       const sentMessages = await this.sendMessage(ctx, formattedResponse, isInitial);
 
       // Save context for each sent message (for reply-based follow-up and save action)
-      const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources };
+      const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources, model };
       for (const sentMessage of sentMessages) {
         this.contextByMessageId.set(sentMessage.message_id, dailyContext);
       }
