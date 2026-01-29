@@ -270,6 +270,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         if (handled) return;
       }
 
+      // Check if user has active daily summary session for follow-up questions
+      if (this.dailySummaryHandler.hasActiveSession(chatId)) {
+        const handled = await this.dailySummaryHandler.handleFollowUp(ctx, text);
+        if (handled) return;
+      }
+
       // Not in any special mode - could add general message handling here
     });
 
