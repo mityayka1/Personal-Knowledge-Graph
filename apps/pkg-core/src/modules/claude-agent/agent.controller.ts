@@ -703,16 +703,9 @@ export class AgentController {
   ): Promise<PrepareResponseDto> {
     this.logger.log(`Prepare request for entity: ${entityId}`);
 
-    // Check if entity exists
-    let entity;
-    try {
-      entity = await this.entityService.findOne(entityId);
-    } catch {
-      throw new HttpException(
-        `Entity not found: ${entityId}`,
-        HttpStatus.NOT_FOUND,
-      );
-    }
+    // EntityService.findOne() throws NotFoundException if not found
+    // Let it propagate directly - don't mask other errors as "not found"
+    const entity = await this.entityService.findOne(entityId);
 
     try {
       // Agent with structured output for guaranteed response format
