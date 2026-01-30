@@ -211,6 +211,132 @@ export interface FactConflictResolutionResult {
   error?: string;
 }
 
+// ============================================
+// Daily Synthesis Extraction API Types (Phase 2: Jarvis)
+// ============================================
+
+export interface ExtractedProject {
+  name: string;
+  isNew: boolean;
+  existingActivityId?: string;
+  participants: string[];
+  client?: string;
+  status?: string;
+  sourceQuote?: string;
+  confidence: number;
+}
+
+export interface ExtractedTask {
+  title: string;
+  projectName?: string;
+  deadline?: string;
+  assignee?: string;
+  status: 'pending' | 'in_progress' | 'done';
+  priority?: 'high' | 'medium' | 'low';
+  confidence: number;
+}
+
+export interface ExtractedCommitment {
+  what: string;
+  from: string;
+  to: string;
+  deadline?: string;
+  type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder';
+  priority?: 'high' | 'medium' | 'low';
+  confidence: number;
+}
+
+export interface InferredRelation {
+  type: 'project_member' | 'works_on' | 'client_of' | 'responsible_for';
+  entities: string[];
+  activityName?: string;
+  confidence: number;
+}
+
+export interface DailyExtractRequestDto {
+  synthesisText: string;
+  date?: string;
+  focusTopic?: string;
+}
+
+export interface DailyExtractResponseData {
+  projects: ExtractedProject[];
+  tasks: ExtractedTask[];
+  commitments: ExtractedCommitment[];
+  inferredRelations: InferredRelation[];
+  extractionSummary: string;
+  tokensUsed: number;
+  durationMs: number;
+}
+
+export interface DailyExtractResponse {
+  success: boolean;
+  data: DailyExtractResponseData;
+}
+
+// ============================================
+// Extraction Carousel API Types (Phase 2.5: Jarvis)
+// ============================================
+
+export interface ExtractionCarouselItem {
+  id: string;
+  type: 'project' | 'task' | 'commitment';
+  data: ExtractedProject | ExtractedTask | ExtractedCommitment;
+}
+
+export interface CreateExtractionCarouselDto {
+  chatId: string;
+  messageId: number;
+  projects: ExtractedProject[];
+  tasks: ExtractedTask[];
+  commitments: ExtractedCommitment[];
+  synthesisDate?: string;
+  focusTopic?: string;
+}
+
+export interface CreateExtractionCarouselResponse {
+  success: boolean;
+  carouselId?: string;
+  total?: number;
+  message?: string;
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  error?: string;
+}
+
+export interface ExtractionCarouselNavResponse {
+  success: boolean;
+  complete: boolean;
+  item?: ExtractionCarouselItem;
+  message?: string;
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  chatId?: string;
+  messageId?: number;
+  index?: number;
+  total?: number;
+  remaining?: number;
+  error?: string;
+}
+
+export interface ExtractionCarouselStatsResponse {
+  success: boolean;
+  stats?: {
+    total: number;
+    processed: number;
+    confirmed: number;
+    skipped: number;
+    confirmedByType: { projects: number; tasks: number; commitments: number };
+  };
+  error?: string;
+}
+
+export interface ExtractionCarouselConfirmedResponse {
+  success: boolean;
+  projects?: ExtractedProject[];
+  tasks?: ExtractedTask[];
+  commitments?: ExtractedCommitment[];
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -808,5 +934,142 @@ export class PkgCoreApiService {
       this.logger.error(`Failed to save daily summary: ${errorMessage}`);
       return { success: false, error: errorMessage };
     }
+  }
+
+  // ============================================
+  // Daily Synthesis Extraction API Methods (Phase 2: Jarvis)
+  // ============================================
+
+  /**
+   * Extract structured data from daily synthesis text.
+   * Extracts projects, tasks, commitments, and entity relations.
+   *
+   * @param synthesisText The daily summary text to analyze
+   * @param date Optional date of the daily (for context)
+   * @param focusTopic Optional focus topic if daily was focused
+   * @param timeout Optional timeout in ms (default: 120000 for LLM operations)
+   */
+  async extractDailySynthesis(
+    synthesisText: string,
+    date?: string,
+    focusTopic?: string,
+    timeout = 120000,
+  ): Promise<DailyExtractResponse> {
+    return this.withRetry(async () => {
+      const body: DailyExtractRequestDto = { synthesisText };
+      if (date) body.date = date;
+      if (focusTopic) body.focusTopic = focusTopic;
+
+      const response = await this.client.post<DailyExtractResponse>(
+        '/agent/daily/extract',
+        body,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Extraction Carousel API Methods (Phase 2.5: Jarvis)
+  // ============================================
+
+  /**
+   * Create extraction carousel from extraction results.
+   * Returns the carousel ID and first item for display.
+   */
+  async createExtractionCarousel(
+    dto: CreateExtractionCarouselDto,
+  ): Promise<CreateExtractionCarouselResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<CreateExtractionCarouselResponse>(
+        '/extraction-carousel',
+        dto,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Navigate to next item in extraction carousel
+   */
+  async extractionCarouselNext(
+    carouselId: string,
+  ): Promise<ExtractionCarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractionCarouselNavResponse>(
+        `/extraction-carousel/${carouselId}/next`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Navigate to previous item in extraction carousel
+   */
+  async extractionCarouselPrev(
+    carouselId: string,
+  ): Promise<ExtractionCarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractionCarouselNavResponse>(
+        `/extraction-carousel/${carouselId}/prev`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Confirm current item and navigate to next
+   */
+  async extractionCarouselConfirm(
+    carouselId: string,
+  ): Promise<ExtractionCarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractionCarouselNavResponse>(
+        `/extraction-carousel/${carouselId}/confirm`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Skip current item and navigate to next
+   */
+  async extractionCarouselSkip(
+    carouselId: string,
+  ): Promise<ExtractionCarouselNavResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractionCarouselNavResponse>(
+        `/extraction-carousel/${carouselId}/skip`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Get extraction carousel statistics
+   */
+  async getExtractionCarouselStats(
+    carouselId: string,
+  ): Promise<ExtractionCarouselStatsResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<ExtractionCarouselStatsResponse>(
+        `/extraction-carousel/${carouselId}/stats`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Get confirmed items from extraction carousel for persistence
+   */
+  async getExtractionCarouselConfirmed(
+    carouselId: string,
+  ): Promise<ExtractionCarouselConfirmedResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<ExtractionCarouselConfirmedResponse>(
+        `/extraction-carousel/${carouselId}/confirmed`,
+      );
+      return response.data;
+    });
   }
 }

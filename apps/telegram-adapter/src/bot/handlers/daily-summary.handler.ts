@@ -1,10 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { Message } from 'telegraf/typings/core/types/typegram';
-import { PkgCoreApiService, RecallSource } from '../../api/pkg-core-api.service';
+import {
+  PkgCoreApiService,
+  RecallSource,
+  ExtractionCarouselNavResponse,
+} from '../../api/pkg-core-api.service';
 
 /** Callback prefix for daily summary actions */
 const DAILY_CALLBACK_PREFIX = 'ds_';
+
+/** Callback prefix for extraction carousel actions */
+const EXTRACTION_CAROUSEL_PREFIX = 'exc_';
 
 /** Valid model values */
 type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
@@ -41,11 +48,14 @@ export class DailySummaryHandler {
    * Check if this handler can process the callback
    */
   canHandle(callbackData: string): boolean {
-    return callbackData.startsWith(DAILY_CALLBACK_PREFIX);
+    return (
+      callbackData.startsWith(DAILY_CALLBACK_PREFIX) ||
+      callbackData.startsWith(EXTRACTION_CAROUSEL_PREFIX)
+    );
   }
 
   /**
-   * Handle callback query (save action)
+   * Handle callback query (save or extract action)
    */
   async handleCallback(ctx: Context): Promise<void> {
     const callbackQuery = ctx.callbackQuery;
@@ -55,10 +65,27 @@ export class DailySummaryHandler {
 
     const callbackData = callbackQuery.data;
 
-    // Parse callback: ds_save:{messageId}
+    // Route to appropriate handler
+    if (callbackData.startsWith('ds_save:')) {
+      await this.handleSaveCallback(ctx, callbackData);
+    } else if (callbackData.startsWith('ds_extract:')) {
+      await this.handleExtractCallback(ctx, callbackData);
+    } else if (callbackData.startsWith('exc_')) {
+      await this.handleCarouselCallback(ctx, callbackData);
+    } else if (callbackData === 'ds_noop') {
+      await ctx.answerCbQuery();
+    } else {
+      this.logger.warn(`Invalid daily summary callback: ${callbackData}`);
+      await ctx.answerCbQuery('Неверный формат');
+    }
+  }
+
+  /**
+   * Handle save callback
+   */
+  private async handleSaveCallback(ctx: Context, callbackData: string): Promise<void> {
     const match = callbackData.match(/^ds_save:(\d+)$/);
     if (!match) {
-      this.logger.warn(`Invalid daily summary callback: ${callbackData}`);
       await ctx.answerCbQuery('Неверный формат');
       return;
     }
@@ -80,8 +107,7 @@ export class DailySummaryHandler {
       );
 
       if (result.success) {
-        // Update message to show saved status
-        await this.updateButtonToSaved(ctx, messageId);
+        await this.updateButtonStatus(ctx, messageId, 'saved');
         this.logger.log(`Daily summary saved, factId: ${result.factId}`);
       } else {
         await ctx.reply(`❌ Ошибка сохранения: ${result.error}`);
@@ -95,21 +121,403 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Update message to show saved status (remove save button)
+   * Handle extract callback — extract structured data from synthesis and show carousel
    */
-  private async updateButtonToSaved(ctx: Context, messageId: number): Promise<void> {
+  private async handleExtractCallback(ctx: Context, callbackData: string): Promise<void> {
+    const match = callbackData.match(/^ds_extract:(\d+)$/);
+    if (!match) {
+      await ctx.answerCbQuery('Неверный формат');
+      return;
+    }
+
+    const messageId = parseInt(match[1], 10);
+    const dailyContext = this.contextByMessageId.get(messageId);
+
+    if (!dailyContext) {
+      await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
+      return;
+    }
+
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    await ctx.answerCbQuery('📈 Извлекаю структуру...');
+
+    try {
+      // Step 1: Extract structured data
+      const extractResult = await this.pkgCoreApi.extractDailySynthesis(
+        dailyContext.lastAnswer,
+        dailyContext.dateStr,
+      );
+
+      if (!extractResult.success) {
+        await ctx.reply('❌ Ошибка извлечения структуры');
+        this.logger.error('Failed to extract daily synthesis');
+        return;
+      }
+
+      const { projects, tasks, commitments } = extractResult.data;
+      const totalItems = projects.length + tasks.length + commitments.length;
+
+      if (totalItems === 0) {
+        await this.updateButtonStatus(ctx, messageId, 'extracted');
+        await ctx.reply('ℹ️ Структурированных данных не обнаружено.');
+        return;
+      }
+
+      this.logger.log(
+        `Daily extraction completed: ${projects.length} projects, ` +
+          `${tasks.length} tasks, ${commitments.length} commitments`,
+      );
+
+      // Step 2: Show summary first
+      const summaryText = this.formatExtractionSummary(extractResult.data);
+      await ctx.reply(summaryText, { parse_mode: 'HTML' });
+
+      // Step 3: Create carousel with extracted items
+      // Send placeholder message first to get message ID
+      const carouselMessage = await ctx.reply('⏳ Создаю карусель для подтверждения...') as Message.TextMessage;
+
+      const carouselResult = await this.pkgCoreApi.createExtractionCarousel({
+        chatId: String(chatId),
+        messageId: carouselMessage.message_id,
+        projects,
+        tasks,
+        commitments,
+        synthesisDate: dailyContext.dateStr,
+      });
+
+      if (!carouselResult.success) {
+        await ctx.telegram.editMessageText(
+          chatId,
+          carouselMessage.message_id,
+          undefined,
+          `❌ Ошибка создания карусели: ${carouselResult.error}`,
+        );
+        return;
+      }
+
+      // Step 4: Update message with first carousel item
+      await this.updateButtonStatus(ctx, messageId, 'extracted');
+      await this.updateCarouselMessage(ctx, chatId, carouselMessage.message_id, {
+        success: true,
+        complete: false,
+        message: carouselResult.message,
+        buttons: carouselResult.buttons,
+        chatId: String(chatId),
+        messageId: carouselMessage.message_id,
+      });
+
+      this.logger.log(`Created extraction carousel ${carouselResult.carouselId} with ${totalItems} items`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Extract daily synthesis error: ${errorMessage}`);
+      await ctx.reply('❌ Ошибка при извлечении');
+    }
+  }
+
+  /**
+   * Handle carousel navigation callbacks (prev/next/confirm/skip)
+   */
+  private async handleCarouselCallback(ctx: Context, callbackData: string): Promise<void> {
+    // Parse: exc_action:carouselId
+    const match = callbackData.match(/^exc_(prev|next|confirm|skip):(.+)$/);
+    if (!match) {
+      await ctx.answerCbQuery('Неверный формат');
+      return;
+    }
+
+    const [, action, carouselId] = match;
+    const chatId = ctx.chat?.id;
+    const messageId = ctx.callbackQuery && 'message' in ctx.callbackQuery
+      ? ctx.callbackQuery.message?.message_id
+      : undefined;
+
+    if (!chatId || !messageId) {
+      await ctx.answerCbQuery('Ошибка контекста');
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
+    try {
+      let result: ExtractionCarouselNavResponse;
+
+      switch (action) {
+        case 'prev':
+          result = await this.pkgCoreApi.extractionCarouselPrev(carouselId);
+          break;
+        case 'next':
+          result = await this.pkgCoreApi.extractionCarouselNext(carouselId);
+          break;
+        case 'confirm':
+          result = await this.pkgCoreApi.extractionCarouselConfirm(carouselId);
+          break;
+        case 'skip':
+          result = await this.pkgCoreApi.extractionCarouselSkip(carouselId);
+          break;
+        default:
+          return;
+      }
+
+      if (!result.success) {
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          `❌ Ошибка: ${result.error || 'Unknown error'}`,
+        );
+        return;
+      }
+
+      await this.updateCarouselMessage(ctx, chatId, messageId, result);
+
+      // If complete, show final summary and persist confirmed items
+      if (result.complete) {
+        await this.handleCarouselComplete(ctx, carouselId);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Carousel ${action} error: ${errorMessage}`);
+      await ctx.reply('❌ Ошибка при обработке');
+    }
+  }
+
+  /**
+   * Update carousel message with new content and buttons
+   */
+  private async updateCarouselMessage(
+    ctx: Context,
+    chatId: number,
+    messageId: number,
+    result: ExtractionCarouselNavResponse,
+  ): Promise<void> {
+    const text = result.message || (result.complete ? '✅ Обработка завершена' : '⏳ Загрузка...');
+
+    // If complete, remove buttons
+    const replyMarkup = result.complete
+      ? undefined
+      : result.buttons
+        ? { inline_keyboard: result.buttons }
+        : undefined;
+
+    try {
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, text, {
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+      });
+    } catch (error) {
+      // Ignore "message is not modified" error
+      if (!(error instanceof Error) || !error.message.includes('not modified')) {
+        this.logger.debug(`Could not update carousel message: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Handle carousel completion - persist confirmed items
+   */
+  private async handleCarouselComplete(ctx: Context, carouselId: string): Promise<void> {
+    try {
+      const statsResult = await this.pkgCoreApi.getExtractionCarouselStats(carouselId);
+
+      if (statsResult.success && statsResult.stats) {
+        const { confirmed, skipped, confirmedByType } = statsResult.stats;
+
+        if (confirmed > 0) {
+          // TODO: In Phase 3, persist confirmed items as Activities/Commitments
+          const parts: string[] = [];
+          if (confirmedByType.projects > 0) {
+            parts.push(`${confirmedByType.projects} проект(ов)`);
+          }
+          if (confirmedByType.tasks > 0) {
+            parts.push(`${confirmedByType.tasks} задач(и)`);
+          }
+          if (confirmedByType.commitments > 0) {
+            parts.push(`${confirmedByType.commitments} обязательств(а)`);
+          }
+
+          await ctx.reply(
+            `🎉 Подтверждено: ${parts.join(', ')}.\n` +
+              (skipped > 0 ? `⏭️ Пропущено: ${skipped}` : '') +
+              '\n\n<i>Сохранение в базу будет добавлено в следующей фазе.</i>',
+            { parse_mode: 'HTML' },
+          );
+        } else if (skipped > 0) {
+          await ctx.reply(`⏭️ Все ${skipped} элементов пропущены.`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Failed to get carousel stats: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Format extraction summary (brief overview before carousel)
+   */
+  private formatExtractionSummary(data: {
+    projects: Array<{ name: string }>;
+    tasks: Array<{ title: string }>;
+    commitments: Array<{ what: string }>;
+    extractionSummary: string;
+    tokensUsed: number;
+    durationMs: number;
+  }): string {
+    const lines: string[] = [];
+
+    lines.push('📈 <b>Извлечённая структура</b>\n');
+
+    if (data.projects.length > 0) {
+      lines.push(`🏗 Проекты: ${data.projects.length}`);
+    }
+    if (data.tasks.length > 0) {
+      lines.push(`📋 Задачи: ${data.tasks.length}`);
+    }
+    if (data.commitments.length > 0) {
+      lines.push(`🤝 Обязательства: ${data.commitments.length}`);
+    }
+
+    lines.push('');
+    lines.push(`<i>${data.extractionSummary}</i>`);
+    lines.push(`<i>⚡ ${data.durationMs}ms • ${data.tokensUsed} tokens</i>`);
+    lines.push('');
+    lines.push('👇 <b>Подтвердите каждый элемент в карусели ниже</b>');
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Update message button status after action
+   */
+  private async updateButtonStatus(
+    ctx: Context,
+    messageId: number,
+    action: 'saved' | 'extracted',
+  ): Promise<void> {
     const chatId = ctx.chat?.id;
     if (!chatId) return;
 
     try {
-      // Remove the inline keyboard (button was pressed)
+      const buttons = [];
+      if (action === 'saved') {
+        buttons.push({ text: '✅ Сохранено', callback_data: 'ds_noop' });
+        buttons.push({ text: '📈 Извлечь структуру', callback_data: `ds_extract:${messageId}` });
+      } else if (action === 'extracted') {
+        buttons.push({ text: '💾 Сохранить выводы', callback_data: `ds_save:${messageId}` });
+        buttons.push({ text: '✅ Извлечено', callback_data: 'ds_noop' });
+      }
+
       await ctx.telegram.editMessageReplyMarkup(chatId, messageId, undefined, {
-        inline_keyboard: [[{ text: '✅ Сохранено', callback_data: 'ds_noop' }]],
+        inline_keyboard: [buttons],
       });
     } catch (error) {
-      // Message might not be modifiable, that's okay
       this.logger.debug(`Could not update button: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Format extraction result for Telegram message
+   */
+  private formatExtractionResult(data: {
+    projects: Array<{
+      name: string;
+      isNew: boolean;
+      participants: string[];
+      client?: string;
+      confidence: number;
+    }>;
+    tasks: Array<{
+      title: string;
+      projectName?: string;
+      status: string;
+      priority?: string;
+      confidence: number;
+    }>;
+    commitments: Array<{
+      what: string;
+      from: string;
+      to: string;
+      type: string;
+      deadline?: string;
+      confidence: number;
+    }>;
+    inferredRelations: Array<{
+      type: string;
+      entities: string[];
+      activityName?: string;
+      confidence: number;
+    }>;
+    extractionSummary: string;
+    tokensUsed: number;
+    durationMs: number;
+  }): string {
+    const lines: string[] = [];
+
+    lines.push('📈 <b>Извлечённая структура</b>\n');
+
+    // Projects
+    if (data.projects.length > 0) {
+      lines.push('<b>🏗 Проекты:</b>');
+      for (const p of data.projects) {
+        const status = p.isNew ? '🆕' : '📁';
+        const participants = p.participants.length > 0 ? ` (${p.participants.join(', ')})` : '';
+        const client = p.client ? ` • ${p.client}` : '';
+        lines.push(`${status} ${p.name}${participants}${client}`);
+      }
+      lines.push('');
+    }
+
+    // Tasks
+    if (data.tasks.length > 0) {
+      lines.push('<b>📋 Задачи:</b>');
+      for (const t of data.tasks) {
+        const statusIcon =
+          t.status === 'done' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳';
+        const priority =
+          t.priority === 'high' ? '🔴' : t.priority === 'medium' ? '🟡' : '';
+        const project = t.projectName ? ` → ${t.projectName}` : '';
+        lines.push(`${statusIcon}${priority} ${t.title}${project}`);
+      }
+      lines.push('');
+    }
+
+    // Commitments
+    if (data.commitments.length > 0) {
+      lines.push('<b>🤝 Обязательства:</b>');
+      for (const c of data.commitments) {
+        const typeIcon =
+          c.type === 'promise'
+            ? '🎯'
+            : c.type === 'request'
+              ? '📨'
+              : c.type === 'agreement'
+                ? '🤝'
+                : c.type === 'deadline'
+                  ? '⏰'
+                  : '💭';
+        const deadline = c.deadline ? ` (до ${c.deadline})` : '';
+        const direction = c.from === 'self' ? `→ ${c.to}` : `${c.from} →`;
+        lines.push(`${typeIcon} ${direction}: ${c.what}${deadline}`);
+      }
+      lines.push('');
+    }
+
+    // Relations (brief)
+    if (data.inferredRelations.length > 0) {
+      lines.push('<b>🔗 Связи:</b>');
+      for (const r of data.inferredRelations) {
+        const activity = r.activityName ? ` (${r.activityName})` : '';
+        lines.push(`• ${r.entities.join(' ↔ ')}${activity}`);
+      }
+      lines.push('');
+    }
+
+    // Summary
+    lines.push('━━━━━━━━━━━━━━━━━━━━━━');
+    lines.push(`<i>${data.extractionSummary}</i>`);
+    lines.push(`<i>⚡ ${data.durationMs}ms • ${data.tokensUsed} tokens</i>`);
+
+    return lines.join('\n');
   }
 
   /**
@@ -331,11 +739,16 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
   private async trySendHtml(
     ctx: Context,
     text: string,
-    addSaveButton: boolean,
+    addActionButtons: boolean,
   ): Promise<Message.TextMessage | null> {
-    const replyMarkup = addSaveButton
+    const replyMarkup = addActionButtons
       ? {
-          inline_keyboard: [[{ text: '💾 Сохранить выводы', callback_data: 'ds_save:PLACEHOLDER' }]],
+          inline_keyboard: [
+            [
+              { text: '💾 Сохранить выводы', callback_data: 'ds_save:PLACEHOLDER' },
+              { text: '📈 Извлечь структуру', callback_data: 'ds_extract:PLACEHOLDER' },
+            ],
+          ],
         }
       : undefined;
 
@@ -346,10 +759,15 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
       })) as Message.TextMessage;
 
       // Update callback_data with actual messageId (need to edit message)
-      if (addSaveButton && msg) {
+      if (addActionButtons && msg) {
         try {
           await ctx.telegram.editMessageReplyMarkup(ctx.chat?.id, msg.message_id, undefined, {
-            inline_keyboard: [[{ text: '💾 Сохранить выводы', callback_data: `ds_save:${msg.message_id}` }]],
+            inline_keyboard: [
+              [
+                { text: '💾 Сохранить выводы', callback_data: `ds_save:${msg.message_id}` },
+                { text: '📈 Извлечь структуру', callback_data: `ds_extract:${msg.message_id}` },
+              ],
+            ],
           });
         } catch (editError) {
           this.logger.debug(`Could not update callback_data: ${(editError as Error).message}`);

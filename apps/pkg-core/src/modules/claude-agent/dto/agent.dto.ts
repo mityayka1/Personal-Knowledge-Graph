@@ -217,3 +217,199 @@ export class ActResponseDto {
   @ApiProperty({ type: ActResponseDataDto })
   data: ActResponseDataDto;
 }
+
+// =====================================================
+// Daily Extract endpoint DTOs
+// =====================================================
+
+/**
+ * Request DTO for POST /agent/daily/extract
+ */
+export class DailyExtractRequestDto {
+  @ApiProperty({
+    description: 'Daily synthesis text to extract structured data from',
+    example: 'Сегодня работал над Хабом для Панавто с Машей...',
+    minLength: 10,
+  })
+  @IsString()
+  @MinLength(10, { message: 'Synthesis text must be at least 10 characters' })
+  synthesisText: string;
+
+  @ApiPropertyOptional({
+    description: 'Date of the daily (ISO format or human readable)',
+    example: '2026-01-30',
+  })
+  @IsOptional()
+  @IsString()
+  date?: string;
+
+  @ApiPropertyOptional({
+    description: 'Focus topic if daily was focused on specific area',
+    example: 'Панавто',
+  })
+  @IsOptional()
+  @IsString()
+  focusTopic?: string;
+}
+
+/**
+ * Extracted project from daily synthesis
+ */
+export class ExtractedProjectDto {
+  @ApiProperty({ description: 'Project name as mentioned' })
+  name: string;
+
+  @ApiProperty({ description: 'Is this a new project or existing?' })
+  isNew: boolean;
+
+  @ApiPropertyOptional({ description: 'Matched existing activity UUID' })
+  existingActivityId?: string;
+
+  @ApiProperty({ type: [String], description: 'Participant names' })
+  participants: string[];
+
+  @ApiPropertyOptional({ description: 'Client name if mentioned' })
+  client?: string;
+
+  @ApiPropertyOptional({ description: 'Status if mentioned' })
+  status?: string;
+
+  @ApiPropertyOptional({ description: 'Source quote from text' })
+  sourceQuote?: string;
+
+  @ApiProperty({ description: 'Extraction confidence (0-1)' })
+  confidence: number;
+}
+
+/**
+ * Extracted task from daily synthesis
+ */
+export class ExtractedTaskDto {
+  @ApiProperty({ description: 'Task title' })
+  title: string;
+
+  @ApiPropertyOptional({ description: 'Parent project name' })
+  projectName?: string;
+
+  @ApiPropertyOptional({ description: 'Deadline in ISO format' })
+  deadline?: string;
+
+  @ApiPropertyOptional({ description: 'Assignee: "self" or person name' })
+  assignee?: string;
+
+  @ApiProperty({
+    enum: ['pending', 'in_progress', 'done'],
+    description: 'Task status',
+  })
+  status: 'pending' | 'in_progress' | 'done';
+
+  @ApiPropertyOptional({
+    enum: ['high', 'medium', 'low'],
+    description: 'Priority',
+  })
+  priority?: 'high' | 'medium' | 'low';
+
+  @ApiProperty({ description: 'Extraction confidence (0-1)' })
+  confidence: number;
+}
+
+/**
+ * Extracted commitment from daily synthesis
+ */
+export class ExtractedCommitmentDto {
+  @ApiProperty({ description: 'What was promised/agreed' })
+  what: string;
+
+  @ApiProperty({ description: 'Who made the promise' })
+  from: string;
+
+  @ApiProperty({ description: 'Promise recipient' })
+  to: string;
+
+  @ApiPropertyOptional({ description: 'Due date in ISO format' })
+  deadline?: string;
+
+  @ApiProperty({
+    enum: ['promise', 'request', 'agreement', 'deadline', 'reminder'],
+    description: 'Commitment type',
+  })
+  type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder';
+
+  @ApiPropertyOptional({
+    enum: ['high', 'medium', 'low'],
+    description: 'Priority',
+  })
+  priority?: 'high' | 'medium' | 'low';
+
+  @ApiProperty({ description: 'Extraction confidence (0-1)' })
+  confidence: number;
+}
+
+/**
+ * Inferred relation from daily synthesis
+ */
+export class InferredRelationDto {
+  @ApiProperty({
+    enum: ['project_member', 'works_on', 'client_of', 'responsible_for'],
+    description: 'Relation type',
+  })
+  type: 'project_member' | 'works_on' | 'client_of' | 'responsible_for';
+
+  @ApiProperty({ type: [String], description: 'Entity names involved' })
+  entities: string[];
+
+  @ApiPropertyOptional({ description: 'Activity name if applicable' })
+  activityName?: string;
+
+  @ApiProperty({ description: 'Inference confidence (0-1)' })
+  confidence: number;
+}
+
+/**
+ * Response data for daily extract endpoint
+ */
+export class DailyExtractResponseDataDto {
+  @ApiProperty({
+    type: [ExtractedProjectDto],
+    description: 'Extracted projects',
+  })
+  projects: ExtractedProjectDto[];
+
+  @ApiProperty({
+    type: [ExtractedTaskDto],
+    description: 'Extracted tasks',
+  })
+  tasks: ExtractedTaskDto[];
+
+  @ApiProperty({
+    type: [ExtractedCommitmentDto],
+    description: 'Extracted commitments',
+  })
+  commitments: ExtractedCommitmentDto[];
+
+  @ApiProperty({
+    type: [InferredRelationDto],
+    description: 'Inferred entity-activity relations',
+  })
+  inferredRelations: InferredRelationDto[];
+
+  @ApiProperty({ description: 'Brief summary of extraction' })
+  extractionSummary: string;
+
+  @ApiProperty({ description: 'Tokens used for extraction' })
+  tokensUsed: number;
+
+  @ApiProperty({ description: 'Extraction duration in ms' })
+  durationMs: number;
+}
+
+/**
+ * Full response for daily extract endpoint
+ */
+export class DailyExtractResponseDto {
+  @ApiProperty({ description: 'Operation success flag' })
+  success: boolean;
+
+  @ApiProperty({ type: DailyExtractResponseDataDto })
+  data: DailyExtractResponseDataDto;
+}

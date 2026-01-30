@@ -1,7 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { EntityFact, EntityEvent, ExtractedEvent, Message, Interaction } from '@pkg/entities';
+import { EntityFact, EntityEvent, ExtractedEvent, Message, Interaction, Activity } from '@pkg/entities';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelevanceFilterService } from './relevance-filter.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
@@ -17,8 +17,11 @@ import { SubjectResolverService } from './subject-resolver.service';
 import { RelationInferenceService } from './relation-inference.service';
 import { ExtractionController } from './extraction.controller';
 import { ExtractedEventController } from './extracted-event.controller';
+import { ExtractionCarouselController } from './extraction-carousel.controller';
 import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
 import { UnifiedExtractionService } from './unified-extraction.service';
+import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
+import { ExtractionCarouselStateService } from './extraction-carousel-state.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
@@ -31,7 +34,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent, Message, Interaction]),
+    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent, Message, Interaction, Activity]),
     BullModule.registerQueue({
       name: 'enrichment',
       defaultJobOptions: {
@@ -51,7 +54,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     EmbeddingModule,
     forwardRef(() => ConfirmationModule),
   ],
-  controllers: [ExtractionController, ExtractedEventController],
+  controllers: [ExtractionController, ExtractedEventController, ExtractionCarouselController],
   providers: [
     FactExtractionService,
     RelevanceFilterService,
@@ -68,6 +71,8 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     RelationInferenceService,
     ExtractionToolsProvider,
     UnifiedExtractionService,
+    DailySynthesisExtractionService,
+    ExtractionCarouselStateService,
   ],
   exports: [
     FactExtractionService,
@@ -84,6 +89,8 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     RelationInferenceService,
     ExtractionToolsProvider,
     UnifiedExtractionService,
+    DailySynthesisExtractionService,
+    ExtractionCarouselStateService,
   ],
 })
 export class ExtractionModule {}

@@ -23,11 +23,14 @@ import {
   ActRequestDto,
   ActResponseDto,
   ActActionDto,
+  DailyExtractRequestDto,
+  DailyExtractResponseDto,
 } from './dto';
 import {
   RecallSource,
 } from './claude-agent.types';
 import { EntityService } from '../entity/entity.service';
+import { DailySynthesisExtractionService } from '../extraction/daily-synthesis-extraction.service';
 
 /**
  * Raw JSON Schema for recall response
@@ -165,6 +168,7 @@ export class AgentController {
   constructor(
     private readonly claudeAgentService: ClaudeAgentService,
     private readonly entityService: EntityService,
+    private readonly dailySynthesisExtractionService: DailySynthesisExtractionService,
   ) {}
 
   /**
@@ -507,5 +511,65 @@ export class AgentController {
 Заполни поля ответа:
 - result: что было сделано (на русском)
 - actions: массив выполненных действий [{type: "draft_created"|"message_sent"|"approval_rejected"|"followup_created", entityId, entityName, details}]`;
+  }
+
+  /**
+   * POST /agent/daily/extract
+   *
+   * Extract structured data (projects, tasks, commitments) from daily synthesis text.
+   * This is Phase 2 of Jarvis Foundation — converting natural language summaries into
+   * structured Activity/Commitment entities.
+   *
+   * @example
+   * POST /agent/daily/extract
+   * { "synthesisText": "Сегодня работал над Хабом для Панавто с Машей...", "date": "2026-01-30" }
+   */
+  @Post('daily/extract')
+  @ApiOperation({
+    summary: 'Extract structured data from daily synthesis',
+    description:
+      'Extracts projects, tasks, commitments, and entity relations from /daily synthesis text',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Extraction completed successfully',
+    type: DailyExtractResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid synthesis text' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async extractDaily(
+    @Body() dto: DailyExtractRequestDto,
+  ): Promise<DailyExtractResponseDto> {
+    this.logger.log(
+      `Daily extract request: text length=${dto.synthesisText.length}, ` +
+        `date=${dto.date || 'today'}, focus=${dto.focusTopic || 'none'}`,
+    );
+
+    try {
+      const result = await this.dailySynthesisExtractionService.extract({
+        synthesisText: dto.synthesisText,
+        date: dto.date,
+        focusTopic: dto.focusTopic,
+      });
+
+      return {
+        success: true,
+        data: {
+          projects: result.projects,
+          tasks: result.tasks,
+          commitments: result.commitments,
+          inferredRelations: result.inferredRelations,
+          extractionSummary: result.extractionSummary,
+          tokensUsed: result.tokensUsed,
+          durationMs: result.durationMs,
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Daily extract failed: ${error}`);
+      throw new HttpException(
+        'Failed to extract structured data from synthesis',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 }

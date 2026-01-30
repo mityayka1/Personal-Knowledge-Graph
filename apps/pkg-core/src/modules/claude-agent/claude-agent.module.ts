@@ -20,6 +20,7 @@ import { EntityEventModule } from '../entity-event/entity-event.module';
 import { EntityModule } from '../entity/entity.module';
 import { NotificationModule } from '../notification/notification.module';
 import { ActivityModule } from '../activity/activity.module';
+import { ExtractionModule } from '../extraction/extraction.module';
 
 /**
  * Claude Agent Module
@@ -51,6 +52,8 @@ import { ActivityModule } from '../activity/activity.module';
     forwardRef(() => NotificationModule),
     // ActivityModule for ActivityToolsProvider
     forwardRef(() => ActivityModule),
+    // ExtractionModule for DailySynthesisExtractionService
+    forwardRef(() => ExtractionModule),
   ],
   controllers: [ClaudeAgentController, AgentController],
   providers: [
