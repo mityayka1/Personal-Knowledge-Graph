@@ -5,7 +5,6 @@ import {
   PkgCoreApiService,
   RecallSource,
   ExtractionCarouselNavResponse,
-  RecallSessionData,
 } from '../../api/pkg-core-api.service';
 import { DailyContextCacheService } from '../../common/cache';
 
@@ -82,8 +81,14 @@ export class DailySummaryHandler {
       return;
     }
 
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+      await ctx.answerCbQuery('Ошибка контекста');
+      return;
+    }
+
     const messageId = parseInt(match[1], 10);
-    const sessionId = await this.dailyContextCache.getSessionId(messageId);
+    const sessionId = await this.dailyContextCache.getSessionId(chatId, messageId);
 
     if (!sessionId) {
       await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
@@ -131,8 +136,14 @@ export class DailySummaryHandler {
       return;
     }
 
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+      await ctx.answerCbQuery('Ошибка контекста');
+      return;
+    }
+
     const messageId = parseInt(match[1], 10);
-    const sessionId = await this.dailyContextCache.getSessionId(messageId);
+    const sessionId = await this.dailyContextCache.getSessionId(chatId, messageId);
 
     if (!sessionId) {
       await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
@@ -147,9 +158,6 @@ export class DailySummaryHandler {
     }
 
     const session = sessionResponse.data;
-
-    const chatId = ctx.chat?.id;
-    if (!chatId) return;
 
     await ctx.answerCbQuery('📈 Извлекаю структуру...');
 
@@ -627,13 +635,13 @@ export class DailySummaryHandler {
     const message = ctx.message as Message.TextMessage;
     if (!message?.reply_to_message) return false;
 
-    const replyToMessageId = message.reply_to_message.message_id;
-    const sessionId = await this.dailyContextCache.getSessionId(replyToMessageId);
-
-    if (!sessionId) return false;
-
     const chatId = ctx.chat?.id;
     if (!chatId) return false;
+
+    const replyToMessageId = message.reply_to_message.message_id;
+    const sessionId = await this.dailyContextCache.getSessionId(chatId, replyToMessageId);
+
+    if (!sessionId) return false;
 
     const text = message.text;
     if (!text) return false;
@@ -678,7 +686,7 @@ export class DailySummaryHandler {
 
       // Store new sessionId mapping for continued follow-ups
       for (const sentMessage of sentMessages) {
-        await this.dailyContextCache.setSessionId(sentMessage.message_id, newSessionId);
+        await this.dailyContextCache.setSessionId(chatId, sentMessage.message_id, newSessionId);
       }
 
       this.logger.log(`Daily follow-up completed for user ${ctx.from?.id}`);
@@ -730,7 +738,7 @@ export class DailySummaryHandler {
       // Store sessionId mapping for each sent message (for reply-based follow-up and save action)
       // Actual session data is stored in PKG Core (RecallSessionService)
       for (const sentMessage of sentMessages) {
-        await this.dailyContextCache.setSessionId(sentMessage.message_id, sessionId);
+        await this.dailyContextCache.setSessionId(chatId, sentMessage.message_id, sessionId);
       }
 
       this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} completed for user ${ctx.from?.id}`);
