@@ -590,7 +590,7 @@ export class ExtractionCarouselController {
       lines.push('📁 Существующий проект');
     }
 
-    if (project.participants.length > 0) {
+    if (project.participants?.length > 0) {
       lines.push(`👥 ${project.participants.join(', ')}`);
     }
 

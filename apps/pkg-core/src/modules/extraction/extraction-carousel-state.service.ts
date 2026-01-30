@@ -117,8 +117,13 @@ export class ExtractionCarouselStateService {
     // Build unified items list
     const items: ExtractionCarouselItem[] = [];
 
+    // Defensive: ensure arrays exist
+    const projects = input.projects ?? [];
+    const tasks = input.tasks ?? [];
+    const commitments = input.commitments ?? [];
+
     // Add projects
-    input.projects.forEach((project, idx) => {
+    projects.forEach((project, idx) => {
       items.push({
         id: `project_${idx}`,
         type: 'project',
@@ -127,7 +132,7 @@ export class ExtractionCarouselStateService {
     });
 
     // Add tasks
-    input.tasks.forEach((task, idx) => {
+    tasks.forEach((task, idx) => {
       items.push({
         id: `task_${idx}`,
         type: 'task',
@@ -136,7 +141,7 @@ export class ExtractionCarouselStateService {
     });
 
     // Add commitments
-    input.commitments.forEach((commitment, idx) => {
+    commitments.forEach((commitment, idx) => {
       items.push({
         id: `commitment_${idx}`,
         type: 'commitment',
@@ -168,8 +173,8 @@ export class ExtractionCarouselStateService {
 
     this.logger.log(
       `Created extraction carousel ${carouselId} with ${items.length} items ` +
-        `(${input.projects.length} projects, ${input.tasks.length} tasks, ` +
-        `${input.commitments.length} commitments) for conversation ${input.conversationId}`,
+        `(${projects.length} projects, ${tasks.length} tasks, ` +
+        `${commitments.length} commitments) for conversation ${input.conversationId}`,
     );
 
     return carouselId;
