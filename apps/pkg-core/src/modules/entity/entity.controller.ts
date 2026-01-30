@@ -49,6 +49,18 @@ export class EntityController {
     return owner;
   }
 
+  /**
+   * Get all soft-deleted entities.
+   * NOTE: This route MUST be before :id to avoid route conflict.
+   */
+  @Get('deleted/list')
+  async findDeleted(
+    @Query('limit') limit?: number,
+    @Query('offset') offset?: number,
+  ) {
+    return this.entityService.findDeleted({ limit, offset });
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.entityService.findOne(id);
@@ -82,17 +94,6 @@ export class EntityController {
   @Post(':id/restore')
   async restore(@Param('id', ParseUUIDPipe) id: string) {
     return this.entityService.restore(id);
-  }
-
-  /**
-   * Get all soft-deleted entities.
-   */
-  @Get('deleted/list')
-  async findDeleted(
-    @Query('limit') limit?: number,
-    @Query('offset') offset?: number,
-  ) {
-    return this.entityService.findDeleted({ limit, offset });
   }
 
   /**

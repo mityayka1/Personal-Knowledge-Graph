@@ -173,9 +173,17 @@ export class EntityService {
    *
    * @param id - Entity UUID to soft delete
    * @returns Deletion result with timestamp
+   * @throws BadRequestException if entity is the system owner
    */
   async remove(id: string) {
     const entity = await this.findOne(id);
+
+    // Prevent deleting the owner entity - would break the system
+    if (entity.isOwner) {
+      throw new BadRequestException(
+        'Cannot delete the owner entity. Assign ownership to another entity first with POST /entities/:id/set-owner.',
+      );
+    }
 
     // Use TypeORM softRemove which sets deletedAt
     await this.entityRepo.softRemove(entity);
@@ -284,14 +292,23 @@ export class EntityService {
       throw new ConflictException('Cannot merge entity with itself');
     }
 
+    // Prevent merging owner entity
+    if (source.isOwner) {
+      throw new BadRequestException(
+        'Cannot merge the owner entity. Assign ownership to target entity first.',
+      );
+    }
+
     // Move identifiers
     const identifiersMoved = await this.identifierService.moveToEntity(sourceId, targetId);
 
     // Move facts
     const factsMoved = await this.factService.moveToEntity(sourceId, targetId);
 
-    // Delete source entity
-    await this.entityRepo.remove(source);
+    // Soft delete source entity (preserves FK references in Activity/Commitment)
+    await this.entityRepo.softRemove(source);
+
+    this.logger.log(`Merged entity ${source.name} (${sourceId}) into ${targetId}`);
 
     return {
       mergedEntityId: targetId,
