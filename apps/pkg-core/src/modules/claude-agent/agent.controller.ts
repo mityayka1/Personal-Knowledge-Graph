@@ -9,6 +9,8 @@ import {
   HttpException,
   HttpStatus,
   ParseUUIDPipe,
+  ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -40,6 +42,13 @@ import { EntityService } from '../entity/entity.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { DailySynthesisExtractionService } from '../extraction/daily-synthesis-extraction.service';
 import { FactType, FactCategory, FactSource } from '@pkg/entities';
+import { RecallSession } from './recall-session.service';
+
+/**
+ * Maximum length for fact value preview.
+ * Full content stored in valueJson.fullContent for retrieval.
+ */
+const FACT_VALUE_PREVIEW_LENGTH = 500;
 
 /**
  * Raw JSON Schema for recall response
@@ -182,6 +191,47 @@ export class AgentController {
     private readonly recallSessionService: RecallSessionService,
   ) {}
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // Helper methods
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Verify session exists and user has access.
+   * Centralizes 404/403 logic to avoid duplication across endpoints.
+   *
+   * @param sessionId - Session ID to verify
+   * @param userId - Optional user ID for access control
+   * @param operation - Operation name for logging (e.g., 'get', 'save', 'extract')
+   * @returns RecallSession if valid
+   * @throws NotFoundException if session not found
+   * @throws ForbiddenException if userId mismatch
+   */
+  private async verifySessionAccess(
+    sessionId: string,
+    userId: string | undefined,
+    operation: string,
+  ): Promise<RecallSession> {
+    const session = await this.recallSessionService.get(sessionId);
+
+    if (!session) {
+      throw new NotFoundException(`Session not found or expired: ${sessionId}`);
+    }
+
+    // Multi-user safety: verify userId if both are present
+    if (userId && session.userId && session.userId !== userId) {
+      this.logger.warn(
+        `Unauthorized ${operation} attempt: session=${sessionId}, expected=${session.userId}, got=${userId}`,
+      );
+      throw new ForbiddenException('Access denied: session belongs to another user');
+    }
+
+    return session;
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Endpoints
+  // ────────────────────────────────────────────────────────────────────────────
+
   /**
    * POST /agent/recall
    *
@@ -309,25 +359,7 @@ export class AgentController {
   ): Promise<RecallSessionResponseDto> {
     this.logger.log(`Get recall session: ${sessionId}, userId=${userId || 'none'}`);
 
-    const session = await this.recallSessionService.get(sessionId);
-
-    if (!session) {
-      throw new HttpException(
-        `Session not found or expired: ${sessionId}`,
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    // Verify userId if provided (multi-user safety)
-    if (userId && session.userId && session.userId !== userId) {
-      this.logger.warn(
-        `Unauthorized access attempt: session=${sessionId}, expected=${session.userId}, got=${userId}`,
-      );
-      throw new HttpException(
-        'Unauthorized: session belongs to another user',
-        HttpStatus.FORBIDDEN,
-      );
-    }
+    const session = await this.verifySessionAccess(sessionId, userId, 'get');
 
     return {
       success: true,
@@ -378,25 +410,7 @@ export class AgentController {
       `Extract from recall session: ${sessionId}, focus=${dto.focusTopic || 'none'}, userId=${dto.userId || 'none'}`,
     );
 
-    const session = await this.recallSessionService.get(sessionId);
-
-    if (!session) {
-      throw new HttpException(
-        `Session not found or expired: ${sessionId}`,
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    // Verify userId if provided (multi-user safety)
-    if (dto.userId && session.userId && session.userId !== dto.userId) {
-      this.logger.warn(
-        `Unauthorized extract attempt: session=${sessionId}, expected=${session.userId}, got=${dto.userId}`,
-      );
-      throw new HttpException(
-        'Unauthorized: session belongs to another user',
-        HttpStatus.FORBIDDEN,
-      );
-    }
+    const session = await this.verifySessionAccess(sessionId, dto.userId, 'extract');
 
     try {
       const result = await this.dailySynthesisExtractionService.extract({
@@ -458,25 +472,7 @@ export class AgentController {
   ): Promise<RecallResponseDto> {
     this.logger.log(`Follow-up recall session: ${sessionId}, query="${dto.query.slice(0, 50)}...", userId=${dto.userId || 'none'}`);
 
-    const session = await this.recallSessionService.get(sessionId);
-
-    if (!session) {
-      throw new HttpException(
-        `Session not found or expired: ${sessionId}`,
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    // Verify userId if provided (multi-user safety)
-    if (dto.userId && session.userId && session.userId !== dto.userId) {
-      this.logger.warn(
-        `Unauthorized followup attempt: session=${sessionId}, expected=${session.userId}, got=${dto.userId}`,
-      );
-      throw new HttpException(
-        'Unauthorized: session belongs to another user',
-        HttpStatus.FORBIDDEN,
-      );
-    }
+    const session = await this.verifySessionAccess(sessionId, dto.userId, 'followup');
 
     try {
       // Build context-aware prompt with previous answer
@@ -569,26 +565,7 @@ export class AgentController {
   ): Promise<RecallSaveResponseDto> {
     this.logger.log(`Save recall session: ${sessionId}, userId=${dto.userId || 'none'}`);
 
-    // First verify session exists
-    const session = await this.recallSessionService.get(sessionId);
-
-    if (!session) {
-      throw new HttpException(
-        `Session not found or expired: ${sessionId}`,
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    // Verify userId if provided
-    if (dto.userId && session.userId && session.userId !== dto.userId) {
-      this.logger.warn(
-        `Unauthorized save attempt: session=${sessionId}, expected=${session.userId}, got=${dto.userId}`,
-      );
-      throw new HttpException(
-        'Unauthorized: session belongs to another user',
-        HttpStatus.FORBIDDEN,
-      );
-    }
+    const session = await this.verifySessionAccess(sessionId, dto.userId, 'save');
 
     // Check if already saved (idempotency - before creating fact)
     if (session.savedAt && session.savedFactId) {
@@ -618,7 +595,7 @@ export class AgentController {
       const fact = await this.entityFactService.create(owner.id, {
         type: FactType.DAILY_SUMMARY,
         category: FactCategory.PERSONAL,
-        value: session.answer.slice(0, 500), // Short preview for display
+        value: session.answer.slice(0, FACT_VALUE_PREVIEW_LENGTH),
         valueJson: {
           fullContent: session.answer,
           dateStr: session.dateStr,

@@ -1,7 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 /**
  * Source used in recall answer.
@@ -55,15 +57,36 @@ export interface RecallSession {
  * TTL: 24 hours (session is relevant for daily follow-ups)
  */
 @Injectable()
-export class RecallSessionService {
+export class RecallSessionService implements OnModuleInit {
   private readonly logger = new Logger(RecallSessionService.name);
   private readonly KEY_PREFIX = 'recall-session:';
   private readonly TTL_SECONDS = 86400; // 24 hours
+
+  // Lua scripts loaded from files for better maintainability and testability
+  private luaUpdateAnswer: string;
+  private luaMarkAsSaved: string;
 
   constructor(
     @InjectRedis()
     private readonly redis: Redis,
   ) {}
+
+  /**
+   * Load Lua scripts from files on module initialization.
+   * Scripts are loaded once and reused for all operations.
+   */
+  onModuleInit(): void {
+    const scriptsDir = join(__dirname, 'lua-scripts');
+
+    try {
+      this.luaUpdateAnswer = readFileSync(join(scriptsDir, 'update-answer.lua'), 'utf-8');
+      this.luaMarkAsSaved = readFileSync(join(scriptsDir, 'mark-as-saved.lua'), 'utf-8');
+      this.logger.log('Lua scripts loaded successfully');
+    } catch (error) {
+      this.logger.error(`Failed to load Lua scripts: ${error}`);
+      throw error;
+    }
+  }
 
   /**
    * Create a new recall session and return its ID.
@@ -148,42 +171,8 @@ export class RecallSessionService {
   ): Promise<RecallSession | null> {
     const key = `${this.KEY_PREFIX}${sessionId}`;
 
-    // Lua script for atomic update with optional userId verification
-    const luaScript = `
-      local key = KEYS[1]
-      local newAnswer = ARGV[1]
-      local newSources = ARGV[2]
-      local userId = ARGV[3]
-      local ttl = tonumber(ARGV[4])
-
-      local data = redis.call('GET', key)
-      if not data then
-        return nil
-      end
-
-      local session = cjson.decode(data)
-
-      -- Verify userId if provided and session has userId
-      if userId ~= '' and session.userId and session.userId ~= userId then
-        return cjson.encode({ error = 'unauthorized' })
-      end
-
-      -- Update answer
-      session.answer = newAnswer
-
-      -- Update sources if provided
-      if newSources ~= '' then
-        session.sources = cjson.decode(newSources)
-      end
-
-      -- Save with refreshed TTL
-      redis.call('SETEX', key, ttl, cjson.encode(session))
-
-      return cjson.encode(session)
-    `;
-
     const result = await this.redis.eval(
-      luaScript,
+      this.luaUpdateAnswer,
       1,
       key,
       answer,
@@ -250,46 +239,8 @@ export class RecallSessionService {
   ): Promise<{ success: boolean; alreadySaved: boolean; existingFactId?: string }> {
     const key = `${this.KEY_PREFIX}${sessionId}`;
 
-    // Lua script for atomic idempotent save
-    const luaScript = `
-      local key = KEYS[1]
-      local factId = ARGV[1]
-      local userId = ARGV[2]
-      local ttl = tonumber(ARGV[3])
-      local now = tonumber(ARGV[4])
-
-      local data = redis.call('GET', key)
-      if not data then
-        return cjson.encode({ error = 'not_found' })
-      end
-
-      local session = cjson.decode(data)
-
-      -- Verify userId if provided and session has userId
-      if userId ~= '' and session.userId and session.userId ~= userId then
-        return cjson.encode({ error = 'unauthorized' })
-      end
-
-      -- Check if already saved (idempotency)
-      if session.savedAt then
-        return cjson.encode({
-          alreadySaved = true,
-          existingFactId = session.savedFactId
-        })
-      end
-
-      -- Mark as saved
-      session.savedAt = now
-      session.savedFactId = factId
-
-      -- Save with refreshed TTL
-      redis.call('SETEX', key, ttl, cjson.encode(session))
-
-      return cjson.encode({ success = true })
-    `;
-
     const result = await this.redis.eval(
-      luaScript,
+      this.luaMarkAsSaved,
       1,
       key,
       factId,
