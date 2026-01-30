@@ -209,7 +209,10 @@ export class ActivityService {
     if (dto.tags !== undefined) activity.tags = dto.tags;
     if (dto.progress !== undefined) activity.progress = dto.progress;
     if (dto.metadata !== undefined) {
-      activity.metadata = { ...activity.metadata, ...dto.metadata };
+      // null clears metadata, object merges with existing
+      activity.metadata = dto.metadata === null
+        ? null
+        : { ...activity.metadata, ...dto.metadata };
     }
 
     // Обновить даты
@@ -225,6 +228,11 @@ export class ActivityService {
 
     // Обновить родителя (пересчитать depth и path)
     if (dto.parentId !== undefined && dto.parentId !== activity.parentId) {
+      // Store old values for cascade update
+      const oldDepth = activity.depth;
+      const oldPath = activity.materializedPath;
+      const oldFullPath = oldPath ? `${oldPath}/${activity.id}` : activity.id;
+
       if (dto.parentId === null) {
         activity.parentId = null;
         activity.depth = 0;
@@ -237,6 +245,19 @@ export class ActivityService {
           ? `${newParent.materializedPath}/${newParent.id}`
           : newParent.id;
       }
+
+      // Cascade update descendants' materializedPath and depth
+      const newFullPath = activity.materializedPath
+        ? `${activity.materializedPath}/${activity.id}`
+        : activity.id;
+      const depthDelta = activity.depth - oldDepth;
+
+      await this.cascadeUpdateDescendantPaths(
+        activity.id,
+        oldFullPath,
+        newFullPath,
+        depthDelta,
+      );
     }
 
     // Обновить lastActivityAt
@@ -341,15 +362,22 @@ export class ActivityService {
 
   /**
    * Получить проекты по клиенту.
+   * @param clientEntityId - UUID клиента
+   * @param includeCompleted - включить завершённые проекты (default: false)
    */
-  async getProjectsByClient(clientEntityId: string): Promise<Activity[]> {
+  async getProjectsByClient(
+    clientEntityId: string,
+    includeCompleted = false,
+  ): Promise<Activity[]> {
+    const excludedStatuses = includeCompleted
+      ? [ActivityStatus.CANCELLED, ActivityStatus.ARCHIVED]
+      : [ActivityStatus.COMPLETED, ActivityStatus.CANCELLED, ActivityStatus.ARCHIVED];
+
     return this.activityRepo.find({
       where: {
         clientEntityId,
         activityType: ActivityType.PROJECT,
-        status: Not(
-          In([ActivityStatus.COMPLETED, ActivityStatus.CANCELLED, ActivityStatus.ARCHIVED]),
-        ),
+        status: Not(In(excludedStatuses)),
       },
       order: { updatedAt: 'DESC' },
     });
@@ -514,5 +542,55 @@ export class ActivityService {
    */
   async removeMember(activityId: string, entityId: string): Promise<void> {
     await this.memberRepo.delete({ activityId, entityId });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private Helpers
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Cascade update materializedPath and depth for all descendants
+   * when an activity is moved to a new parent.
+   *
+   * @param activityId - ID of the moved activity
+   * @param oldFullPath - Old full path including activity ID (e.g., "A/B/C")
+   * @param newFullPath - New full path including activity ID (e.g., "X/A/B/C")
+   * @param depthDelta - Difference in depth (newDepth - oldDepth)
+   */
+  private async cascadeUpdateDescendantPaths(
+    activityId: string,
+    oldFullPath: string,
+    newFullPath: string,
+    depthDelta: number,
+  ): Promise<void> {
+    // Find all descendants by materializedPath prefix
+    // Descendants have materializedPath that starts with oldFullPath
+    const descendants = await this.activityRepo
+      .createQueryBuilder('a')
+      .where('a.materializedPath LIKE :pattern', { pattern: `${oldFullPath}%` })
+      .getMany();
+
+    if (descendants.length === 0) {
+      return;
+    }
+
+    this.logger.debug(
+      `Cascade updating ${descendants.length} descendants of activity ${activityId}`,
+    );
+
+    // Update each descendant's path and depth
+    for (const descendant of descendants) {
+      // Replace oldFullPath prefix with newFullPath
+      const newPath = descendant.materializedPath!.replace(oldFullPath, newFullPath);
+      descendant.materializedPath = newPath;
+      descendant.depth += depthDelta;
+    }
+
+    // Bulk save
+    await this.activityRepo.save(descendants);
+
+    this.logger.log(
+      `Cascade updated ${descendants.length} descendants: path "${oldFullPath}" → "${newFullPath}"`,
+    );
   }
 }

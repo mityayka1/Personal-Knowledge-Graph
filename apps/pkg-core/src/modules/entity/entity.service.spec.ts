@@ -743,9 +743,10 @@ describe('EntityService', () => {
     it('should permanently delete entity without references', async () => {
       mockEntityRepository.findOne.mockResolvedValue(mockEntity);
       mockEntityRepository.manager.query
-        .mockResolvedValueOnce([{ count: '0' }]) // activities
-        .mockResolvedValueOnce([{ count: '0' }]) // commitments
-        .mockResolvedValueOnce([{ count: '0' }]); // participations
+        .mockResolvedValueOnce([{ count: '0' }]) // activities (owner_entity_id OR client_entity_id)
+        .mockResolvedValueOnce([{ count: '0' }]) // commitments (from_entity_id OR to_entity_id)
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
       mockEntityRepository.remove.mockResolvedValue(mockEntity);
 
       const result = await service.hardDelete('test-uuid-1', true);
@@ -773,7 +774,8 @@ describe('EntityService', () => {
       mockEntityRepository.manager.query
         .mockResolvedValueOnce([{ count: '5' }]) // activities
         .mockResolvedValueOnce([{ count: '0' }]) // commitments
-        .mockResolvedValueOnce([{ count: '0' }]); // participations
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
 
       const promise = service.hardDelete('test-uuid-1', true);
       await expect(promise).rejects.toThrow(ConflictException);
@@ -785,7 +787,19 @@ describe('EntityService', () => {
       mockEntityRepository.manager.query
         .mockResolvedValueOnce([{ count: '0' }]) // activities
         .mockResolvedValueOnce([{ count: '3' }]) // commitments
-        .mockResolvedValueOnce([{ count: '0' }]); // participations
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
+
+      await expect(service.hardDelete('test-uuid-1', true)).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject if entity has activity member references', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(mockEntity);
+      mockEntityRepository.manager.query
+        .mockResolvedValueOnce([{ count: '0' }]) // activities
+        .mockResolvedValueOnce([{ count: '0' }]) // commitments
+        .mockResolvedValueOnce([{ count: '7' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
 
       await expect(service.hardDelete('test-uuid-1', true)).rejects.toThrow(ConflictException);
     });
@@ -795,7 +809,8 @@ describe('EntityService', () => {
       mockEntityRepository.manager.query
         .mockResolvedValueOnce([{ count: '0' }]) // activities
         .mockResolvedValueOnce([{ count: '0' }]) // commitments
-        .mockResolvedValueOnce([{ count: '10' }]); // participations
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '10' }]); // interaction_participants
 
       await expect(service.hardDelete('test-uuid-1', true)).rejects.toThrow(ConflictException);
     });

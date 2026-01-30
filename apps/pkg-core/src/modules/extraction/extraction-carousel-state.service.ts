@@ -26,6 +26,9 @@ export interface ExtractionCarouselItem {
 /**
  * Carousel state stored in Redis.
  * Contains all extracted items for confirmation flow.
+ *
+ * Note: Uses source-agnostic field names. Adapters (Telegram, etc.)
+ * are responsible for mapping their specific IDs to these generic fields.
  */
 export interface ExtractionCarouselState {
   /** All items in the carousel (projects, tasks, commitments) */
@@ -36,10 +39,10 @@ export interface ExtractionCarouselState {
   processedIds: string[];
   /** IDs of items that were confirmed (subset of processedIds) */
   confirmedIds: string[];
-  /** Telegram chat ID where carousel was sent */
-  chatId: string;
-  /** Telegram message ID for editMessage */
-  messageId: number;
+  /** Conversation/chat ID (source-agnostic) */
+  conversationId: string;
+  /** Message reference for updates (source-agnostic) */
+  messageRef: string;
   /** Original synthesis date if provided */
   synthesisDate?: string;
   /** Original focus topic if provided */
@@ -60,10 +63,13 @@ export interface ExtractionCarouselNavResult {
 
 /**
  * Input for creating extraction carousel.
+ * Uses source-agnostic identifiers.
  */
 export interface CreateExtractionCarouselInput {
-  chatId: string;
-  messageId: number;
+  /** Conversation/chat ID (source-agnostic) */
+  conversationId: string;
+  /** Message reference for updates (source-agnostic, string for flexibility) */
+  messageRef: string;
   projects: ExtractedProject[];
   tasks: ExtractedTask[];
   commitments: ExtractedCommitment[];
@@ -151,8 +157,8 @@ export class ExtractionCarouselStateService {
       currentIndex: 0,
       processedIds: [],
       confirmedIds: [],
-      chatId: input.chatId,
-      messageId: input.messageId,
+      conversationId: input.conversationId,
+      messageRef: input.messageRef,
       synthesisDate: input.synthesisDate,
       focusTopic: input.focusTopic,
       createdAt: Date.now(),
@@ -163,7 +169,7 @@ export class ExtractionCarouselStateService {
     this.logger.log(
       `Created extraction carousel ${carouselId} with ${items.length} items ` +
         `(${input.projects.length} projects, ${input.tasks.length} tasks, ` +
-        `${input.commitments.length} commitments) for chat ${input.chatId}`,
+        `${input.commitments.length} commitments) for conversation ${input.conversationId}`,
     );
 
     return carouselId;
@@ -434,22 +440,22 @@ export class ExtractionCarouselStateService {
   }
 
   /**
-   * Update the message ID for a carousel.
+   * Update the message reference for a carousel.
    * Used when carousel is created before message is sent.
    *
    * @param carouselId - Carousel ID
-   * @param messageId - New Telegram message ID
+   * @param messageRef - New message reference (source-agnostic)
    */
-  async updateMessageId(carouselId: string, messageId: number): Promise<void> {
+  async updateMessageRef(carouselId: string, messageRef: string): Promise<void> {
     const state = await this.get(carouselId);
     if (!state) {
-      this.logger.warn(`Cannot update messageId: carousel ${carouselId} not found`);
+      this.logger.warn(`Cannot update messageRef: carousel ${carouselId} not found`);
       return;
     }
 
-    state.messageId = messageId;
+    state.messageRef = messageRef;
     await this.save(carouselId, state);
-    this.logger.debug(`Updated carousel ${carouselId} messageId to ${messageId}`);
+    this.logger.debug(`Updated carousel ${carouselId} messageRef to ${messageRef}`);
   }
 
   // ─────────────────────────────────────────────────────────────────

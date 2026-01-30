@@ -293,7 +293,7 @@ export class EntityService {
       throw new ConflictException(
         `Cannot hard delete: entity has ${hasReferences.total} references ` +
         `(${hasReferences.activities} activities, ${hasReferences.commitments} commitments, ` +
-        `${hasReferences.participations} participations). ` +
+        `${hasReferences.activityMembers} activity members, ${hasReferences.participations} participations). ` +
         `These must be deleted or reassigned first.`,
       );
     }
@@ -492,20 +492,40 @@ export class EntityService {
   /**
    * Check if entity has FK references that would prevent hard delete.
    * Returns counts of each reference type.
+   *
+   * Checks:
+   * - activities: owner_entity_id OR client_entity_id
+   * - commitments: from_entity_id OR to_entity_id
+   * - activity_members: entity_id
+   * - interaction_participants: entity_id
    */
   private async checkEntityReferences(entityId: string): Promise<{
     activities: number;
     commitments: number;
+    activityMembers: number;
     participations: number;
     total: number;
   }> {
-    const [activities, commitments, participations] = await Promise.all([
+    const [activities, commitments, activityMembers, participations] = await Promise.all([
+      // Activities reference entity as owner or client
       this.entityRepo.manager
-        .query('SELECT COUNT(*) FROM activities WHERE entity_id = $1', [entityId])
+        .query(
+          'SELECT COUNT(*) FROM activities WHERE owner_entity_id = $1 OR client_entity_id = $1',
+          [entityId],
+        )
         .then((r) => parseInt(r[0].count, 10)),
+      // Commitments reference entity as from or to party
       this.entityRepo.manager
-        .query('SELECT COUNT(*) FROM commitments WHERE entity_id = $1', [entityId])
+        .query(
+          'SELECT COUNT(*) FROM commitments WHERE from_entity_id = $1 OR to_entity_id = $1',
+          [entityId],
+        )
         .then((r) => parseInt(r[0].count, 10)),
+      // Activity members reference entity directly
+      this.entityRepo.manager
+        .query('SELECT COUNT(*) FROM activity_members WHERE entity_id = $1', [entityId])
+        .then((r) => parseInt(r[0].count, 10)),
+      // Interaction participants reference entity directly
       this.entityRepo.manager
         .query('SELECT COUNT(*) FROM interaction_participants WHERE entity_id = $1', [entityId])
         .then((r) => parseInt(r[0].count, 10)),
@@ -514,8 +534,9 @@ export class EntityService {
     return {
       activities,
       commitments,
+      activityMembers,
       participations,
-      total: activities + commitments + participations,
+      total: activities + commitments + activityMembers + participations,
     };
   }
 }

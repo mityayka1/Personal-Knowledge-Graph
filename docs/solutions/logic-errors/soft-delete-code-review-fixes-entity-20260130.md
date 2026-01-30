@@ -217,3 +217,4 @@ async findOne(id: string) {
 ## Related Issues
 
 - [Entity Soft Delete Pattern](../architecture-decisions/entity-soft-delete-pattern-20260130.md) — начальная реализация
+- [PR #103 Code Review Fixes](../code-review-fixes/pr103-entity-activity-extraction-20260130.md) — исправление checkEntityReferences column names (entity_id → owner_entity_id, from_entity_id, to_entity_id)

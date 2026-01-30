@@ -120,9 +120,10 @@ export class ExtractionCarouselController {
     @Body() dto: CreateExtractionCarouselDto,
   ): Promise<CreateCarouselResponse> {
     try {
+      // Map DTO fields to source-agnostic internal fields
       const carouselId = await this.carouselService.create({
-        chatId: dto.chatId,
-        messageId: dto.messageId,
+        conversationId: dto.chatId,
+        messageRef: String(dto.messageId),
         projects: dto.projects,
         tasks: dto.tasks,
         commitments: dto.commitments,
@@ -177,8 +178,8 @@ export class ExtractionCarouselController {
 
     return {
       exists: true,
-      chatId: state.chatId,
-      messageId: state.messageId,
+      chatId: state.conversationId,
+      messageId: parseInt(state.messageRef, 10),
       currentIndex: state.currentIndex,
       total: state.items.length,
       remaining,
@@ -213,12 +214,12 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
-    return this.buildNavResponse(carouselId, navResult, state.chatId, state.messageId);
+    return this.buildNavResponse(carouselId, navResult, state.conversationId, parseInt(state.messageRef, 10));
   }
 
   /**
@@ -243,12 +244,12 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
-    return this.buildNavResponse(carouselId, navResult, state.chatId, state.messageId);
+    return this.buildNavResponse(carouselId, navResult, state.conversationId, parseInt(state.messageRef, 10));
   }
 
   /**
@@ -273,12 +274,12 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
-    return this.buildNavResponse(carouselId, navResult, state.chatId, state.messageId);
+    return this.buildNavResponse(carouselId, navResult, state.conversationId, parseInt(state.messageRef, 10));
   }
 
   /**
@@ -303,8 +304,8 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
@@ -324,12 +325,12 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
-    return this.buildNavResponse(carouselId, next, state.chatId, state.messageId);
+    return this.buildNavResponse(carouselId, next, state.conversationId, parseInt(state.messageRef, 10));
   }
 
   /**
@@ -354,8 +355,8 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
@@ -375,12 +376,12 @@ export class ExtractionCarouselController {
         success: true,
         complete: true,
         message: this.formatComplete(stats),
-        chatId: state.chatId,
-        messageId: state.messageId,
+        chatId: state.conversationId,
+        messageId: parseInt(state.messageRef, 10),
       };
     }
 
-    return this.buildNavResponse(carouselId, next, state.chatId, state.messageId);
+    return this.buildNavResponse(carouselId, next, state.conversationId, parseInt(state.messageRef, 10));
   }
 
   /**

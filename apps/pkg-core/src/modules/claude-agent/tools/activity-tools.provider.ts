@@ -325,7 +325,10 @@ Useful to prepare for client meetings or review client project portfolio.`,
         },
         async (args) => {
           try {
-            const activities = await this.activityService.getProjectsByClient(args.clientId);
+            const activities = await this.activityService.getProjectsByClient(
+              args.clientId,
+              args.includeCompleted,
+            );
 
             if (activities.length === 0) {
               return toolEmptyResult('activities for this client');

@@ -77,6 +77,13 @@ export class ExtractionPersistenceService {
 
   /**
    * Persist all confirmed items from extraction.
+   *
+   * Note: Currently "best effort" - each item persisted independently.
+   * If one fails, others may still succeed. Errors tracked in result.
+   *
+   * TODO: For full atomicity (all-or-nothing), refactor ActivityService
+   * and CommitmentService to accept optional EntityManager parameter,
+   * then wrap entire operation in dataSource.transaction().
    */
   async persist(input: PersistExtractionInput): Promise<PersistExtractionResult> {
     const result: PersistExtractionResult = {

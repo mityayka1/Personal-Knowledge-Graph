@@ -330,3 +330,4 @@ UPDATE entities SET deleted_at = NOW() WHERE id = 'test-uuid';
 - Задача #18: FK constraints для Activity/Commitment
 - `packages/entities/src/entity.entity.ts` — Entity definition
 - [Code Review Fixes](../logic-errors/soft-delete-code-review-fixes-entity-20260130.md) — исправления найденных при code review пробелов
+- [PR #103 Fixes](../code-review-fixes/pr103-entity-activity-extraction-20260130.md) — checkEntityReferences column fixes, cascade materializedPath
