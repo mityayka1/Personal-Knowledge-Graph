@@ -120,6 +120,12 @@ export class EntityService {
       throw new NotFoundException(`Entity with id '${id}' not found`);
     }
 
+    // Hide organization link if organization is soft-deleted
+    if (entity.organization?.deletedAt) {
+      entity.organization = null;
+      entity.organizationId = null;
+    }
+
     return entity;
   }
 
@@ -200,32 +206,41 @@ export class EntityService {
 
   /**
    * Restore a soft-deleted entity.
+   * Uses pessimistic locking to prevent race conditions.
    *
    * @param id - Entity UUID to restore
    * @returns Restored entity
    */
   async restore(id: string): Promise<EntityRecord> {
-    // Find with soft-deleted entities included
-    const entity = await this.entityRepo.findOne({
-      where: { id },
-      withDeleted: true,
-      relations: ['organization', 'identifiers', 'facts'],
+    return this.entityRepo.manager.transaction(async (manager) => {
+      // SELECT FOR UPDATE prevents race condition when multiple requests try to restore
+      const entity = await manager
+        .createQueryBuilder(EntityRecord, 'e')
+        .setLock('pessimistic_write')
+        .where('e.id = :id', { id })
+        .withDeleted()
+        .getOne();
+
+      if (!entity) {
+        throw new NotFoundException(`Entity with id '${id}' not found`);
+      }
+
+      if (!entity.deletedAt) {
+        throw new BadRequestException(`Entity '${id}' is not deleted`);
+      }
+
+      // Clear deletedAt to restore the entity
+      entity.deletedAt = null;
+      await manager.save(EntityRecord, entity);
+
+      this.logger.log(`Restored entity: ${entity.name} (${id})`);
+
+      // Fetch with relations for return
+      return manager.findOne(EntityRecord, {
+        where: { id },
+        relations: ['organization', 'identifiers', 'facts'],
+      }) as Promise<EntityRecord>;
     });
-
-    if (!entity) {
-      throw new NotFoundException(`Entity with id '${id}' not found`);
-    }
-
-    if (!entity.deletedAt) {
-      throw new BadRequestException(`Entity '${id}' is not deleted`);
-    }
-
-    // Use TypeORM recover which clears deletedAt
-    await this.entityRepo.recover(entity);
-
-    this.logger.log(`Restored entity: ${entity.name} (${id})`);
-
-    return this.findOne(id);
   }
 
   /**
@@ -270,6 +285,17 @@ export class EntityService {
 
     if (!entity) {
       throw new NotFoundException(`Entity with id '${id}' not found`);
+    }
+
+    // Check FK references before hard delete
+    const hasReferences = await this.checkEntityReferences(id);
+    if (hasReferences.total > 0) {
+      throw new ConflictException(
+        `Cannot hard delete: entity has ${hasReferences.total} references ` +
+        `(${hasReferences.activities} activities, ${hasReferences.commitments} commitments, ` +
+        `${hasReferences.participations} participations). ` +
+        `These must be deleted or reassigned first.`,
+      );
     }
 
     // Permanently remove from database
@@ -460,6 +486,36 @@ export class EntityService {
       centralEntityId: entityId,
       nodes: Array.from(nodes.values()),
       edges,
+    };
+  }
+
+  /**
+   * Check if entity has FK references that would prevent hard delete.
+   * Returns counts of each reference type.
+   */
+  private async checkEntityReferences(entityId: string): Promise<{
+    activities: number;
+    commitments: number;
+    participations: number;
+    total: number;
+  }> {
+    const [activities, commitments, participations] = await Promise.all([
+      this.entityRepo.manager
+        .query('SELECT COUNT(*) FROM activities WHERE entity_id = $1', [entityId])
+        .then((r) => parseInt(r[0].count, 10)),
+      this.entityRepo.manager
+        .query('SELECT COUNT(*) FROM commitments WHERE entity_id = $1', [entityId])
+        .then((r) => parseInt(r[0].count, 10)),
+      this.entityRepo.manager
+        .query('SELECT COUNT(*) FROM interaction_participants WHERE entity_id = $1', [entityId])
+        .then((r) => parseInt(r[0].count, 10)),
+    ]);
+
+    return {
+      activities,
+      commitments,
+      participations,
+      total: activities + commitments + participations,
     };
   }
 }

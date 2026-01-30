@@ -29,14 +29,16 @@ export class FtsService {
         ts_rank(to_tsvector('russian', m.content), plainto_tsquery('russian', $1)) as score,
         ts_headline('russian', m.content, plainto_tsquery('russian', $1), 'MaxFragments=2') as highlight
       FROM messages m
-      LEFT JOIN entities e ON m.sender_entity_id = e.id
+      LEFT JOIN entities e ON m.sender_entity_id = e.id AND e.deleted_at IS NULL
       LEFT JOIN interactions i ON m.interaction_id = i.id
       WHERE to_tsvector('russian', m.content) @@ plainto_tsquery('russian', $1)
         AND (e.is_bot = false OR e.is_bot IS NULL)
         AND NOT EXISTS (
           SELECT 1 FROM interaction_participants ip
           JOIN entities bot_e ON ip.entity_id = bot_e.id
-          WHERE ip.interaction_id = m.interaction_id AND bot_e.is_bot = true
+          WHERE ip.interaction_id = m.interaction_id
+            AND bot_e.is_bot = true
+            AND bot_e.deleted_at IS NULL
         )
     `;
 
@@ -79,7 +81,7 @@ export class FtsService {
           ip.entity_id,
           e.name as entity_name
         FROM interaction_participants ip
-        LEFT JOIN entities e ON ip.entity_id = e.id
+        LEFT JOIN entities e ON ip.entity_id = e.id AND e.deleted_at IS NULL
         WHERE ip.interaction_id = ANY($1)
       `;
       const participants = await this.messageRepo.query(participantsSql, [interactionIds]);

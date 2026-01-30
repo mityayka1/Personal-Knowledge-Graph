@@ -329,3 +329,4 @@ UPDATE entities SET deleted_at = NOW() WHERE id = 'test-uuid';
 - [PostgreSQL Partial Indexes](https://www.postgresql.org/docs/current/indexes-partial.html)
 - Задача #18: FK constraints для Activity/Commitment
 - `packages/entities/src/entity.entity.ts` — Entity definition
+- [Code Review Fixes](../logic-errors/soft-delete-code-review-fixes-entity-20260130.md) — исправления найденных при code review пробелов

@@ -1,566 +1,479 @@
-# Unified Extraction Agent — Implementation Plan
+# Entity Soft Delete — Исправление замечаний Code Review
 
-> **Статус:** ✅ Завершено
-> **Предшественник:** Context-Aware Extraction (✅ Завершено)
-> **Дата:** 2025-01-28
+> **Статус:** 🔄 В планировании
+> **Дата:** 2026-01-30
+> **Контекст:** Code review бизнес-логики soft delete для EntityRecord
 
 ---
 
 ## Проблема
 
-Сейчас `FactExtractionProcessor` запускает **3 параллельных extraction flow** на один и тот же набор сообщений:
+При ревью реализации soft delete для EntityRecord выявлены критичные пробелы:
 
-```
-FactExtractionProcessor.process()
-├── 1. FactExtractionService.extractFactsAgentBatch()     → EntityFact (agent, 5 tools)
-├── 2. EventExtractionService.extractEventsBatch()         → EntityEvent (oneshot, legacy)
-└── 3. SecondBrainExtractionService.extractFromMessages()  → ExtractedEvent (oneshot, 6 types)
-```
-
-**Проблемы:**
-- 3 отдельных LLM-вызова на один batch сообщений → 3x стоимость
-- Дублирование контекста: каждый flow строит свой prompt с теми же сообщениями
-- Несогласованность: факт-агент видит tool results, а event oneshot — нет
-- `EventExtractionService` (legacy) дублирует функциональность SecondBrain
-- Разная архитектура: agent mode vs oneshot vs oneshot — сложно поддерживать
+1. **Raw SQL запросы игнорируют deleted_at** — поиск (FTS, vector) возвращает удалённые сущности
+2. **Entity Resolution по идентификаторам** — findByIdentifier() не проверяет deleted_at связанной entity
+3. **Hard delete не проверяет FK** — можно удалить entity с существующими Activity/Commitment
+4. **Тесты устарели** — используют `repo.remove()` вместо `softRemove()`
 
 ---
 
-## Решение
+## Исправленные проблемы (P0)
 
-**Один агент с полным набором tools** заменяет все 3 flow:
-
-```
-FactExtractionProcessor.process()
-└── UnifiedExtractionService.extract()  → EntityFact + ExtractedEvent (agent, 6 tools)
-```
-
-Агент получает **секционированные инструкции** (`§FACTS` + `§EVENTS`) и 6 MCP-tools:
-- 5 существующих: `get_entity_context`, `find_entity_by_name`, `create_fact`, `create_relation`, `create_pending_entity`
-- 1 новый: `create_event`
+✅ **Route conflict** — `@Get('deleted/list')` перемещён перед `@Get(':id')`
+✅ **Owner protection** — запрет удаления owner entity в `remove()`
+✅ **Merge hard delete** — `merge()` использует `softRemove()` вместо `remove()`
 
 ---
 
-## Шаг 1: Новый tool `create_event`
+## План исправлений
 
-**Файл:** `apps/pkg-core/src/modules/extraction/tools/extraction-tools.provider.ts`
+### Шаг 1: Raw SQL фильтрация (P1)
 
-### 1.1 Добавить tool в ExtractionToolsProvider
+**Проблема:** TypeORM `@DeleteDateColumn` автоматически фильтрует только ORM-запросы. Raw SQL требует явного условия.
+
+#### 1.1 fts.service.ts
+
+**Файл:** `apps/pkg-core/src/modules/search/fts.service.ts`
+
+**Изменения:**
 
 ```typescript
-tool('create_event',
-  `Создать событие (встреча, обещание, дедлайн, день рождения и т.д.)
+// Строка ~32: Основной JOIN
+// БЫЛО:
+LEFT JOIN entities e ON m.sender_entity_id = e.id
 
-   Типы: meeting, promise_by_me, promise_by_them, deadline, birthday, general
+// СТАЛО:
+LEFT JOIN entities e ON m.sender_entity_id = e.id AND e.deleted_at IS NULL
 
-   ПРАВИЛА ОБЕЩАНИЙ:
-   - promise_by_me: автор ИСХОДЯЩЕГО сообщения обещает что-то сделать
-   - promise_by_them: автор ВХОДЯЩЕГО сообщения обещает что-то сделать
-   - ОПРЕДЕЛЯЙ тип ТОЛЬКО по isOutgoing флагу сообщения, НЕ по тексту
+// Строки ~38-39: Bot filter subquery
+// БЫЛО:
+JOIN entities bot_e ON ip.entity_id = bot_e.id
+WHERE bot_e.is_bot = true
 
-   АБСТРАКТНЫЕ СОБЫТИЯ (needsEnrichment=true):
-   - "давай встретимся" без даты → meeting + needsEnrichment
-   - "надо обсудить" без деталей → general + needsEnrichment`,
-  {
-    eventType: z.enum(['meeting', 'promise_by_me', 'promise_by_them', 'deadline', 'birthday', 'general'])
-      .describe('Тип события'),
-    title: z.string().describe('Краткое название события'),
-    description: z.string().optional().describe('Подробное описание'),
-    date: z.string().optional().describe('Дата/время ISO 8601 если известна'),
-    entityId: z.string().uuid().describe('ID сущности-владельца события'),
-    sourceMessageId: z.string().uuid().describe('ID исходного сообщения'),
-    confidence: z.number().min(0).max(1).describe('Уверенность 0-1'),
-    needsEnrichment: z.boolean().default(false)
-      .describe('true если событие абстрактное (нет даты/деталей) и требует уточнения'),
-    promiseToEntityId: z.string().uuid().optional()
-      .describe('ID сущности-получателя обещания (для promise_by_me)'),
-    metadata: z.record(z.unknown()).optional()
-      .describe('Доп. данные (participants, location и т.д.)'),
-  },
-  async (args) => {
-    // 1. Создать ExtractedEvent со статусом PENDING
-    const event = await this.extractedEventService.create({
-      eventType: args.eventType,
-      title: args.title,
-      description: args.description,
-      eventDate: args.date ? new Date(args.date) : undefined,
-      entityId: args.entityId,
-      sourceMessageId: args.sourceMessageId,
-      confidence: args.confidence,
-      status: 'pending',
-      needsEnrichment: args.needsEnrichment,
-      promiseToEntityId: args.promiseToEntityId,
-      metadata: args.metadata,
-    });
+// СТАЛО:
+JOIN entities bot_e ON ip.entity_id = bot_e.id
+WHERE bot_e.is_bot = true AND bot_e.deleted_at IS NULL
 
-    // 2. Если абстрактное — поставить в очередь обогащения
-    if (args.needsEnrichment) {
-      await this.enrichmentQueueService.queueForEnrichment(event.id);
-    }
+// Строка ~82: Participants query
+// БЫЛО:
+LEFT JOIN entities pe ON ip.entity_id = pe.id
 
-    return toolSuccess({ eventId: event.id, status: 'pending', queued: args.needsEnrichment });
+// СТАЛО:
+LEFT JOIN entities pe ON ip.entity_id = pe.id AND pe.deleted_at IS NULL
+```
+
+#### 1.2 vector.service.ts
+
+**Файл:** `apps/pkg-core/src/modules/search/vector.service.ts`
+
+**Изменения:** Аналогичные fts.service.ts (строки ~31, ~37-38, ~81)
+
+#### 1.3 notification.service.ts
+
+**Файл:** `apps/pkg-core/src/modules/notification/notification.service.ts`
+
+**Проверить:** Есть ли raw SQL с JOIN на entities. Если да — добавить фильтр.
+
+---
+
+### Шаг 2: Entity Identifier Resolution (P1)
+
+**Проблема:** `findByIdentifier()` возвращает identifier с удалённой entity.
+
+**Файл:** `apps/pkg-core/src/modules/entity/entity-identifier/entity-identifier.service.ts`
+
+**Изменение:**
+
+```typescript
+async findByIdentifier(type: IdentifierType, value: string) {
+  const identifier = await this.identifierRepo.findOne({
+    where: { identifierType: type, identifierValue: value },
+    relations: ['entity'],
+  });
+
+  // Проверка: если entity удалена — считаем идентификатор не найденным
+  if (identifier?.entity?.deletedAt) {
+    return null;
   }
-)
+
+  return identifier;
+}
 ```
 
-### 1.2 Зависимости для ExtractionToolsProvider
+**Влияние на вызывающий код:**
 
-Добавить в конструктор:
-- `ExtractedEventService` (создание событий)
-- `EnrichmentQueueService` (очередь обогащения)
-
-**Файл:** `apps/pkg-core/src/modules/extraction/tools/extraction-tools.provider.ts`
-
-```typescript
-constructor(
-  // ...existing deps...
-  private readonly extractedEventService: ExtractedEventService,  // NEW
-  private readonly enrichmentQueueService: EnrichmentQueueService, // NEW
-) {}
-```
-
-### 1.3 Обновить ExtractionModule
-
-**Файл:** `apps/pkg-core/src/modules/extraction/extraction.module.ts`
-
-Добавить `ExtractedEventService` и `EnrichmentQueueService` в providers/imports.
+| Файл | Использование | Влияние |
+|------|---------------|---------|
+| `entity-resolution.service.ts` | Entity lookup | ✅ Нулевой identifier → создание pending |
+| `interaction-participant.service.ts` | Participant resolve | ✅ Нулевой → pending participant |
+| `telegram-adapter` | User sync | ✅ Нулевой → создание нового entity |
+| `extraction` | Fact subject | ✅ Нулевой → pending confirmation |
 
 ---
 
-## Шаг 2: Unified Extraction Service
+### Шаг 3: Hard Delete FK Protection (P1)
 
-**Новый файл:** `apps/pkg-core/src/modules/extraction/unified-extraction.service.ts`
+**Проблема:** `hardDelete()` не проверяет наличие связанных записей.
 
-### 2.1 Сервис
+**Файл:** `apps/pkg-core/src/modules/entity/entity.service.ts`
+
+**Изменение:**
 
 ```typescript
-@Injectable()
-export class UnifiedExtractionService {
-  private readonly logger = new Logger(UnifiedExtractionService.name);
-
-  constructor(
-    private readonly extractionToolsProvider: ExtractionToolsProvider,
-    private readonly claudeAgentService: ClaudeAgentService,
-    private readonly entityFactService: EntityFactService,
-    private readonly entityRelationService: EntityRelationService,
-    private readonly promiseRecipientService: PromiseRecipientService,
-  ) {}
-
-  async extract(params: UnifiedExtractionParams): Promise<UnifiedExtractionResult> {
-    const { entityId, entityName, messages, interactionId } = params;
-
-    // 1. Собрать контекст
-    const entityContext = await this.entityFactService.getContextForExtraction(entityId);
-    const relationsContext = await this.buildRelationsContext(entityId);
-
-    // 2. Обогатить сообщения данными о reply-to и promise recipients
-    const enrichedMessages = await this.enrichMessages(messages, interactionId, entityId);
-
-    // 3. Построить prompt
-    const prompt = this.buildUnifiedPrompt({
-      entityName, entityContext, relationsContext,
-      messages: enrichedMessages, interactionId,
-    });
-
-    // 4. Создать MCP сервер с extraction context
-    const extractionContext = { messageId: messages[0]?.id, interactionId };
-    const mcpServer = this.extractionToolsProvider.createMcpServer(extractionContext);
-    const toolNames = this.extractionToolsProvider.getToolNames();
-
-    // 5. Вызвать агента
-    this.logger.debug(`[unified-extraction] Prompt:\n${prompt}`);
-
-    const { data, usage, turns, toolsUsed } = await this.claudeAgentService.call<UnifiedExtractionResponse>({
-      mode: 'agent',
-      taskType: 'unified_extraction',
-      prompt,
-      model: 'haiku',
-      maxTurns: 15,
-      timeout: 180_000,
-      referenceType: 'interaction',
-      referenceId: interactionId,
-      customMcp: { name: 'extraction-tools', server: mcpServer, toolNames },
-      outputFormat: {
-        type: 'json_schema',
-        schema: UNIFIED_EXTRACTION_SCHEMA,
-        strict: true,
-      },
-    });
-
-    // 6. Логировать результат
-    this.logger.log(
-      `[unified-extraction] Done: ${data?.factsCreated ?? 0} facts, ` +
-      `${data?.eventsCreated ?? 0} events, ${data?.relationsCreated ?? 0} relations | ` +
-      `${turns} turns, tools: [${toolsUsed.join(', ')}] | ` +
-      `tokens: ${usage?.input_tokens ?? 0}in/${usage?.output_tokens ?? 0}out`
+async hardDelete(id: string, confirm: boolean) {
+  if (!confirm) {
+    throw new BadRequestException(
+      'Hard delete requires explicit confirmation. Set confirm=true to proceed.',
     );
-
-    return {
-      factsCreated: data?.factsCreated ?? 0,
-      eventsCreated: data?.eventsCreated ?? 0,
-      relationsCreated: data?.relationsCreated ?? 0,
-      pendingEntities: data?.pendingEntities ?? 0,
-      turns,
-      toolsUsed,
-    };
   }
+
+  const entity = await this.entityRepo.findOne({
+    where: { id },
+    withDeleted: true,
+  });
+
+  if (!entity) {
+    throw new NotFoundException(`Entity with id '${id}' not found`);
+  }
+
+  // NEW: Проверка FK references
+  const hasReferences = await this.checkEntityReferences(id);
+  if (hasReferences.total > 0) {
+    throw new ConflictException(
+      `Cannot hard delete: entity has ${hasReferences.total} references ` +
+      `(${hasReferences.activities} activities, ${hasReferences.commitments} commitments, ` +
+      `${hasReferences.participations} participations). ` +
+      `These must be deleted or reassigned first.`
+    );
+  }
+
+  await this.entityRepo.remove(entity);
+
+  this.logger.warn(`HARD deleted entity: ${entity.name} (${id})`);
+
+  return {
+    hardDeleted: true,
+    id,
+    message: 'Entity permanently deleted. This cannot be undone.',
+  };
+}
+
+// NEW helper method
+private async checkEntityReferences(entityId: string): Promise<{
+  activities: number;
+  commitments: number;
+  participations: number;
+  total: number;
+}> {
+  // Используем raw count для производительности
+  const [activities, commitments, participations] = await Promise.all([
+    this.entityRepo.manager.query(
+      'SELECT COUNT(*) FROM activities WHERE entity_id = $1',
+      [entityId]
+    ).then(r => parseInt(r[0].count, 10)),
+    this.entityRepo.manager.query(
+      'SELECT COUNT(*) FROM commitments WHERE entity_id = $1',
+      [entityId]
+    ).then(r => parseInt(r[0].count, 10)),
+    this.entityRepo.manager.query(
+      'SELECT COUNT(*) FROM interaction_participants WHERE entity_id = $1',
+      [entityId]
+    ).then(r => parseInt(r[0].count, 10)),
+  ]);
+
+  return {
+    activities,
+    commitments,
+    participations,
+    total: activities + commitments + participations,
+  };
 }
 ```
 
-### 2.2 Метод enrichMessages
+---
 
-Перенос логики из `FactExtractionProcessor` — обогащение сообщений данными о reply-to и promise recipients:
+### Шаг 4: Исправление тестов (P1)
 
-```typescript
-private async enrichMessages(
-  messages: FormattedMessage[],
-  interactionId: string,
-  defaultEntityId: string,
-): Promise<EnrichedMessage[]> {
-  const replyToInfoMap = await this.promiseRecipientService.loadReplyToInfo(
-    messages.filter(m => m.replyToSourceMessageId),
-    interactionId,
-  );
+**Файл:** `apps/pkg-core/src/modules/entity/entity.service.spec.ts`
 
-  return Promise.all(messages.map(async (m) => {
-    const replyToInfo = m.replyToSourceMessageId
-      ? replyToInfoMap.get(m.replyToSourceMessageId)
-      : undefined;
-
-    const messageEntityId = m.senderEntityId || defaultEntityId;
-
-    const promiseToEntityId = await this.promiseRecipientService.resolveRecipient({
-      interactionId,
-      entityId: messageEntityId,
-      isOutgoing: m.isOutgoing ?? false,
-      replyToSenderEntityId: replyToInfo?.senderEntityId,
-    });
-
-    return {
-      ...m,
-      entityId: messageEntityId,
-      promiseToEntityId,
-      replyToContent: replyToInfo?.content,
-      replyToSenderName: replyToInfo?.senderName,
-    };
-  }));
-}
-```
-
-### 2.3 Unified Prompt Builder
+#### 4.1 Добавить моки для soft delete методов
 
 ```typescript
-private buildUnifiedPrompt(params: PromptParams): string {
-  const { entityName, entityContext, relationsContext, messages, interactionId } = params;
+const mockEntityRepo = {
+  // Existing mocks...
+  find: jest.fn(),
+  findOne: jest.fn(),
+  save: jest.fn(),
+  create: jest.fn(),
 
-  const messageBlock = messages.map(m => {
-    const direction = m.isOutgoing ? '→ ИСХОДЯЩЕЕ' : '← ВХОДЯЩЕЕ';
-    const sender = m.senderEntityName || entityName;
-    const reply = m.replyToContent
-      ? `\n  [В ответ на: "${m.replyToContent.slice(0, 100)}..." от ${m.replyToSenderName}]`
-      : '';
-    const topic = m.topicName ? ` [Тема: ${m.topicName}]` : '';
-    const promiseTo = m.promiseToEntityId
-      ? `\n  [promiseToEntityId: ${m.promiseToEntityId}]`
-      : '';
-    return `[${m.timestamp}] ${direction} (${sender}, entityId: ${m.entityId}, msgId: ${m.id})${topic}${reply}${promiseTo}\n${m.content}`;
-  }).join('\n\n');
+  // NEW: Soft delete mocks
+  softRemove: jest.fn(),
+  recover: jest.fn(),
+  findAndCount: jest.fn(),
+  remove: jest.fn(),  // Для hardDelete
 
-  return `
-Ты — агент извлечения знаний из переписки.
-Анализируй сообщения и создавай факты, события и связи через доступные инструменты.
-
-══════════════════════════════════════════
-КОНТЕКСТ СОБЕСЕДНИКА (${entityName}):
-${entityContext}
-${relationsContext}
-══════════════════════════════════════════
-
-══════════════════════════════════════════
-§ ФАКТЫ — правила извлечения
-══════════════════════════════════════════
-1. Факты принадлежат КОНКРЕТНЫМ сущностям.
-2. "Маша работает в Сбере" → create_fact для Маши (найди через find_entity_by_name), НЕ для текущего контакта.
-3. Если упомянут человек из связей — загрузи его контекст через get_entity_context.
-4. Если упомянут новый человек — создай через create_pending_entity.
-5. НЕ дублируй уже известные факты (сверяйся с контекстом выше).
-6. Типы фактов: position, company, birthday, phone, email, location, education, hobby, family, preference.
-
-══════════════════════════════════════════
-§ СОБЫТИЯ — правила извлечения
-══════════════════════════════════════════
-1. ТИПЫ:
-   - meeting: встречи, созвоны, переговоры
-   - promise_by_me: обещание в ИСХОДЯЩЕМ сообщении (→)
-   - promise_by_them: обещание во ВХОДЯЩЕМ сообщении (←)
-   - deadline: дедлайны, сроки
-   - birthday: дни рождения
-   - general: прочие события
-
-2. ОПРЕДЕЛЕНИЕ ТИПА ОБЕЩАНИЙ — ТОЛЬКО по направлению сообщения:
-   - Сообщение "→ ИСХОДЯЩЕЕ" + обещание → promise_by_me
-   - Сообщение "← ВХОДЯЩЕЕ" + обещание → promise_by_them
-   - НИКОГДА не определяй тип обещания по тексту сообщения
-
-3. АБСТРАКТНЫЕ СОБЫТИЯ:
-   - Нет конкретной даты или деталей → needsEnrichment: true
-   - "давай встретимся" → meeting + needsEnrichment: true
-   - "встреча 15 января в 14:00" → meeting + needsEnrichment: false
-
-4. PROMISE RECIPIENT:
-   - Для promise_by_me: используй promiseToEntityId из метаданных сообщения
-   - promiseToEntityId уже вычислен и указан в каждом сообщении
-
-5. entityId и sourceMessageId:
-   - entityId: используй entityId из метаданных конкретного сообщения
-   - sourceMessageId: используй msgId из метаданных сообщения
-
-══════════════════════════════════════════
-§ СВЯЗИ — правила извлечения
-══════════════════════════════════════════
-1. "работает в ..." → create_relation(employment, [person/employee, org/employer])
-2. "мой начальник" → create_relation(reporting, [me/subordinate, boss/manager])
-3. "жена/муж" → create_relation(marriage, [spouse, spouse])
-4. Не дублируй уже известные связи (сверяйся с контекстом).
-
-══════════════════════════════════════════
-СООБЩЕНИЯ ДЛЯ АНАЛИЗА:
-══════════════════════════════════════════
-${messageBlock}
-
-══════════════════════════════════════════
-ЗАДАНИЕ:
-Проанализируй сообщения. Для каждого найденного факта, события или связи — вызови соответствующий инструмент.
-После завершения заполни итоговую сводку.
-`;
-}
-```
-
-### 2.4 Output Schema
-
-```typescript
-const UNIFIED_EXTRACTION_SCHEMA = {
-  type: 'object',
-  properties: {
-    factsCreated: { type: 'number', description: 'Количество созданных фактов' },
-    eventsCreated: { type: 'number', description: 'Количество созданных событий' },
-    relationsCreated: { type: 'number', description: 'Количество созданных связей' },
-    pendingEntities: { type: 'number', description: 'Количество pending entities' },
-    summary: { type: 'string', description: 'Краткая сводка что извлечено' },
+  manager: {
+    transaction: jest.fn(),
+    findOne: jest.fn(),
+    save: jest.fn(),
+    query: jest.fn(),  // Для checkEntityReferences
   },
-  required: ['factsCreated', 'eventsCreated', 'relationsCreated', 'pendingEntities', 'summary'],
 };
 ```
 
-### 2.5 Типы
-
-**Файл:** `apps/pkg-core/src/modules/extraction/unified-extraction.types.ts`
+#### 4.2 Исправить тест remove()
 
 ```typescript
-export interface UnifiedExtractionParams {
-  entityId: string;
-  entityName: string;
-  messages: FormattedMessage[];
-  interactionId: string;
-}
+describe('remove', () => {
+  it('should soft delete entity', async () => {
+    const entity = createMockEntity();
+    mockEntityRepo.findOne.mockResolvedValue(entity);
+    mockEntityRepo.softRemove.mockResolvedValue({ ...entity, deletedAt: new Date() });
 
-export interface UnifiedExtractionResult {
-  factsCreated: number;
-  eventsCreated: number;
-  relationsCreated: number;
-  pendingEntities: number;
-  turns: number;
-  toolsUsed: string[];
-}
+    const result = await service.remove(entity.id);
 
-export interface UnifiedExtractionResponse {
-  factsCreated: number;
-  eventsCreated: number;
-  relationsCreated: number;
-  pendingEntities: number;
-  summary: string;
-}
+    expect(mockEntityRepo.softRemove).toHaveBeenCalledWith(entity);
+    expect(result.deleted).toBe(true);
+    expect(result.id).toBe(entity.id);
+  });
+
+  it('should prevent deleting owner entity', async () => {
+    const ownerEntity = createMockEntity({ isOwner: true });
+    mockEntityRepo.findOne.mockResolvedValue(ownerEntity);
+
+    await expect(service.remove(ownerEntity.id))
+      .rejects.toThrow(BadRequestException);
+
+    expect(mockEntityRepo.softRemove).not.toHaveBeenCalled();
+  });
+});
 ```
 
----
+#### 4.3 Добавить тесты для новых методов
 
-## Шаг 3: Упрощение FactExtractionProcessor
-
-**Файл:** `apps/pkg-core/src/modules/job/processors/fact-extraction.processor.ts`
-
-### 3.1 Замена 3 вызовов на 1
-
-**Было:**
 ```typescript
-// 1. Facts (agent)
-const factResult = await this.factExtractionService.extractFactsAgentBatch({...});
+describe('restore', () => {
+  it('should restore soft-deleted entity', async () => {
+    const deletedEntity = createMockEntity({ deletedAt: new Date() });
+    mockEntityRepo.findOne
+      .mockResolvedValueOnce(deletedEntity)  // withDeleted: true
+      .mockResolvedValueOnce({ ...deletedEntity, deletedAt: null });  // after recover
+    mockEntityRepo.recover.mockResolvedValue({ ...deletedEntity, deletedAt: null });
 
-// 2. Events legacy (oneshot)
-const eventResult = await this.eventExtractionService.extractEventsBatch({...});
+    const result = await service.restore(deletedEntity.id);
 
-// 3. SecondBrain events (oneshot)
-const replyToInfoMap = await this.promiseRecipientService.loadReplyToInfo(...);
-const secondBrainMessages = await Promise.all(messages.map(...));
-const secondBrainResults = await this.secondBrainExtractionService.extractFromMessages(...);
-```
+    expect(mockEntityRepo.recover).toHaveBeenCalledWith(deletedEntity);
+    expect(result.deletedAt).toBeNull();
+  });
 
-**Стало:**
-```typescript
-// Единый вызов
-const result = await this.unifiedExtractionService.extract({
-  entityId,
-  entityName: entity.name,
-  messages: formattedMessages,
-  interactionId,
+  it('should throw if entity not deleted', async () => {
+    const activeEntity = createMockEntity({ deletedAt: null });
+    mockEntityRepo.findOne.mockResolvedValue(activeEntity);
+
+    await expect(service.restore(activeEntity.id))
+      .rejects.toThrow(BadRequestException);
+  });
 });
 
-this.logger.log(
-  `Extraction complete for interaction ${interactionId}: ` +
-  `${result.factsCreated} facts, ${result.eventsCreated} events, ` +
-  `${result.relationsCreated} relations`
-);
+describe('findDeleted', () => {
+  it('should return soft-deleted entities', async () => {
+    const deletedEntities = [
+      createMockEntity({ deletedAt: new Date() }),
+      createMockEntity({ deletedAt: new Date() }),
+    ];
+    mockEntityRepo.findAndCount.mockResolvedValue([deletedEntities, 2]);
+
+    const result = await service.findDeleted({ limit: 10 });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.total).toBe(2);
+    expect(mockEntityRepo.findAndCount).toHaveBeenCalledWith(
+      expect.objectContaining({ withDeleted: true })
+    );
+  });
+});
+
+describe('hardDelete', () => {
+  it('should permanently delete entity without references', async () => {
+    const entity = createMockEntity();
+    mockEntityRepo.findOne.mockResolvedValue(entity);
+    mockEntityRepo.manager.query
+      .mockResolvedValueOnce([{ count: '0' }])  // activities
+      .mockResolvedValueOnce([{ count: '0' }])  // commitments
+      .mockResolvedValueOnce([{ count: '0' }]); // participations
+
+    const result = await service.hardDelete(entity.id, true);
+
+    expect(mockEntityRepo.remove).toHaveBeenCalledWith(entity);
+    expect(result.hardDeleted).toBe(true);
+  });
+
+  it('should reject without confirm=true', async () => {
+    await expect(service.hardDelete('any-id', false))
+      .rejects.toThrow(BadRequestException);
+  });
+
+  it('should reject if entity has references', async () => {
+    const entity = createMockEntity();
+    mockEntityRepo.findOne.mockResolvedValue(entity);
+    mockEntityRepo.manager.query
+      .mockResolvedValueOnce([{ count: '5' }])  // activities
+      .mockResolvedValueOnce([{ count: '0' }])
+      .mockResolvedValueOnce([{ count: '0' }]);
+
+    await expect(service.hardDelete(entity.id, true))
+      .rejects.toThrow(ConflictException);
+  });
+});
 ```
 
-### 3.2 Что остаётся в процессоре
+---
 
-- `ConversationGrouperService.formatMessages()` — препроцессинг, остаётся
-- Entity lookup по `entityId` — остаётся
-- Bot-message filtering — остаётся
-- Job result logging — остаётся
+### Шаг 5: Тест subject-resolver (P1)
 
-### 3.3 Что удаляется из процессора
+**Файл:** `apps/pkg-core/src/modules/extraction/subject-resolver.service.spec.ts`
 
-- Вызов `factExtractionService.extractFactsAgentBatch()`
-- Вызов `eventExtractionService.extractEventsBatch()`
-- Вся логика построения `secondBrainMessages` (replyToInfo, promiseRecipient resolve per message)
-- Вызов `secondBrainExtractionService.extractFromMessages()`
-- Зависимости: `FactExtractionService`, `EventExtractionService`, `SecondBrainExtractionService`, `PromiseRecipientService` — заменяются на `UnifiedExtractionService`
+Тест уже содержит правильный mock с `deletedAt: null` (строки 61-64). Проверить что все helper-функции корректны.
 
 ---
 
-## Шаг 4: Логирование
+### Шаг 6: Race Condition в restore() (P2)
 
-### 4.1 Уровни логов
+**Проблема:** Параллельные вызовы `restore()` могут привести к двойному восстановлению.
 
-| Что | Уровень | Где |
-|-----|---------|-----|
-| Prompt целиком | `debug` | `UnifiedExtractionService.extract()` |
-| Tool calls агента | `debug` | `ClaudeAgentService.executeAgent()` (уже есть) |
-| Результат (counters) | `log` | `UnifiedExtractionService.extract()` |
-| ClaudeAgentRun entity | DB | `ClaudeAgentService` (уже есть, сохраняет inputPreview/outputPreview) |
+**Решение:** Использовать optimistic locking или SELECT FOR UPDATE.
 
-### 4.2 Существующее логирование в ClaudeAgentService
+```typescript
+async restore(id: string): Promise<EntityRecord> {
+  return this.entityRepo.manager.transaction(async (manager) => {
+    // SELECT FOR UPDATE предотвращает race condition
+    const entity = await manager
+      .createQueryBuilder(EntityRecord, 'e')
+      .setLock('pessimistic_write')
+      .where('e.id = :id', { id })
+      .withDeleted()
+      .getOne();
 
-`ClaudeAgentService.executeAgent()` уже логирует:
-- Tool usage tracking (`processAssistantMessage` → toolsUsed array)
-- `ClaudeAgentRun` entity в БД: taskType, model, tokens, cost, duration, toolsUsed, inputPreview (500 chars), outputPreview (500 chars)
-- Достаточно добавить `taskType: 'unified_extraction'` в `ClaudeTaskType` enum
+    if (!entity) {
+      throw new NotFoundException(`Entity with id '${id}' not found`);
+    }
 
-### 4.3 Новый taskType
+    if (!entity.deletedAt) {
+      throw new BadRequestException(`Entity '${id}' is not deleted`);
+    }
 
-**Файл:** `packages/entities/src/claude-agent-run.entity.ts`
+    await manager.recover(EntityRecord, entity);
 
-Добавить `'unified_extraction'` в `ClaudeTaskType`.
+    return manager.findOne(EntityRecord, {
+      where: { id },
+      relations: ['organization', 'identifiers', 'facts'],
+    });
+  });
+}
+```
 
 ---
 
-## Шаг 5: Deprecation
+### Шаг 7: Organization Cascade (P2)
 
-### 5.1 Файлы для deprecation (не удаляем сразу)
+**Проблема:** При soft delete организации сотрудники остаются с `organizationId` указывающим на удалённую организацию.
 
-| Файл | Действие |
-|------|----------|
-| `EventExtractionService` | Пометить `@deprecated`, удалить при следующем cleanup |
-| `SecondBrainExtractionService.extractFromMessages()` | Пометить `@deprecated` |
-| `SecondBrainExtractionService.extractFromMessage()` | Пометить `@deprecated` |
-| `SecondBrainExtractionService.buildPrompt()` | Пометить `@deprecated` |
+**Варианты:**
 
-### 5.2 Что остаётся в SecondBrainExtractionService
+| Вариант | Плюсы | Минусы |
+|---------|-------|--------|
+| A. Cascade soft delete | Консистентность | Неожиданное поведение |
+| B. Clear organizationId | Простота | Потеря связи |
+| C. Оставить как есть | Минимум изменений | Нужна проверка при чтении |
 
-Utility-методы, используемые другими сервисами:
-- `normalizeEventData()` — нормализация данных событий
-- `mapEventType()` — маппинг типов событий
-- Эти методы могут переехать в `ExtractedEventService` или остаться как утилиты
+**Рекомендация:** Вариант C + добавить проверку в `findOne()`:
+
+```typescript
+async findOne(id: string) {
+  const entity = await this.entityRepo.findOne({
+    where: { id },
+    relations: ['organization', 'identifiers', 'facts'],
+  });
+
+  if (!entity) {
+    throw new NotFoundException(`Entity with id '${id}' not found`);
+  }
+
+  // Проверка: если organization удалена — скрыть связь
+  if (entity.organization?.deletedAt) {
+    entity.organization = null;
+    entity.organizationId = null;
+  }
+
+  return entity;
+}
+```
 
 ---
 
 ## Файлы для модификации
 
-### Новые файлы
-```
-apps/pkg-core/src/modules/extraction/
-├── unified-extraction.service.ts     # Основной сервис
-└── unified-extraction.types.ts       # Типы
-```
-
-### Модифицируемые файлы
-```
-apps/pkg-core/src/modules/extraction/tools/extraction-tools.provider.ts  # +create_event tool
-apps/pkg-core/src/modules/extraction/extraction.module.ts                # +UnifiedExtractionService, +deps
-apps/pkg-core/src/modules/job/processors/fact-extraction.processor.ts    # Упрощение до 1 вызова
-packages/entities/src/claude-agent-run.entity.ts                         # +unified_extraction taskType
-```
-
-### Deprecated (не удаляем)
-```
-apps/pkg-core/src/modules/extraction/event-extraction.service.ts         # @deprecated
-apps/pkg-core/src/modules/extraction/second-brain-extraction.service.ts  # extractFromMessages @deprecated
-```
+| Файл | Изменение | Приоритет |
+|------|-----------|-----------|
+| `search/fts.service.ts` | 3 SQL фильтра | P1 |
+| `search/vector.service.ts` | 3 SQL фильтра | P1 |
+| `entity-identifier/entity-identifier.service.ts` | deletedAt check | P1 |
+| `entity/entity.service.ts` | hardDelete FK check, restore lock | P1/P2 |
+| `entity/entity.service.spec.ts` | Моки + новые тесты | P1 |
 
 ---
 
 ## Порядок реализации
 
 ```
-Шаг 1 ──► Шаг 2 ──► Шаг 3 ──► Шаг 4 ──► Шаг 5
-  │           │           │          │          │
-  ▼           ▼           ▼          ▼          ▼
-create_event  Unified     Processor  Logging    Deprecation
-tool          Service     simplify   taskType   markers
+Шаг 1 ──► Шаг 2 ──► Шаг 3 ──► Шаг 4 ──► Шаг 5 ──► Шаг 6 ──► Шаг 7
+  │          │         │          │         │         │         │
+  ▼          ▼         ▼          ▼         ▼         ▼         ▼
+ FTS/Vec   Ident    HardDel    Tests     Subj     Restore    Org
+ filters   check    FK check   fix       test     lock       cascade
 ```
+
+**Критический путь:** Шаги 1-4 блокируют production readiness.
 
 ---
 
 ## Verification
 
-### Сборка
+### 1. Сборка
 ```bash
 cd apps/pkg-core && pnpm build
 ```
 
-### Тест tool create_event
-1. Запустить `pnpm dev` на pkg-core
-2. Отправить тестовое сообщение "Давай встретимся в пятницу в 14:00"
-3. Проверить в БД: `SELECT * FROM extracted_events ORDER BY created_at DESC LIMIT 5;`
-4. Убедиться что `status = 'pending'`, `event_type = 'meeting'`
-
-### Тест unified flow
-1. Отправить сообщение "Маша перешла в Сбер, обещала позвонить завтра"
-2. Проверить:
-   - Факт `company: Сбер` создан для Маши (не для контакта)
-   - Событие `promise_by_them` создано с `needsEnrichment: false`
-3. Логи: `LOG_LEVEL=debug pnpm dev` → видим полный prompt в stdout
-
-### Тест promise direction
-1. Отправить ИСХОДЯЩЕЕ: "Я пришлю документы завтра" → `promise_by_me`
-2. Получить ВХОДЯЩЕЕ: "Пришлю документы завтра" → `promise_by_them`
-3. Убедиться что тип определён по `isOutgoing`, не по тексту
-
-### Тест абстрактных событий
-1. "Надо бы встретиться" → `meeting` + `needsEnrichment: true`
-2. Проверить: событие в очереди `enrichment` в BullMQ
-
-### Проверка логов
+### 2. Тесты
 ```bash
-# Debug: полный prompt
-LOG_LEVEL=debug pnpm dev 2>&1 | grep "unified-extraction"
+cd apps/pkg-core && pnpm test entity.service
+cd apps/pkg-core && pnpm test subject-resolver
+```
 
-# В БД: agent runs
-SELECT task_type, model, turns_count, tools_used, duration_ms,
-       input_preview, output_preview
-FROM claude_agent_runs
-WHERE task_type = 'unified_extraction'
-ORDER BY created_at DESC LIMIT 5;
+### 3. SQL фильтрация (ручная проверка)
+```sql
+-- Создать deleted entity
+UPDATE entities SET deleted_at = NOW() WHERE id = 'test-uuid';
+
+-- FTS поиск НЕ должен возвращать сообщения от этой entity
+SELECT * FROM search_fts('test query');
+
+-- Vector поиск аналогично
+SELECT * FROM search_vector('test embedding');
+```
+
+### 4. Entity Resolution
+```bash
+# Через API: поиск по идентификатору удалённой entity
+curl localhost:3000/entities/resolve?type=telegram_id&value=12345
+# Ожидание: 404 или pending resolution
+```
+
+### 5. Hard Delete Protection
+```bash
+# Попытка hard delete entity с activities
+curl -X DELETE "localhost:3000/entities/{id}/hard?confirm=true"
+# Ожидание: 409 Conflict с описанием references
 ```
 
 ---
@@ -569,9 +482,7 @@ ORDER BY created_at DESC LIMIT 5;
 
 | Риск | Митигация |
 |------|-----------|
-| Агент не вызывает create_event | Чёткие секции §EVENTS в prompt + примеры в tool description |
-| Неправильный promise type | isOutgoing в метаданных сообщения, rule в prompt повторён 2 раза |
-| Timeout на большом batch | maxTurns: 15, timeout: 180s, batch messages уже группированы |
-| Агент путает entityId | Каждое сообщение содержит entityId и msgId в метаданных |
-| Потеря функциональности при замене | Deprecated файлы сохранены, можно откатить |
-| create_event создаёт дубликаты | ExtractedEvent не имеет dedup (в отличие от facts), но PENDING статус + title/date уникальность покрывают |
+| SQL фильтры ломают существующие запросы | Тесты перед деплоем |
+| findByIdentifier null ломает caller | Все callers уже обрабатывают null |
+| checkEntityReferences медленный | Параллельные count запросы |
+| restore lock deadlocks | Короткая транзакция, один ресурс |
