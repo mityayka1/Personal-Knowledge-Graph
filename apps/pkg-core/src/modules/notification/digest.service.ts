@@ -236,8 +236,20 @@ export class DigestService {
       });
     }
 
+    // Deduplicate: collect sourceMessageIds from EntityEvent-based items
+    const seenSourceMessageIds = new Set<string>();
+    for (const commitment of data.overdueCommitments) {
+      if (commitment.sourceMessageId) {
+        seenSourceMessageIds.add(commitment.sourceMessageId);
+      }
+    }
+
     // Pending commitments (from Commitment table)
     for (const commitment of data.pendingCommitments) {
+      // Skip if already shown from EntityEvent
+      if (commitment.sourceMessageId && seenSourceMessageIds.has(commitment.sourceMessageId)) {
+        continue;
+      }
       const isOverdue = commitment.dueDate && commitment.dueDate < new Date();
       const daysInfo = commitment.dueDate
         ? isOverdue
