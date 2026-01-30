@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 
-import { telegramConfig, apiConfig } from './common/config';
+import { telegramConfig, apiConfig, redisConfig } from './common/config';
 import { TelegramModule } from './telegram/telegram.module';
 import { ApiModule } from './api/api.module';
 import { BotModule } from './bot/bot.module';
@@ -11,7 +11,7 @@ import { BotModule } from './bot/bot.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [telegramConfig, apiConfig],
+      load: [telegramConfig, apiConfig, redisConfig],
       envFilePath: ['.env.local', '.env'],
     }),
 

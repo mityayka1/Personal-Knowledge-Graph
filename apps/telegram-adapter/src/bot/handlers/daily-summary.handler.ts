@@ -6,6 +6,7 @@ import {
   RecallSource,
   ExtractionCarouselNavResponse,
 } from '../../api/pkg-core-api.service';
+import { DailyContextCacheService, DailyContext } from '../../common/cache';
 
 /** Callback prefix for daily summary actions */
 const DAILY_CALLBACK_PREFIX = 'ds_';
@@ -15,13 +16,6 @@ const EXTRACTION_CAROUSEL_PREFIX = 'exc_';
 
 /** Valid model values */
 type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
-
-interface DailyContext {
-  dateStr: string;
-  lastAnswer: string;
-  sources: RecallSource[];
-  model?: ClaudeModel;
-}
 
 /**
  * Handler for /daily command — comprehensive daily summary using LLM recall
@@ -36,13 +30,10 @@ interface DailyContext {
 export class DailySummaryHandler {
   private readonly logger = new Logger(DailySummaryHandler.name);
 
-  /**
-   * Context stored by bot's messageId.
-   * Allows reply to any message in the conversation chain.
-   */
-  private contextByMessageId = new Map<number, DailyContext>();
-
-  constructor(private readonly pkgCoreApi: PkgCoreApiService) {}
+  constructor(
+    private readonly pkgCoreApi: PkgCoreApiService,
+    private readonly dailyContextCache: DailyContextCacheService,
+  ) {}
 
   /**
    * Check if this handler can process the callback
@@ -91,7 +82,7 @@ export class DailySummaryHandler {
     }
 
     const messageId = parseInt(match[1], 10);
-    const dailyContext = this.contextByMessageId.get(messageId);
+    const dailyContext = await this.dailyContextCache.get(messageId);
 
     if (!dailyContext) {
       await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
@@ -131,7 +122,7 @@ export class DailySummaryHandler {
     }
 
     const messageId = parseInt(match[1], 10);
-    const dailyContext = this.contextByMessageId.get(messageId);
+    const dailyContext = await this.dailyContextCache.get(messageId);
 
     if (!dailyContext) {
       await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
@@ -616,7 +607,7 @@ export class DailySummaryHandler {
     if (!message?.reply_to_message) return false;
 
     const replyToMessageId = message.reply_to_message.message_id;
-    const dailyContext = this.contextByMessageId.get(replyToMessageId);
+    const dailyContext = await this.dailyContextCache.get(replyToMessageId);
 
     if (!dailyContext) return false;
 
@@ -676,13 +667,11 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
       const sentMessages = await this.sendMessage(ctx, formattedResponse, isInitial);
 
       // Save context for each sent message (for reply-based follow-up and save action)
+      // Using Redis cache with TTL - no manual cleanup needed
       const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources, model };
       for (const sentMessage of sentMessages) {
-        this.contextByMessageId.set(sentMessage.message_id, dailyContext);
+        await this.dailyContextCache.set(sentMessage.message_id, dailyContext);
       }
-
-      // Cleanup old contexts (keep last 100)
-      this.cleanupOldContexts();
 
       this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} completed for user ${ctx.from?.id}`);
     } catch (error) {
@@ -878,20 +867,5 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
       );
     }
     return false;
-  }
-
-  /**
-   * Cleanup old contexts to prevent memory leak.
-   * Keeps only the last 100 message contexts.
-   */
-  private cleanupOldContexts(): void {
-    const MAX_CONTEXTS = 100;
-    if (this.contextByMessageId.size > MAX_CONTEXTS) {
-      const keysToDelete = Array.from(this.contextByMessageId.keys())
-        .slice(0, this.contextByMessageId.size - MAX_CONTEXTS);
-      for (const key of keysToDelete) {
-        this.contextByMessageId.delete(key);
-      }
-    }
   }
 }
