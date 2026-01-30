@@ -117,9 +117,14 @@ export class ClaudeAgentService {
       // Use SDK outputFormat for reliable structured output.
       // No manual "output JSON only" system prompt needed —
       // SDK handles format enforcement via constrained decoding.
+      //
+      // IMPORTANT: maxTurns must be >= 2 for structured output because:
+      // - Turn 1: Claude calls StructuredOutput tool
+      // - Turn 2: Claude completes after tool result
+      // Default is 3 for safety margin.
       const queryOptions: Record<string, unknown> = {
         model,
-        maxTurns: params.maxTurns || 1,
+        maxTurns: params.maxTurns || 3,
         abortController,
         outputFormat: {
           type: 'json_schema',

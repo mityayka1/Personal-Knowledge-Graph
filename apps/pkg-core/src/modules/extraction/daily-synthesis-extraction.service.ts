@@ -64,13 +64,15 @@ export class DailySynthesisExtractionService {
     });
 
     // Call Claude with structured output
+    // Note: maxTurns must be >= 2 when using outputFormat with json_schema
+    // because Claude needs one turn to call StructuredOutput tool and another to complete
     const result = await this.claudeAgentService.call<DailySynthesisExtractionResponse>({
       mode: 'oneshot',
       taskType: 'daily_brief', // Reusing existing task type
       prompt,
       model: 'haiku', // Fast and cheap for extraction
       schema: DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
-      maxTurns: 1,
+      maxTurns: 3, // 2 minimum for structured output, 3 for safety
       timeout: 60000, // 1 minute
     });
 
