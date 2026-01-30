@@ -321,34 +321,81 @@ export class DailySummaryHandler {
     try {
       const statsResult = await this.pkgCoreApi.getExtractionCarouselStats(carouselId);
 
-      if (statsResult.success && statsResult.stats) {
-        const { confirmed, skipped, confirmedByType } = statsResult.stats;
+      if (!statsResult.success || !statsResult.stats) {
+        return;
+      }
 
-        if (confirmed > 0) {
-          // TODO: In Phase 3, persist confirmed items as Activities/Commitments
-          const parts: string[] = [];
-          if (confirmedByType.projects > 0) {
-            parts.push(`${confirmedByType.projects} проект(ов)`);
-          }
-          if (confirmedByType.tasks > 0) {
-            parts.push(`${confirmedByType.tasks} задач(и)`);
-          }
-          if (confirmedByType.commitments > 0) {
-            parts.push(`${confirmedByType.commitments} обязательств(а)`);
-          }
+      const { confirmed, skipped, confirmedByType } = statsResult.stats;
 
-          await ctx.reply(
-            `🎉 Подтверждено: ${parts.join(', ')}.\n` +
-              (skipped > 0 ? `⏭️ Пропущено: ${skipped}` : '') +
-              '\n\n<i>Сохранение в базу будет добавлено в следующей фазе.</i>',
-            { parse_mode: 'HTML' },
-          );
-        } else if (skipped > 0) {
+      if (confirmed === 0) {
+        if (skipped > 0) {
           await ctx.reply(`⏭️ Все ${skipped} элементов пропущены.`);
         }
+        return;
       }
+
+      // Get owner entity for persistence
+      const owner = await this.pkgCoreApi.getOwnerEntity();
+      if (!owner) {
+        this.logger.warn('Owner entity not found, cannot persist extraction results');
+        await ctx.reply(
+          `⚠️ Подтверждено ${confirmed} элементов, но не найден владелец для сохранения.\n` +
+            'Используйте /settings для настройки.',
+          { parse_mode: 'HTML' },
+        );
+        return;
+      }
+
+      // Persist confirmed items as Activity/Commitment entities
+      const persistResult = await this.pkgCoreApi.persistExtractionCarousel(
+        carouselId,
+        owner.id,
+      );
+
+      if (!persistResult.success) {
+        this.logger.error(`Failed to persist carousel: ${persistResult.error}`);
+        await ctx.reply(`❌ Ошибка сохранения: ${persistResult.error}`);
+        return;
+      }
+
+      // Format success message
+      const result = persistResult.result!;
+      const lines: string[] = ['✅ <b>Сохранено в базу:</b>'];
+
+      if (result.projectsCreated > 0) {
+        lines.push(`  🏗 Проектов: ${result.projectsCreated}`);
+      }
+      if (result.tasksCreated > 0) {
+        lines.push(`  📋 Задач: ${result.tasksCreated}`);
+      }
+      if (result.commitmentsCreated > 0) {
+        lines.push(`  🤝 Обязательств: ${result.commitmentsCreated}`);
+      }
+
+      if (skipped > 0) {
+        lines.push(`\n⏭️ Пропущено: ${skipped}`);
+      }
+
+      if (result.errors.length > 0) {
+        lines.push(`\n⚠️ Ошибки (${result.errors.length}):`);
+        for (const err of result.errors.slice(0, 3)) {
+          lines.push(`  • ${err.item}: ${err.error}`);
+        }
+        if (result.errors.length > 3) {
+          lines.push(`  • ...и ещё ${result.errors.length - 3}`);
+        }
+      }
+
+      await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+
+      this.logger.log(
+        `Carousel ${carouselId} persisted: ${result.projectsCreated} projects, ` +
+          `${result.tasksCreated} tasks, ${result.commitmentsCreated} commitments ` +
+          `(${result.errors.length} errors)`,
+      );
     } catch (error) {
-      this.logger.error(`Failed to get carousel stats: ${(error as Error).message}`);
+      this.logger.error(`Failed to complete carousel: ${(error as Error).message}`);
+      await ctx.reply('❌ Ошибка при завершении карусели');
     }
   }
 

@@ -19,6 +19,10 @@ import {
   ExtractedTask,
   ExtractedCommitment,
 } from './daily-synthesis-extraction.types';
+import {
+  ExtractionPersistenceService,
+  PersistExtractionResult,
+} from './extraction-persistence.service';
 
 // ─────────────────────────────────────────────────────────────────
 // DTOs
@@ -45,6 +49,11 @@ class CreateExtractionCarouselDto {
 
   @ApiProperty({ required: false, description: 'Focus topic if specified' })
   focusTopic?: string;
+}
+
+class PersistExtractionDto {
+  @ApiProperty({ description: 'Owner entity ID (user entity)' })
+  ownerEntityId: string;
 }
 
 interface ExtractionCarouselNavResponse {
@@ -96,6 +105,7 @@ export class ExtractionCarouselController {
 
   constructor(
     private readonly carouselService: ExtractionCarouselStateService,
+    private readonly persistenceService: ExtractionPersistenceService,
   ) {}
 
   /**
@@ -424,6 +434,80 @@ export class ExtractionCarouselController {
     }
 
     return { success: true, stats };
+  }
+
+  /**
+   * Persist confirmed items as database entities
+   */
+  @Post(':id/persist')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Persist confirmed items as Activity/Commitment entities' })
+  @ApiParam({ name: 'id', description: 'Carousel ID' })
+  @ApiBody({ type: PersistExtractionDto })
+  @ApiResponse({ status: 200, description: 'Persistence result' })
+  async persistConfirmed(
+    @Param('id') carouselId: string,
+    @Body() dto: PersistExtractionDto,
+  ): Promise<{
+    success: boolean;
+    result?: PersistExtractionResult;
+    error?: string;
+  }> {
+    try {
+      const state = await this.carouselService.get(carouselId);
+
+      if (!state) {
+        return { success: false, error: 'Carousel not found or expired' };
+      }
+
+      const confirmed = await this.carouselService.getConfirmedItems(carouselId);
+
+      if (!confirmed) {
+        return { success: false, error: 'Failed to get confirmed items' };
+      }
+
+      // Check if there's anything to persist
+      const totalConfirmed =
+        confirmed.projects.length +
+        confirmed.tasks.length +
+        confirmed.commitments.length;
+
+      if (totalConfirmed === 0) {
+        return {
+          success: true,
+          result: {
+            activityIds: [],
+            commitmentIds: [],
+            projectsCreated: 0,
+            tasksCreated: 0,
+            commitmentsCreated: 0,
+            errors: [],
+          },
+        };
+      }
+
+      // Persist confirmed items
+      const result = await this.persistenceService.persist({
+        ownerEntityId: dto.ownerEntityId,
+        projects: confirmed.projects,
+        tasks: confirmed.tasks,
+        commitments: confirmed.commitments,
+        synthesisDate: state.synthesisDate,
+        focusTopic: state.focusTopic,
+      });
+
+      this.logger.log(
+        `Carousel ${carouselId}: persisted ${result.projectsCreated} projects, ` +
+          `${result.tasksCreated} tasks, ${result.commitmentsCreated} commitments ` +
+          `(${result.errors.length} errors)`,
+      );
+
+      return { success: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Failed to persist carousel ${carouselId}: ${message}`);
+      return { success: false, error: message };
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────

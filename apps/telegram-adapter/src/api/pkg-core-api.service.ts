@@ -337,6 +337,25 @@ export interface ExtractionCarouselConfirmedResponse {
   error?: string;
 }
 
+export interface PersistExtractionDto {
+  ownerEntityId: string;
+}
+
+export interface PersistExtractionResult {
+  activityIds: string[];
+  commitmentIds: string[];
+  projectsCreated: number;
+  tasksCreated: number;
+  commitmentsCreated: number;
+  errors: Array<{ item: string; error: string }>;
+}
+
+export interface PersistExtractionResponse {
+  success: boolean;
+  result?: PersistExtractionResult;
+  error?: string;
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -1068,6 +1087,26 @@ export class PkgCoreApiService {
     return this.withRetry(async () => {
       const response = await this.client.get<ExtractionCarouselConfirmedResponse>(
         `/extraction-carousel/${carouselId}/confirmed`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Persist confirmed extraction items as Activity/Commitment entities
+   * Call this when carousel is complete to save confirmed items to database.
+   *
+   * @param carouselId Carousel ID
+   * @param ownerEntityId Owner entity ID (user's entity)
+   */
+  async persistExtractionCarousel(
+    carouselId: string,
+    ownerEntityId: string,
+  ): Promise<PersistExtractionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PersistExtractionResponse>(
+        `/extraction-carousel/${carouselId}/persist`,
+        { ownerEntityId } as PersistExtractionDto,
       );
       return response.data;
     });

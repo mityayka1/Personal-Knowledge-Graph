@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Activity, ActivityMember, Commitment } from '@pkg/entities';
 import { ActivityService } from './activity.service';
+import { CommitmentService } from './commitment.service';
 
 /**
  * ActivityModule — модуль для управления активностями.
@@ -19,7 +20,7 @@ import { ActivityService } from './activity.service';
   imports: [
     TypeOrmModule.forFeature([Activity, ActivityMember, Commitment]),
   ],
-  providers: [ActivityService],
-  exports: [ActivityService],
+  providers: [ActivityService, CommitmentService],
+  exports: [ActivityService, CommitmentService],
 })
 export class ActivityModule {}

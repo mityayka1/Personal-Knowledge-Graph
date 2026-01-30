@@ -1,7 +1,15 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { EntityFact, EntityEvent, ExtractedEvent, Message, Interaction, Activity } from '@pkg/entities';
+import {
+  EntityFact,
+  EntityEvent,
+  ExtractedEvent,
+  Message,
+  Interaction,
+  Activity,
+  EntityRecord,
+} from '@pkg/entities';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelevanceFilterService } from './relevance-filter.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
@@ -22,6 +30,7 @@ import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
 import { UnifiedExtractionService } from './unified-extraction.service';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
 import { ExtractionCarouselStateService } from './extraction-carousel-state.service';
+import { ExtractionPersistenceService } from './extraction-persistence.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
@@ -31,10 +40,19 @@ import { SettingsModule } from '../settings/settings.module';
 import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
 import { ConfirmationModule } from '../confirmation/confirmation.module';
+import { ActivityModule } from '../activity/activity.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityFact, EntityEvent, ExtractedEvent, Message, Interaction, Activity]),
+    TypeOrmModule.forFeature([
+      EntityFact,
+      EntityEvent,
+      ExtractedEvent,
+      Message,
+      Interaction,
+      Activity,
+      EntityRecord,
+    ]),
     BullModule.registerQueue({
       name: 'enrichment',
       defaultJobOptions: {
@@ -53,6 +71,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     SearchModule,
     EmbeddingModule,
     forwardRef(() => ConfirmationModule),
+    ActivityModule,
   ],
   controllers: [ExtractionController, ExtractedEventController, ExtractionCarouselController],
   providers: [
@@ -73,6 +92,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     UnifiedExtractionService,
     DailySynthesisExtractionService,
     ExtractionCarouselStateService,
+    ExtractionPersistenceService,
   ],
   exports: [
     FactExtractionService,
@@ -91,6 +111,7 @@ import { ConfirmationModule } from '../confirmation/confirmation.module';
     UnifiedExtractionService,
     DailySynthesisExtractionService,
     ExtractionCarouselStateService,
+    ExtractionPersistenceService,
   ],
 })
 export class ExtractionModule {}
