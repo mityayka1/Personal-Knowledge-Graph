@@ -217,12 +217,21 @@ export class AgentController {
       throw new NotFoundException(`Session not found or expired: ${sessionId}`);
     }
 
-    // Multi-user safety: verify userId if both are present
-    if (userId && session.userId && session.userId !== userId) {
-      this.logger.warn(
-        `Unauthorized ${operation} attempt: session=${sessionId}, expected=${session.userId}, got=${userId}`,
-      );
-      throw new ForbiddenException('Access denied: session belongs to another user');
+    // Multi-user safety: if session has userId, request MUST provide matching userId
+    // SECURITY: Don't skip check when userId is not provided - that's an auth bypass!
+    if (session.userId) {
+      if (!userId) {
+        this.logger.warn(
+          `Missing userId for protected session: session=${sessionId}, operation=${operation}`,
+        );
+        throw new ForbiddenException('userId required to access this session');
+      }
+      if (session.userId !== userId) {
+        this.logger.warn(
+          `Unauthorized ${operation} attempt: session=${sessionId}, expected=${session.userId}, got=${userId}`,
+        );
+        throw new ForbiddenException('Access denied: session belongs to another user');
+      }
     }
 
     return session;
@@ -511,7 +520,14 @@ export class AgentController {
       const answer = structuredData?.answer || 'Не удалось найти дополнительную информацию.';
 
       // Update session with new answer (with userId for authorization)
-      await this.recallSessionService.updateAnswer(sessionId, answer, sources, dto.userId);
+      const updated = await this.recallSessionService.updateAnswer(sessionId, answer, sources, dto.userId);
+      if (!updated) {
+        // Session expired or unauthorized during follow-up - log but don't fail
+        // User still gets the answer, it just won't be persisted in session
+        this.logger.warn(
+          `Failed to update session ${sessionId} - may be expired or unauthorized. Answer returned but not persisted.`,
+        );
+      }
 
       return {
         success: true,
@@ -620,12 +636,33 @@ export class AgentController {
         this.logger.log(
           `Session ${sessionId} was saved by concurrent request, factId=${markResult.existingFactId}`,
         );
-        // Note: We created a duplicate fact, but that's acceptable for idempotency
-        // The semantic deduplication in EntityFactService will handle it
+        // Compensation: invalidate the duplicate fact we just created
+        try {
+          await this.entityFactService.invalidate(factId);
+          this.logger.log(`Invalidated duplicate fact ${factId} (concurrent save detected)`);
+        } catch (invalidateError) {
+          this.logger.warn(`Failed to invalidate duplicate fact ${factId}: ${invalidateError}`);
+        }
         return {
           success: true,
           alreadySaved: true,
           factId: markResult.existingFactId,
+        };
+      }
+
+      // Handle Redis failure - markAsSaved returned success: false
+      if (!markResult.success) {
+        this.logger.error(`Failed to mark session ${sessionId} as saved in Redis`);
+        // Compensation: invalidate the orphaned fact to prevent duplicates
+        try {
+          await this.entityFactService.invalidate(factId);
+          this.logger.log(`Invalidated orphaned fact ${factId} (Redis mark failed)`);
+        } catch (invalidateError) {
+          this.logger.warn(`Failed to invalidate orphaned fact ${factId}: ${invalidateError}`);
+        }
+        return {
+          success: false,
+          error: 'Failed to mark session as saved. Please try again.',
         };
       }
 

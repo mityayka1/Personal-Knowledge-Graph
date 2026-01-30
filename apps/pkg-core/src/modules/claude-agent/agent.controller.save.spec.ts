@@ -56,6 +56,7 @@ describe('AgentController - saveRecallSession', () => {
 
     const mockEntityFactService = {
       create: jest.fn(),
+      invalidate: jest.fn(),
     };
 
     const mockClaudeAgentService = {
@@ -138,6 +139,15 @@ describe('AgentController - saveRecallSession', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
+    it('should return 403 when session has userId but request does not provide it (security fix #126)', async () => {
+      // Session has userId = 'user123', but request doesn't provide userId
+      recallSessionService.get.mockResolvedValue(mockSession);
+
+      await expect(
+        controller.saveRecallSession('rs_test123456', {}),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
     it('should return alreadySaved when session was previously saved', async () => {
       const savedSession: RecallSession = {
         ...mockSession,
@@ -174,10 +184,11 @@ describe('AgentController - saveRecallSession', () => {
       });
     });
 
-    it('should handle concurrent save (race condition)', async () => {
+    it('should handle concurrent save (race condition) and invalidate duplicate fact (fix #127)', async () => {
       recallSessionService.get.mockResolvedValue(mockSession);
       entityService.findMe.mockResolvedValue(mockOwner as any);
       entityFactService.create.mockResolvedValue(mockFact as any);
+      entityFactService.invalidate.mockResolvedValue(true);
 
       // Simulate race condition - another request saved while we were creating fact
       recallSessionService.markAsSaved.mockResolvedValue({
@@ -195,6 +206,34 @@ describe('AgentController - saveRecallSession', () => {
         alreadySaved: true,
         factId: 'other-fact-uuid',
       });
+
+      // Should invalidate the duplicate fact we created
+      expect(entityFactService.invalidate).toHaveBeenCalledWith('fact-uuid-123');
+    });
+
+    it('should invalidate orphaned fact when Redis mark fails (fix #127)', async () => {
+      recallSessionService.get.mockResolvedValue(mockSession);
+      entityService.findMe.mockResolvedValue(mockOwner as any);
+      entityFactService.create.mockResolvedValue(mockFact as any);
+      entityFactService.invalidate.mockResolvedValue(true);
+
+      // Simulate Redis failure - markAsSaved returns success: false without alreadySaved
+      recallSessionService.markAsSaved.mockResolvedValue({
+        success: false,
+        alreadySaved: false,
+      });
+
+      const result = await controller.saveRecallSession('rs_test123456', {
+        userId: 'user123',
+      });
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Failed to mark session as saved. Please try again.',
+      });
+
+      // Should invalidate the orphaned fact to prevent duplicates
+      expect(entityFactService.invalidate).toHaveBeenCalledWith('fact-uuid-123');
     });
 
     it('should return error when fact creation fails', async () => {
