@@ -951,6 +951,198 @@ API для управления конфликтами фактов, возни�
 
 ---
 
+## Agent API (Recall Sessions)
+
+API для работы с Recall сессиями — результатами AI-поиска по истории взаимодействий.
+
+### POST /agent/recall
+
+Поиск по истории взаимодействий на естественном языке.
+
+**Request:**
+```json
+{
+  "query": "что обсуждали с Иваном на прошлой неделе?",
+  "entityId": "entity-uuid",
+  "maxTurns": 15,
+  "model": "sonnet",
+  "userId": "864381617"
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `query` | string | Да | Поисковый запрос (мин. 3 символа) |
+| `entityId` | uuid | Нет | Фильтр по конкретной entity |
+| `maxTurns` | number | Нет | Макс. итераций агента (1-20, default: 15) |
+| `model` | string | Нет | Модель Claude: haiku, sonnet, opus (default: sonnet) |
+| `userId` | string | Нет | ID пользователя для multi-user safety |
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "rs_a1b2c3d4e5f6",
+    "answer": "На прошлой неделе с Иваном обсуждали...",
+    "sources": [
+      {
+        "type": "message",
+        "id": "msg-uuid",
+        "preview": "Иван: Давай созвонимся завтра..."
+      }
+    ],
+    "toolsUsed": ["search_messages", "get_entity_context"]
+  }
+}
+```
+
+---
+
+### GET /agent/recall/session/:sessionId
+
+Получение данных сессии для follow-up операций.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `userId` | string | ID пользователя для верификации |
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "rs_a1b2c3d4e5f6",
+    "query": "что обсуждали с Иваном?",
+    "dateStr": "2025-01-30",
+    "answer": "На прошлой неделе с Иваном...",
+    "sources": [...],
+    "model": "sonnet",
+    "createdAt": 1706612400000
+  }
+}
+```
+
+**Response 403:** Unauthorized — userId не совпадает с владельцем сессии
+**Response 404:** Session not found or expired
+
+---
+
+### POST /agent/recall/session/:sessionId/followup
+
+Уточняющий вопрос в контексте существующей сессии.
+
+**Request:**
+```json
+{
+  "query": "А что насчёт дедлайнов?",
+  "model": "sonnet",
+  "userId": "864381617"
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "rs_a1b2c3d4e5f6",
+    "answer": "Дедлайны были установлены на...",
+    "sources": [...],
+    "toolsUsed": ["search_messages"]
+  }
+}
+```
+
+**Response 403:** Unauthorized
+**Response 404:** Session not found
+
+---
+
+### POST /agent/recall/session/:sessionId/save
+
+Сохранение инсайтов сессии как факт (daily_summary).
+
+**Атомарная операция:** PKG Core сам находит owner entity, создаёт fact в PostgreSQL, и помечает сессию как сохранённую. Идемпотентная операция — повторные вызовы возвращают существующий factId.
+
+**Request:**
+```json
+{
+  "userId": "864381617"
+}
+```
+
+**Response 200 (первое сохранение):**
+```json
+{
+  "success": true,
+  "alreadySaved": false,
+  "factId": "fact-uuid-from-postgresql"
+}
+```
+
+**Response 200 (повторный вызов):**
+```json
+{
+  "success": true,
+  "alreadySaved": true,
+  "factId": "fact-uuid-from-postgresql"
+}
+```
+
+**Response 200 (ошибка):**
+```json
+{
+  "success": false,
+  "error": "Owner entity not configured. Please set an owner entity first."
+}
+```
+
+**Response 403:** Unauthorized
+**Response 404:** Session not found
+
+**Создаваемый факт:**
+- `type`: daily_summary
+- `category`: personal
+- `value`: краткое превью (до 500 символов)
+- `valueJson`: { fullContent, dateStr, sessionId, query }
+- `source`: extracted
+- `confidence`: 1.0
+
+---
+
+### POST /agent/recall/session/:sessionId/extract
+
+Извлечение структурированных данных из сессии (проекты, задачи, обязательства).
+
+**Request:**
+```json
+{
+  "focusTopic": "Панавто",
+  "model": "sonnet",
+  "userId": "864381617"
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": {
+    "projects": [...],
+    "tasks": [...],
+    "commitments": [...],
+    "inferredRelations": [...],
+    "extractionSummary": "Извлечено 2 проекта...",
+    "tokensUsed": 1500,
+    "durationMs": 3200
+  }
+}
+```
+
+---
+
 ## Коды ошибок
 
 | HTTP Code | Описание |

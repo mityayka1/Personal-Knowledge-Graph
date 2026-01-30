@@ -72,9 +72,40 @@ export interface RecallSource {
 }
 
 export interface RecallResponseData {
+  /** Session ID for follow-up operations */
+  sessionId: string;
   answer: string;
   sources: RecallSource[];
   toolsUsed: string[];
+}
+
+/** Session data from PKG Core */
+export interface RecallSessionData {
+  sessionId: string;
+  query: string;
+  dateStr: string;
+  answer: string;
+  sources: RecallSource[];
+  model?: 'haiku' | 'sonnet' | 'opus';
+  createdAt: number;
+}
+
+export interface RecallSessionResponse {
+  success: boolean;
+  data: RecallSessionData;
+}
+
+/** Request for saving recall session insights */
+export interface RecallSaveRequest {
+  userId?: string;
+}
+
+/** Response from save recall session endpoint */
+export interface RecallSaveResponse {
+  success: boolean;
+  factId?: string;
+  alreadySaved?: boolean;
+  error?: string;
 }
 
 export interface RecallResponse {
@@ -474,6 +505,121 @@ export class PkgCoreApiService {
       });
       return response.data;
     });
+  }
+
+  // ============================================
+  // Recall Session API Methods
+  // ============================================
+
+  /**
+   * Get recall session data by session ID.
+   * Session contains LLM synthesis results for follow-up operations.
+   *
+   * @param sessionId Session ID from recall response (e.g., "rs_a1b2c3d4e5f6")
+   */
+  async getRecallSession(sessionId: string): Promise<RecallSessionResponse | null> {
+    try {
+      const response = await this.client.get<RecallSessionResponse>(
+        `/agent/recall/session/${sessionId}`,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null; // Session not found or expired
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Continue conversation in context of existing recall session.
+   * Uses session's sources as context for follow-up query.
+   *
+   * @param sessionId Session ID from recall response
+   * @param query Follow-up question
+   * @param model Optional Claude model (inherits from session if not specified)
+   * @param timeout Optional timeout in ms (default: 120000)
+   */
+  async followupRecall(
+    sessionId: string,
+    query: string,
+    model?: 'haiku' | 'sonnet' | 'opus',
+    timeout = 120000,
+  ): Promise<RecallResponse> {
+    return this.withRetry(async () => {
+      const body: { query: string; model?: string } = { query };
+      if (model) {
+        body.model = model;
+      }
+      const response = await this.client.post<RecallResponse>(
+        `/agent/recall/session/${sessionId}/followup`,
+        body,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Extract structured data from recall session synthesis.
+   * Extracts projects, tasks, commitments from the session's answer.
+   *
+   * @param sessionId Session ID from recall response
+   * @param focusTopic Optional focus topic for extraction
+   * @param model Optional Claude model (default: sonnet)
+   * @param timeout Optional timeout in ms (default: 120000)
+   */
+  async extractFromSession(
+    sessionId: string,
+    focusTopic?: string,
+    model?: 'haiku' | 'sonnet' | 'opus',
+    timeout = 120000,
+  ): Promise<DailyExtractResponse> {
+    return this.withRetry(async () => {
+      const body: { focusTopic?: string; model?: string } = {};
+      if (focusTopic) body.focusTopic = focusTopic;
+      if (model) body.model = model;
+
+      const response = await this.client.post<DailyExtractResponse>(
+        `/agent/recall/session/${sessionId}/extract`,
+        body,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Save recall session insights as a fact (idempotent).
+   * Returns existing factId if already saved, preventing duplicate saves.
+   *
+   * @param sessionId Session ID from recall response
+   * @param userId Optional user ID for verification (multi-user safety)
+   */
+  async saveRecallSession(
+    sessionId: string,
+    userId?: string,
+  ): Promise<RecallSaveResponse> {
+    try {
+      const body: RecallSaveRequest = {};
+      if (userId) body.userId = userId;
+
+      const response = await this.client.post<RecallSaveResponse>(
+        `/agent/recall/session/${sessionId}/save`,
+        body,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 404) {
+          return { success: false, error: 'Session not found or expired' };
+        }
+        if (error.response?.status === 403) {
+          return { success: false, error: 'Unauthorized: session belongs to another user' };
+        }
+      }
+      throw error;
+    }
   }
 
   private async withRetry<T>(operation: () => Promise<T>): Promise<T> {

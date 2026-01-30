@@ -659,3 +659,4 @@ async proxy(@Req() req: Request, @Res() res: Response) {
 ## See Also
 
 - [PR #103 Code Review Fixes](../code-review-fixes/pr103-entity-activity-extraction-20260130.md) — Применение source-agnostic паттерна к ExtractionCarouselState (chatId/messageId → conversationId/messageRef)
+- [Recall Session Centralization](./recall-session-centralization-telegram-adapter-20260130.md) — Перенос хранения recall-сессий из Telegram Adapter в PKG Core (PR #111)

@@ -69,6 +69,7 @@ describe('RecallHandler', () => {
       const mockResponse: RecallResponse = {
         success: true,
         data: {
+          sessionId: 'rs_test123',
           answer: 'Иван советовал юриста в августе 2025.',
           sources: [
             { type: 'message', id: 'msg-1', preview: 'Привет! Рекомендую юриста...' },
@@ -89,7 +90,7 @@ describe('RecallHandler', () => {
       const ctx = mockContext('/recall test query') as Context;
       pkgCoreApi.recall.mockResolvedValue({
         success: false,
-        data: { answer: '', sources: [], toolsUsed: [] },
+        data: { sessionId: '', answer: '', sources: [], toolsUsed: [] },
       });
 
       await handler.handle(ctx);
@@ -142,6 +143,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_test456',
           answer: 'Test answer',
           sources,
           toolsUsed: [],
@@ -163,6 +165,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_test789',
           answer: 'Test',
           sources: [{ type: 'message', id: '1', preview: longPreview }],
           toolsUsed: [],
@@ -185,7 +188,7 @@ describe('RecallHandler', () => {
       }));
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
-        data: { answer: 'Test', sources, toolsUsed: [] },
+        data: { sessionId: 'rs_testlimit', answer: 'Test', sources, toolsUsed: [] },
       });
 
       await handler.handle(ctx);
@@ -203,6 +206,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_bold',
           answer: '**Bold text** here',
           sources: [],
           toolsUsed: [],
@@ -220,6 +224,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_header',
           answer: '### Header Text',
           sources: [],
           toolsUsed: [],
@@ -237,6 +242,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_code',
           answer: 'Use `code` here',
           sources: [],
           toolsUsed: [],
@@ -254,6 +260,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_list',
           answer: '- Item 1\n- Item 2',
           sources: [],
           toolsUsed: [],
@@ -272,6 +279,7 @@ describe('RecallHandler', () => {
       pkgCoreApi.recall.mockResolvedValue({
         success: true,
         data: {
+          sessionId: 'rs_escape',
           answer: 'Text with \\_escaped\\_ chars',
           sources: [],
           toolsUsed: [],

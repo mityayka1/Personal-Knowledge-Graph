@@ -6,7 +6,7 @@ import {
   RecallSource,
   ExtractionCarouselNavResponse,
 } from '../../api/pkg-core-api.service';
-import { DailyContextCacheService, DailyContext } from '../../common/cache';
+import { DailyContextCacheService } from '../../common/cache';
 
 /** Callback prefix for daily summary actions */
 const DAILY_CALLBACK_PREFIX = 'ds_';
@@ -72,7 +72,7 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Handle save callback
+   * Handle save callback — uses idempotent save API to prevent duplicate saves
    */
   private async handleSaveCallback(ctx: Context, callbackData: string): Promise<void> {
     const match = callbackData.match(/^ds_save:(\d+)$/);
@@ -81,10 +81,17 @@ export class DailySummaryHandler {
       return;
     }
 
-    const messageId = parseInt(match[1], 10);
-    const dailyContext = await this.dailyContextCache.get(messageId);
+    const chatId = ctx.chat?.id;
+    const userId = ctx.from?.id?.toString();
+    if (!chatId) {
+      await ctx.answerCbQuery('Ошибка контекста');
+      return;
+    }
 
-    if (!dailyContext) {
+    const messageId = parseInt(match[1], 10);
+    const sessionId = await this.dailyContextCache.getSessionId(chatId, messageId);
+
+    if (!sessionId) {
       await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
       return;
     }
@@ -92,14 +99,17 @@ export class DailySummaryHandler {
     await ctx.answerCbQuery('💾 Сохраняю...');
 
     try {
-      const result = await this.pkgCoreApi.saveDailySummary(
-        dailyContext.lastAnswer,
-        dailyContext.dateStr,
-      );
+      // Use atomic save API - PKG Core creates fact and marks session in one operation
+      // This is idempotent (prevents duplicate saves) and atomic (fact + session mark together)
+      const result = await this.pkgCoreApi.saveRecallSession(sessionId, userId);
 
       if (result.success) {
         await this.updateButtonStatus(ctx, messageId, 'saved');
-        this.logger.log(`Daily summary saved, factId: ${result.factId}`);
+        if (result.alreadySaved) {
+          this.logger.log(`Daily summary already saved, factId: ${result.factId}`);
+        } else {
+          this.logger.log(`Daily summary saved, factId: ${result.factId}`);
+        }
       } else {
         await ctx.reply(`❌ Ошибка сохранения: ${result.error}`);
         this.logger.error(`Failed to save daily summary: ${result.error}`);
@@ -121,24 +131,37 @@ export class DailySummaryHandler {
       return;
     }
 
-    const messageId = parseInt(match[1], 10);
-    const dailyContext = await this.dailyContextCache.get(messageId);
+    const chatId = ctx.chat?.id;
+    if (!chatId) {
+      await ctx.answerCbQuery('Ошибка контекста');
+      return;
+    }
 
-    if (!dailyContext) {
+    const messageId = parseInt(match[1], 10);
+    const sessionId = await this.dailyContextCache.getSessionId(chatId, messageId);
+
+    if (!sessionId) {
       await ctx.answerCbQuery('Саммари не найден (возможно, устарел)');
       return;
     }
 
-    const chatId = ctx.chat?.id;
-    if (!chatId) return;
+    // Fetch session data from PKG Core
+    const sessionResponse = await this.pkgCoreApi.getRecallSession(sessionId);
+    if (!sessionResponse?.data) {
+      await ctx.answerCbQuery('Сессия не найдена (возможно, истекла)');
+      return;
+    }
+
+    const session = sessionResponse.data;
 
     await ctx.answerCbQuery('📈 Извлекаю структуру...');
 
     try {
-      // Step 1: Extract structured data
-      const extractResult = await this.pkgCoreApi.extractDailySynthesis(
-        dailyContext.lastAnswer,
-        dailyContext.dateStr,
+      // Step 1: Extract structured data from session (via sessionId)
+      const extractResult = await this.pkgCoreApi.extractFromSession(
+        sessionId,
+        undefined, // focusTopic
+        session.model, // use same model as recall
       );
 
       if (!extractResult.success) {
@@ -175,7 +198,7 @@ export class DailySummaryHandler {
         projects,
         tasks,
         commitments,
-        synthesisDate: dailyContext.dateStr,
+        synthesisDate: session.dateStr,
       });
 
       if (!carouselResult.success) {
@@ -600,36 +623,77 @@ export class DailySummaryHandler {
 
   /**
    * Handle reply to a bot message (follow-up question)
+   * Uses PKG Core session API for context-aware follow-up.
    * @returns true if this was a reply to a daily message, false otherwise
    */
   async handleReply(ctx: Context): Promise<boolean> {
     const message = ctx.message as Message.TextMessage;
     if (!message?.reply_to_message) return false;
 
-    const replyToMessageId = message.reply_to_message.message_id;
-    const dailyContext = await this.dailyContextCache.get(replyToMessageId);
-
-    if (!dailyContext) return false;
-
     const chatId = ctx.chat?.id;
     if (!chatId) return false;
+
+    const replyToMessageId = message.reply_to_message.message_id;
+    const sessionId = await this.dailyContextCache.getSessionId(chatId, replyToMessageId);
+
+    if (!sessionId) return false;
 
     const text = message.text;
     if (!text) return false;
 
-    // Build follow-up query with context
-    const query = `Контекст: ранее ты подготовил саммари за ${dailyContext.dateStr}.
-
-Предыдущий ответ (краткое содержание):
-${this.truncate(dailyContext.lastAnswer, 500)}
-
-Уточняющий вопрос/инструкция пользователя: "${text}"
-
-Используй поиск чтобы найти дополнительную информацию и ответить на вопрос. Отвечай конкретно на вопрос пользователя.`;
-
-    // Use same model as initial request
-    await this.executeQuery(ctx, chatId, query, dailyContext.dateStr, false, dailyContext.model);
+    // Execute follow-up via PKG Core session API
+    await this.executeFollowup(ctx, chatId, sessionId, text);
     return true;
+  }
+
+  /**
+   * Execute follow-up query using existing session
+   */
+  private async executeFollowup(
+    ctx: Context,
+    chatId: number,
+    sessionId: string,
+    query: string,
+  ): Promise<void> {
+    const statusMessage = await ctx.reply('🔍 Ищу информацию...');
+
+    try {
+      this.logger.log(`Daily follow-up request from user ${ctx.from?.id}, sessionId=${sessionId}`);
+
+      const response = await this.pkgCoreApi.followupRecall(sessionId, query);
+
+      if (!response.success) {
+        await this.editMessage(ctx, statusMessage.message_id, '❌ Ошибка при обработке запроса.');
+        return;
+      }
+
+      const { sessionId: newSessionId, answer, sources } = response.data;
+
+      // Get session data for dateStr
+      const sessionResponse = await this.pkgCoreApi.getRecallSession(newSessionId);
+      const dateStr = sessionResponse?.data?.dateStr || new Date().toISOString().split('T')[0];
+
+      // Format and send response
+      const formattedResponse = this.formatResponse(answer, sources, dateStr, false);
+
+      await ctx.telegram.deleteMessage(chatId, statusMessage.message_id);
+      const sentMessages = await this.sendMessage(ctx, formattedResponse, false);
+
+      // Store new sessionId mapping for continued follow-ups
+      for (const sentMessage of sentMessages) {
+        await this.dailyContextCache.setSessionId(chatId, sentMessage.message_id, newSessionId);
+      }
+
+      this.logger.log(`Daily follow-up completed for user ${ctx.from?.id}`);
+    } catch (error) {
+      this.logger.error(`Daily follow-up error:`, (error as Error).message);
+
+      const errorMessage = this.isTimeoutError(error)
+        ? '⏱ Запрос занимает слишком много времени. Попробуйте позже.'
+        : '❌ Ошибка при обработке запроса.';
+
+      await this.editMessage(ctx, statusMessage.message_id, errorMessage);
+    }
   }
 
   /**
@@ -658,7 +722,7 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
         return;
       }
 
-      const { answer, sources } = response.data;
+      const { sessionId, answer, sources } = response.data;
 
       // Format and send response
       const formattedResponse = this.formatResponse(answer, sources, dateStr, isInitial);
@@ -666,11 +730,10 @@ ${this.truncate(dailyContext.lastAnswer, 500)}
       await ctx.telegram.deleteMessage(chatId, statusMessage.message_id);
       const sentMessages = await this.sendMessage(ctx, formattedResponse, isInitial);
 
-      // Save context for each sent message (for reply-based follow-up and save action)
-      // Using Redis cache with TTL - no manual cleanup needed
-      const dailyContext: DailyContext = { dateStr, lastAnswer: answer, sources, model };
+      // Store sessionId mapping for each sent message (for reply-based follow-up and save action)
+      // Actual session data is stored in PKG Core (RecallSessionService)
       for (const sentMessage of sentMessages) {
-        await this.dailyContextCache.set(sentMessage.message_id, dailyContext);
+        await this.dailyContextCache.setSessionId(chatId, sentMessage.message_id, sessionId);
       }
 
       this.logger.log(`Daily ${isInitial ? 'summary' : 'follow-up'} completed for user ${ctx.from?.id}`);

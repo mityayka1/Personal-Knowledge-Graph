@@ -2,33 +2,22 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
-/**
- * Источник данных для daily recall.
- */
-export interface RecallSource {
-  type: 'message' | 'interaction';
-  id: string;
-  preview: string;
-}
+const CACHE_KEY_PREFIX = 'daily-session:';
+const MAX_MEMORY_ENTRIES = 100;
 
 /**
- * Контекст daily summary, сохраняемый для follow-up запросов.
- */
-export interface DailyContext {
-  dateStr: string;
-  lastAnswer: string;
-  sources: RecallSource[];
-  model?: 'haiku' | 'sonnet' | 'opus';
-}
-
-const CACHE_KEY_PREFIX = 'daily-context:';
-const MAX_MEMORY_CONTEXTS = 100;
-
-/**
- * DailyContextCacheService — cache для daily summary контекстов.
+ * DailyContextCacheService — lightweight cache for messageId → sessionId mapping.
  *
- * Использует Redis если доступен, иначе fallback на in-memory Map.
- * In-memory fallback теряет данные при рестарте, но позволяет работать без Redis.
+ * The actual recall session data (answer, sources, model) is stored in PKG Core.
+ * This service only stores the mapping to enable follow-up operations from Telegram.
+ *
+ * Architecture:
+ * - PKG Core owns RecallSession data (via RecallSessionService)
+ * - Telegram Adapter stores only messageId → sessionId mapping
+ * - Follow-up requests use sessionId to fetch/update session from PKG Core
+ *
+ * Uses Redis if available, otherwise fallback to in-memory Map.
+ * In-memory fallback loses data on restart, but allows operation without Redis.
  */
 @Injectable()
 export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
@@ -38,7 +27,8 @@ export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
   private ttlSeconds: number;
 
   // Fallback in-memory cache when Redis is unavailable
-  private memoryCache = new Map<number, DailyContext>();
+  // Key format: "chatId:messageId"
+  private memoryCache = new Map<string, string>();
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -61,7 +51,7 @@ export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
 
       this.redis.on('connect', () => {
         this.redisAvailable = true;
-        this.logger.log('Connected to Redis for daily context cache');
+        this.logger.log('Connected to Redis for daily session mapping');
       });
 
       this.redis.on('error', (err) => {
@@ -95,14 +85,21 @@ export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Сохранить контекст daily summary.
+   * Store sessionId for a Telegram message.
+   * The actual session data is stored in PKG Core.
+   *
+   * @param chatId Telegram chat ID (ensures uniqueness across chats)
+   * @param messageId Telegram message ID
+   * @param sessionId PKG Core recall session ID (e.g., "rs_a1b2c3d4e5f6")
    */
-  async set(messageId: number, context: DailyContext): Promise<void> {
+  async setSessionId(chatId: number, messageId: number, sessionId: string): Promise<void> {
+    const cacheKey = `${chatId}:${messageId}`;
+
     if (this.redisAvailable && this.redis) {
-      const key = `${CACHE_KEY_PREFIX}${messageId}`;
+      const key = `${CACHE_KEY_PREFIX}${cacheKey}`;
       try {
-        await this.redis.setex(key, this.ttlSeconds, JSON.stringify(context));
-        this.logger.debug(`[redis] Saved daily context for messageId=${messageId}`);
+        await this.redis.setex(key, this.ttlSeconds, sessionId);
+        this.logger.debug(`[redis] Saved session mapping: ${cacheKey} → ${sessionId}`);
         return;
       } catch (error) {
         this.logger.warn(`[redis] Failed to save, falling back to memory: ${error}`);
@@ -110,22 +107,28 @@ export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Fallback to in-memory
-    this.memoryCache.set(messageId, context);
+    this.memoryCache.set(cacheKey, sessionId);
     this.cleanupMemoryCache();
-    this.logger.debug(`[memory] Saved daily context for messageId=${messageId}`);
+    this.logger.debug(`[memory] Saved session mapping: ${cacheKey} → ${sessionId}`);
   }
 
   /**
-   * Получить контекст daily summary.
+   * Get sessionId for a Telegram message.
+   *
+   * @param chatId Telegram chat ID
+   * @param messageId Telegram message ID
+   * @returns Session ID or null if not found/expired
    */
-  async get(messageId: number): Promise<DailyContext | null> {
+  async getSessionId(chatId: number, messageId: number): Promise<string | null> {
+    const cacheKey = `${chatId}:${messageId}`;
+
     if (this.redisAvailable && this.redis) {
-      const key = `${CACHE_KEY_PREFIX}${messageId}`;
+      const key = `${CACHE_KEY_PREFIX}${cacheKey}`;
       try {
-        const data = await this.redis.get(key);
-        if (data) {
-          this.logger.debug(`[redis] Found context for messageId=${messageId}`);
-          return JSON.parse(data) as DailyContext;
+        const sessionId = await this.redis.get(key);
+        if (sessionId) {
+          this.logger.debug(`[redis] Found session for ${cacheKey}: ${sessionId}`);
+          return sessionId;
         }
       } catch (error) {
         this.logger.warn(`[redis] Failed to get, checking memory: ${error}`);
@@ -133,25 +136,30 @@ export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Try memory cache (even if Redis available - might have been saved before Redis was up)
-    const memoryResult = this.memoryCache.get(messageId);
+    const memoryResult = this.memoryCache.get(cacheKey);
     if (memoryResult) {
-      this.logger.debug(`[memory] Found context for messageId=${messageId}`);
+      this.logger.debug(`[memory] Found session for ${cacheKey}: ${memoryResult}`);
       return memoryResult;
     }
 
-    this.logger.debug(`[cache] No context found for messageId=${messageId}`);
+    this.logger.debug(`[cache] No session found for ${cacheKey}`);
     return null;
   }
 
   /**
-   * Удалить контекст.
+   * Delete session mapping.
+   *
+   * @param chatId Telegram chat ID
+   * @param messageId Telegram message ID
    */
-  async delete(messageId: number): Promise<void> {
+  async deleteSessionId(chatId: number, messageId: number): Promise<void> {
+    const cacheKey = `${chatId}:${messageId}`;
+
     // Delete from both stores
-    this.memoryCache.delete(messageId);
+    this.memoryCache.delete(cacheKey);
 
     if (this.redisAvailable && this.redis) {
-      const key = `${CACHE_KEY_PREFIX}${messageId}`;
+      const key = `${CACHE_KEY_PREFIX}${cacheKey}`;
       try {
         await this.redis.del(key);
       } catch {
@@ -160,14 +168,56 @@ export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Backward Compatibility (deprecated - will be removed)
+  // ─────────────────────────────────────────────────────────────────
+
+  /**
+   * @deprecated Use setSessionId instead. This method exists for migration period only.
+   */
+  async set(
+    chatId: number,
+    messageId: number,
+    context: { dateStr: string; lastAnswer: string; sources: unknown[]; model?: string },
+  ): Promise<void> {
+    this.logger.warn(
+      `[deprecated] set() called for chatId=${chatId}, messageId=${messageId}. ` +
+        `Use setSessionId() instead. Context data should be stored in PKG Core.`,
+    );
+    // Store a placeholder - actual data should go to PKG Core
+    await this.setSessionId(chatId, messageId, `legacy_${chatId}:${messageId}`);
+  }
+
+  /**
+   * @deprecated Use getSessionId instead. This method exists for migration period only.
+   */
+  async get(chatId: number, messageId: number): Promise<null> {
+    this.logger.warn(
+      `[deprecated] get() called for chatId=${chatId}, messageId=${messageId}. ` +
+        `Use getSessionId() and fetch session from PKG Core via API.`,
+    );
+    return null;
+  }
+
+  /**
+   * @deprecated Use deleteSessionId instead.
+   */
+  async delete(chatId: number, messageId: number): Promise<void> {
+    await this.deleteSessionId(chatId, messageId);
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // Private helpers
+  // ─────────────────────────────────────────────────────────────────
+
   /**
    * Cleanup in-memory cache to prevent memory leak.
    */
   private cleanupMemoryCache(): void {
-    if (this.memoryCache.size > MAX_MEMORY_CONTEXTS) {
+    if (this.memoryCache.size > MAX_MEMORY_ENTRIES) {
       const keysToDelete = Array.from(this.memoryCache.keys()).slice(
         0,
-        this.memoryCache.size - MAX_MEMORY_CONTEXTS,
+        this.memoryCache.size - MAX_MEMORY_ENTRIES,
       );
       for (const key of keysToDelete) {
         this.memoryCache.delete(key);
