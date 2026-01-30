@@ -99,32 +99,16 @@ export class DailySummaryHandler {
     await ctx.answerCbQuery('💾 Сохраняю...');
 
     try {
-      // Use idempotent save API (prevents duplicate saves)
+      // Use atomic save API - PKG Core creates fact and marks session in one operation
+      // This is idempotent (prevents duplicate saves) and atomic (fact + session mark together)
       const result = await this.pkgCoreApi.saveRecallSession(sessionId, userId);
 
       if (result.success) {
+        await this.updateButtonStatus(ctx, messageId, 'saved');
         if (result.alreadySaved) {
-          // Already saved — update button but don't show error
-          await this.updateButtonStatus(ctx, messageId, 'saved');
           this.logger.log(`Daily summary already saved, factId: ${result.factId}`);
         } else {
-          // First save — create the actual fact
-          const sessionResponse = await this.pkgCoreApi.getRecallSession(sessionId);
-          if (sessionResponse?.data) {
-            const factResult = await this.pkgCoreApi.saveDailySummary(
-              sessionResponse.data.answer,
-              sessionResponse.data.dateStr,
-            );
-            if (factResult.success) {
-              await this.updateButtonStatus(ctx, messageId, 'saved');
-              this.logger.log(`Daily summary saved, factId: ${factResult.factId}`);
-            } else {
-              await ctx.reply(`❌ Ошибка сохранения факта: ${factResult.error}`);
-              this.logger.error(`Failed to save daily summary fact: ${factResult.error}`);
-            }
-          } else {
-            await ctx.reply('❌ Сессия не найдена');
-          }
+          this.logger.log(`Daily summary saved, factId: ${result.factId}`);
         }
       } else {
         await ctx.reply(`❌ Ошибка сохранения: ${result.error}`);

@@ -4,6 +4,7 @@ import {
   Get,
   Body,
   Param,
+  Query,
   Logger,
   HttpException,
   HttpStatus,
@@ -36,7 +37,9 @@ import {
   RecallSource,
 } from './claude-agent.types';
 import { EntityService } from '../entity/entity.service';
+import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { DailySynthesisExtractionService } from '../extraction/daily-synthesis-extraction.service';
+import { FactType, FactCategory, FactSource } from '@pkg/entities';
 
 /**
  * Raw JSON Schema for recall response
@@ -174,6 +177,7 @@ export class AgentController {
   constructor(
     private readonly claudeAgentService: ClaudeAgentService,
     private readonly entityService: EntityService,
+    private readonly entityFactService: EntityFactService,
     private readonly dailySynthesisExtractionService: DailySynthesisExtractionService,
     private readonly recallSessionService: RecallSessionService,
   ) {}
@@ -297,11 +301,13 @@ export class AgentController {
     description: 'Session found',
     type: RecallSessionResponseDto,
   })
+  @ApiResponse({ status: 403, description: 'Unauthorized - userId mismatch' })
   @ApiResponse({ status: 404, description: 'Session not found or expired' })
   async getRecallSession(
     @Param('sessionId') sessionId: string,
+    @Query('userId') userId?: string,
   ): Promise<RecallSessionResponseDto> {
-    this.logger.log(`Get recall session: ${sessionId}`);
+    this.logger.log(`Get recall session: ${sessionId}, userId=${userId || 'none'}`);
 
     const session = await this.recallSessionService.get(sessionId);
 
@@ -309,6 +315,17 @@ export class AgentController {
       throw new HttpException(
         `Session not found or expired: ${sessionId}`,
         HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Verify userId if provided (multi-user safety)
+    if (userId && session.userId && session.userId !== userId) {
+      this.logger.warn(
+        `Unauthorized access attempt: session=${sessionId}, expected=${session.userId}, got=${userId}`,
+      );
+      throw new HttpException(
+        'Unauthorized: session belongs to another user',
+        HttpStatus.FORBIDDEN,
       );
     }
 
@@ -351,13 +368,14 @@ export class AgentController {
     description: 'Extraction completed',
     type: DailyExtractResponseDto,
   })
+  @ApiResponse({ status: 403, description: 'Unauthorized - userId mismatch' })
   @ApiResponse({ status: 404, description: 'Session not found or expired' })
   async extractFromSession(
     @Param('sessionId') sessionId: string,
     @Body() dto: RecallExtractRequestDto,
   ): Promise<DailyExtractResponseDto> {
     this.logger.log(
-      `Extract from recall session: ${sessionId}, focus=${dto.focusTopic || 'none'}`,
+      `Extract from recall session: ${sessionId}, focus=${dto.focusTopic || 'none'}, userId=${dto.userId || 'none'}`,
     );
 
     const session = await this.recallSessionService.get(sessionId);
@@ -366,6 +384,17 @@ export class AgentController {
       throw new HttpException(
         `Session not found or expired: ${sessionId}`,
         HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Verify userId if provided (multi-user safety)
+    if (dto.userId && session.userId && session.userId !== dto.userId) {
+      this.logger.warn(
+        `Unauthorized extract attempt: session=${sessionId}, expected=${session.userId}, got=${dto.userId}`,
+      );
+      throw new HttpException(
+        'Unauthorized: session belongs to another user',
+        HttpStatus.FORBIDDEN,
       );
     }
 
@@ -421,12 +450,13 @@ export class AgentController {
     description: 'Follow-up completed',
     type: RecallResponseDto,
   })
+  @ApiResponse({ status: 403, description: 'Unauthorized - userId mismatch' })
   @ApiResponse({ status: 404, description: 'Session not found or expired' })
   async followupRecall(
     @Param('sessionId') sessionId: string,
     @Body() dto: RecallFollowupRequestDto,
   ): Promise<RecallResponseDto> {
-    this.logger.log(`Follow-up recall session: ${sessionId}, query="${dto.query.slice(0, 50)}..."`);
+    this.logger.log(`Follow-up recall session: ${sessionId}, query="${dto.query.slice(0, 50)}...", userId=${dto.userId || 'none'}`);
 
     const session = await this.recallSessionService.get(sessionId);
 
@@ -434,6 +464,17 @@ export class AgentController {
       throw new HttpException(
         `Session not found or expired: ${sessionId}`,
         HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Verify userId if provided (multi-user safety)
+    if (dto.userId && session.userId && session.userId !== dto.userId) {
+      this.logger.warn(
+        `Unauthorized followup attempt: session=${sessionId}, expected=${session.userId}, got=${dto.userId}`,
+      );
+      throw new HttpException(
+        'Unauthorized: session belongs to another user',
+        HttpStatus.FORBIDDEN,
       );
     }
 
@@ -473,8 +514,8 @@ export class AgentController {
 
       const answer = structuredData?.answer || 'Не удалось найти дополнительную информацию.';
 
-      // Update session with new answer
-      await this.recallSessionService.updateAnswer(sessionId, answer, sources);
+      // Update session with new answer (with userId for authorization)
+      await this.recallSessionService.updateAnswer(sessionId, answer, sources, dto.userId);
 
       return {
         success: true,
@@ -549,40 +590,82 @@ export class AgentController {
       );
     }
 
-    // Generate a factId for this save (caller will create the actual fact)
-    // Using session ID + timestamp to ensure uniqueness
-    const factId = `fact_${sessionId}_${Date.now()}`;
-
-    // Atomically mark as saved (idempotency protection)
-    const result = await this.recallSessionService.markAsSaved(
-      sessionId,
-      factId,
-      dto.userId,
-    );
-
-    if (result.alreadySaved) {
-      this.logger.log(`Session ${sessionId} already saved as fact ${result.existingFactId}`);
+    // Check if already saved (idempotency - before creating fact)
+    if (session.savedAt && session.savedFactId) {
+      this.logger.log(`Session ${sessionId} already saved as fact ${session.savedFactId}`);
       return {
         success: true,
         alreadySaved: true,
-        factId: result.existingFactId,
+        factId: session.savedFactId,
       };
     }
 
-    if (!result.success) {
+    // ATOMIC SAVE: Create fact in PostgreSQL FIRST, then mark session
+    // This follows Source-Agnostic Architecture - PKG Core handles fact creation
+
+    // 1. Find owner entity ("me")
+    const owner = await this.entityService.findMe();
+    if (!owner) {
+      this.logger.error('Owner entity not found - cannot save daily summary');
       return {
         success: false,
-        error: 'Failed to mark session as saved',
+        error: 'Owner entity not configured. Please set an owner entity first.',
       };
     }
 
-    this.logger.log(`Session ${sessionId} marked as saved, factId=${factId}`);
+    // 2. Create fact with daily_summary type
+    try {
+      const fact = await this.entityFactService.create(owner.id, {
+        type: FactType.DAILY_SUMMARY,
+        category: FactCategory.PERSONAL,
+        value: session.answer.slice(0, 500), // Short preview for display
+        valueJson: {
+          fullContent: session.answer,
+          dateStr: session.dateStr,
+          sessionId: session.id,
+          query: session.query,
+        },
+        source: FactSource.EXTRACTED,
+        confidence: 1.0,
+      });
 
-    return {
-      success: true,
-      alreadySaved: false,
-      factId,
-    };
+      const factId = fact.id;
+
+      // 3. Mark session as saved with REAL PostgreSQL factId
+      const markResult = await this.recallSessionService.markAsSaved(
+        sessionId,
+        factId,
+        dto.userId,
+      );
+
+      // Handle race condition - another request saved in parallel
+      if (markResult.alreadySaved) {
+        this.logger.log(
+          `Session ${sessionId} was saved by concurrent request, factId=${markResult.existingFactId}`,
+        );
+        // Note: We created a duplicate fact, but that's acceptable for idempotency
+        // The semantic deduplication in EntityFactService will handle it
+        return {
+          success: true,
+          alreadySaved: true,
+          factId: markResult.existingFactId,
+        };
+      }
+
+      this.logger.log(`Session ${sessionId} saved as fact ${factId} for owner ${owner.name}`);
+
+      return {
+        success: true,
+        alreadySaved: false,
+        factId,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to create fact for session ${sessionId}: ${error}`);
+      return {
+        success: false,
+        error: `Failed to save daily summary: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   /**

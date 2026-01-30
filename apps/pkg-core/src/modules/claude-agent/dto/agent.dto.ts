@@ -495,6 +495,14 @@ export class RecallFollowupRequestDto {
   @IsOptional()
   @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
   model?: 'haiku' | 'sonnet' | 'opus';
+
+  @ApiPropertyOptional({
+    description: 'User ID for verification (multi-user safety)',
+    example: '864381617',
+  })
+  @IsOptional()
+  @IsString()
+  userId?: string;
 }
 
 /**
@@ -547,4 +555,12 @@ export class RecallExtractRequestDto {
   @IsOptional()
   @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
   model?: 'haiku' | 'sonnet' | 'opus';
+
+  @ApiPropertyOptional({
+    description: 'User ID for verification (multi-user safety)',
+    example: '864381617',
+  })
+  @IsOptional()
+  @IsString()
+  userId?: string;
 }
