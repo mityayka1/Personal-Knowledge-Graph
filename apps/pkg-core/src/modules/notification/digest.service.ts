@@ -1,14 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, IsNull, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import {
   ExtractedEvent,
-  ExtractedEventStatus,
   ExtractedEventType,
-  EntityEvent,
-  EventType,
-  EventStatus,
-  EntityRecord,
+  Commitment,
+  CommitmentType,
   escapeHtml,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
@@ -16,14 +13,7 @@ import { NotificationService } from './notification.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService } from './carousel-state.service';
 import { BriefStateService, BriefItem } from './brief-state.service';
-
-interface MorningBriefData {
-  meetings: EntityEvent[];
-  deadlines: EntityEvent[];
-  birthdays: EntityRecord[];
-  overdueCommitments: EntityEvent[];
-  pendingFollowups: EntityEvent[];
-}
+import { BriefDataProvider, MorningBriefData } from './brief-data-provider.service';
 
 @Injectable()
 export class DigestService {
@@ -32,10 +22,7 @@ export class DigestService {
   constructor(
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
-    @InjectRepository(EntityEvent)
-    private entityEventRepo: Repository<EntityEvent>,
-    @InjectRepository(EntityRecord)
-    private entityRepo: Repository<EntityRecord>,
+    private briefDataProvider: BriefDataProvider,
     private telegramNotifier: TelegramNotifierService,
     private notificationService: NotificationService,
     private digestActionStore: DigestActionStoreService,
@@ -48,30 +35,27 @@ export class DigestService {
    * Uses accordion UI with action buttons.
    */
   async sendMorningBrief(): Promise<void> {
-    const today = new Date();
-    const startOfDay = new Date(today);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(today);
-    endOfDay.setHours(23, 59, 59, 999);
+    const now = new Date();
+    // Use UTC to avoid timezone issues
+    const startOfDay = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    const endOfDay = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      23, 59, 59, 999
+    ));
 
     try {
-      const [meetings, deadlines, birthdays, overdueCommitments, pendingFollowups] =
-        await Promise.all([
-          this.getEventsByDateRange(startOfDay, endOfDay, EventType.MEETING),
-          this.getEventsByDateRange(startOfDay, endOfDay, EventType.DEADLINE),
-          this.getEntitiesWithBirthdayToday(),
-          this.getOverdueEvents(EventType.COMMITMENT),
-          this.getOverdueEvents(EventType.FOLLOW_UP),
-        ]);
+      // Fetch all data via BriefDataProvider
+      const data = await this.briefDataProvider.getMorningBriefData(startOfDay, endOfDay);
 
       // Build brief items from data
-      const items = this.buildBriefItems({
-        meetings,
-        deadlines,
-        birthdays,
-        overdueCommitments,
-        pendingFollowups,
-      });
+      const items = this.buildBriefItems(data);
 
       // If no items, send simple message
       if (items.length === 0) {
@@ -196,6 +180,74 @@ export class DigestService {
         entityId: followup.entityId,
       });
     }
+
+    // Overdue activities (from Activity table)
+    for (const activity of data.overdueActivities) {
+      const daysOverdue = this.getDaysOverdue(activity.deadline);
+      items.push({
+        type: 'overdue',
+        title: `${activity.name} (просрочено ${daysOverdue} дн.)`,
+        entityName: activity.ownerEntity?.name || 'Без владельца',
+        sourceType: 'activity',
+        sourceId: activity.id,
+        details: activity.description || `Задача просрочена на ${daysOverdue} дней`,
+        entityId: activity.ownerEntityId,
+      });
+    }
+
+    // Deduplicate: collect sourceMessageIds from EntityEvent-based items
+    const seenSourceMessageIds = new Set<string>();
+    for (const commitment of data.overdueCommitments) {
+      if (commitment.sourceMessageId) {
+        seenSourceMessageIds.add(commitment.sourceMessageId);
+      }
+    }
+
+    // Pending commitments (from Commitment table)
+    for (const commitment of data.pendingCommitments) {
+      // Skip if already shown from EntityEvent
+      if (commitment.sourceMessageId && seenSourceMessageIds.has(commitment.sourceMessageId)) {
+        continue;
+      }
+      const isOverdue = commitment.dueDate && commitment.dueDate < new Date();
+      const daysInfo = commitment.dueDate
+        ? isOverdue
+          ? `(просрочено ${this.getDaysOverdue(commitment.dueDate)} дн.)`
+          : ''
+        : '— ждёшь ответа';
+
+      // Determine who the commitment is from/to
+      const isFromMe = commitment.type === CommitmentType.PROMISE;
+      const entityName = isFromMe
+        ? commitment.toEntity?.name || 'Неизвестно'
+        : commitment.fromEntity?.name || 'Неизвестно';
+
+      items.push({
+        type: isOverdue ? 'overdue' : 'followup',
+        title: `${commitment.title} ${daysInfo}`,
+        entityName,
+        sourceType: 'commitment',
+        sourceId: commitment.id,
+        details: commitment.description || this.getCommitmentDetails(commitment),
+        entityId: isFromMe ? commitment.toEntityId : commitment.fromEntityId,
+      });
+    }
+
+    // Sort by priority: overdue items first, then by date
+    items.sort((a, b) => {
+      // Priority 1: overdue items come first
+      const aOverdue = a.type === 'overdue' ? 0 : 1;
+      const bOverdue = b.type === 'overdue' ? 0 : 1;
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+
+      // Priority 2: meetings come before other types (time-sensitive)
+      const aMeeting = a.type === 'meeting' ? 0 : 1;
+      const bMeeting = b.type === 'meeting' ? 0 : 1;
+      if (aMeeting !== bMeeting) return aMeeting - bMeeting;
+
+      // Priority 3: alphabetically by entity name for stable order
+      return a.entityName.localeCompare(b.entityName);
+    });
 
     return items;
   }
@@ -333,49 +385,31 @@ export class DigestService {
     }
   }
 
-  private async getEventsByDateRange(
-    start: Date,
-    end: Date,
-    eventType: EventType,
-  ): Promise<EntityEvent[]> {
-    return this.entityEventRepo.find({
-      where: {
-        eventType,
-        eventDate: Between(start, end),
-        status: In([EventStatus.SCHEDULED]),
-      },
-      relations: ['entity'],
-      order: { eventDate: 'ASC' },
-    });
+  /**
+   * Get human-readable details for a Commitment.
+   */
+  private getCommitmentDetails(commitment: Commitment): string {
+    const typeLabels: Record<CommitmentType, string> = {
+      [CommitmentType.PROMISE]: 'Обещание',
+      [CommitmentType.REQUEST]: 'Запрос',
+      [CommitmentType.AGREEMENT]: 'Договорённость',
+      [CommitmentType.DEADLINE]: 'Дедлайн',
+      [CommitmentType.REMINDER]: 'Напоминание',
+      [CommitmentType.RECURRING]: 'Периодическая задача',
+    };
+
+    const typeLabel = typeLabels[commitment.type] || 'Обязательство';
+    const from = commitment.fromEntity?.name || 'Неизвестно';
+    const to = commitment.toEntity?.name || 'Неизвестно';
+
+    if (commitment.type === CommitmentType.PROMISE) {
+      return `${typeLabel}: ${from} → ${to}`;
+    } else if (commitment.type === CommitmentType.REQUEST) {
+      return `${typeLabel}: ожидаешь от ${from}`;
+    }
+
+    return `${typeLabel}: ${commitment.title}`;
   }
-
-  private async getEntitiesWithBirthdayToday(): Promise<EntityRecord[]> {
-    // Get today's month and day
-    const today = new Date();
-    const month = today.getMonth() + 1;
-    const day = today.getDate();
-
-    // Query entities with birthday on this date
-    // Note: This requires birthday to be stored as a fact
-    // For now, return empty array - this would need EntityFactService integration
-    return [];
-  }
-
-  private async getOverdueEvents(eventType: EventType): Promise<EntityEvent[]> {
-    const now = new Date();
-
-    return this.entityEventRepo.find({
-      where: {
-        eventType,
-        eventDate: LessThan(now),
-        status: EventStatus.SCHEDULED,
-      },
-      relations: ['entity'],
-      order: { eventDate: 'ASC' },
-      take: 10,
-    });
-  }
-
 
   private formatHourlyDigest(events: ExtractedEvent[]): string {
     const lines: string[] = ['<b>Новые события:</b>', ''];

@@ -29,6 +29,10 @@ import {
   ClaudeAgentRun,
   User,
   ExtractedEvent,
+  // Phase D: Jarvis Foundation
+  Activity,
+  ActivityMember,
+  Commitment,
 } from '@pkg/entities';
 
 /**
@@ -58,4 +62,8 @@ export const ALL_ENTITIES = [
   ClaudeAgentRun,
   User,
   ExtractedEvent,
+  // Phase D: Jarvis Foundation
+  Activity,
+  ActivityMember,
+  Commitment,
 ] as const;

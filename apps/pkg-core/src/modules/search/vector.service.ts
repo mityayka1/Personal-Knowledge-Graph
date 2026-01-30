@@ -28,14 +28,16 @@ export class VectorService {
         i.type as interaction_type,
         (m.embedding <=> $1::vector) as distance
       FROM messages m
-      LEFT JOIN entities e ON m.sender_entity_id = e.id
+      LEFT JOIN entities e ON m.sender_entity_id = e.id AND e.deleted_at IS NULL
       LEFT JOIN interactions i ON m.interaction_id = i.id
       WHERE m.embedding IS NOT NULL
         AND (e.is_bot = false OR e.is_bot IS NULL)
         AND NOT EXISTS (
           SELECT 1 FROM interaction_participants ip
           JOIN entities bot_e ON ip.entity_id = bot_e.id
-          WHERE ip.interaction_id = m.interaction_id AND bot_e.is_bot = true
+          WHERE ip.interaction_id = m.interaction_id
+            AND bot_e.is_bot = true
+            AND bot_e.deleted_at IS NULL
         )
     `;
 
@@ -78,7 +80,7 @@ export class VectorService {
           ip.entity_id,
           e.name as entity_name
         FROM interaction_participants ip
-        LEFT JOIN entities e ON ip.entity_id = e.id
+        LEFT JOIN entities e ON ip.entity_id = e.id AND e.deleted_at IS NULL
         WHERE ip.interaction_id = ANY($1)
       `;
       const participants = await this.messageRepo.query(participantsSql, [interactionIds]);

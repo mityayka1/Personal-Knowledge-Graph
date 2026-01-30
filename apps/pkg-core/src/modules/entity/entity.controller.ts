@@ -49,6 +49,18 @@ export class EntityController {
     return owner;
   }
 
+  /**
+   * Get all soft-deleted entities.
+   * NOTE: This route MUST be before :id to avoid route conflict.
+   */
+  @Get('deleted/list')
+  async findDeleted(
+    @Query('limit') limit?: number,
+    @Query('offset') offset?: number,
+  ) {
+    return this.entityService.findDeleted({ limit, offset });
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.entityService.findOne(id);
@@ -67,9 +79,33 @@ export class EntityController {
     return this.entityService.update(id, dto);
   }
 
+  /**
+   * Soft delete an entity.
+   * Data is preserved and can be restored with POST /entities/:id/restore
+   */
   @Delete(':id')
   async remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.entityService.remove(id);
+  }
+
+  /**
+   * Restore a soft-deleted entity.
+   */
+  @Post(':id/restore')
+  async restore(@Param('id', ParseUUIDPipe) id: string) {
+    return this.entityService.restore(id);
+  }
+
+  /**
+   * Permanently delete an entity (CANNOT BE UNDONE).
+   * Requires confirm=true query parameter.
+   */
+  @Delete(':id/hard')
+  async hardDelete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('confirm') confirm?: string,
+  ) {
+    return this.entityService.hardDelete(id, confirm === 'true');
   }
 
   @Post(':id/merge/:targetId')

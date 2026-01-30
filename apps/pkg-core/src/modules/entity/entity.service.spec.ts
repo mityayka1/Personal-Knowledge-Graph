@@ -44,20 +44,33 @@ describe('EntityService', () => {
     getManyAndCount: jest.fn().mockResolvedValue([[mockEntity], 1]),
   };
 
+  // Mock QueryBuilder for transaction operations
+  const mockTransactionQueryBuilder = {
+    setLock: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    withDeleted: jest.fn().mockReturnThis(),
+    getOne: jest.fn(),
+  };
+
   // Mock manager for transaction operations
   const mockManager = {
     findOne: jest.fn(),
     save: jest.fn(),
+    createQueryBuilder: jest.fn(() => mockTransactionQueryBuilder),
   };
 
   const mockEntityRepository = {
     createQueryBuilder: jest.fn(() => mockQueryBuilder),
     findOne: jest.fn(),
+    findAndCount: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
     remove: jest.fn(),
+    softRemove: jest.fn(),
+    recover: jest.fn(),
     manager: {
       transaction: jest.fn((callback) => callback(mockManager)),
+      query: jest.fn(),
     },
   };
 
@@ -133,9 +146,9 @@ describe('EntityService', () => {
     it('should filter by search', async () => {
       await service.findAll({ search: 'John' });
 
-      expect(mockQueryBuilder.leftJoin).toHaveBeenCalledWith('entity.identifiers', 'identifier');
+      // identifiers is already joined via leftJoinAndSelect, so search uses 'identifiers' alias
       expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
-        '(entity.name ILIKE :search OR identifier.identifierValue ILIKE :search)',
+        '(entity.name ILIKE :search OR identifiers.identifierValue ILIKE :search)',
         { search: '%John%' },
       );
     });
@@ -158,6 +171,46 @@ describe('EntityService', () => {
       mockEntityRepository.findOne.mockResolvedValue(null);
 
       await expect(service.findOne('non-existent')).rejects.toThrow(NotFoundException);
+    });
+
+    it('should hide organization link if organization is soft-deleted', async () => {
+      const deletedOrg = {
+        id: 'org-uuid',
+        name: 'Deleted Org',
+        type: EntityType.ORGANIZATION,
+        deletedAt: new Date(),
+      };
+      const entityWithDeletedOrg = {
+        ...mockEntity,
+        organization: deletedOrg,
+        organizationId: 'org-uuid',
+      };
+      mockEntityRepository.findOne.mockResolvedValue(entityWithDeletedOrg);
+
+      const result = await service.findOne('test-uuid-1');
+
+      expect(result.organization).toBeNull();
+      expect(result.organizationId).toBeNull();
+    });
+
+    it('should keep organization link if organization is not deleted', async () => {
+      const activeOrg = {
+        id: 'org-uuid',
+        name: 'Active Org',
+        type: EntityType.ORGANIZATION,
+        deletedAt: null,
+      };
+      const entityWithOrg = {
+        ...mockEntity,
+        organization: activeOrg,
+        organizationId: 'org-uuid',
+      };
+      mockEntityRepository.findOne.mockResolvedValue(entityWithOrg);
+
+      const result = await service.findOne('test-uuid-1');
+
+      expect(result.organization).toEqual(activeOrg);
+      expect(result.organizationId).toBe('org-uuid');
     });
   });
 
@@ -253,19 +306,35 @@ describe('EntityService', () => {
   });
 
   describe('remove', () => {
-    it('should remove entity', async () => {
+    it('should soft delete entity', async () => {
       mockEntityRepository.findOne.mockResolvedValue(mockEntity);
-      mockEntityRepository.remove.mockResolvedValue(mockEntity);
+      mockEntityRepository.softRemove.mockResolvedValue({ ...mockEntity, deletedAt: new Date() });
 
       const result = await service.remove('test-uuid-1');
 
-      expect(result).toEqual({ deleted: true, id: 'test-uuid-1' });
-      expect(entityRepo.remove).toHaveBeenCalledWith(mockEntity);
+      expect(result.deleted).toBe(true);
+      expect(result.id).toBe('test-uuid-1');
+      expect(result.deletedAt).toBeDefined();
+      expect(mockEntityRepository.softRemove).toHaveBeenCalledWith(mockEntity);
+    });
+
+    it('should prevent deleting owner entity', async () => {
+      const ownerEntity = { ...mockEntity, isOwner: true };
+      mockEntityRepository.findOne.mockResolvedValue(ownerEntity);
+
+      await expect(service.remove('test-uuid-1')).rejects.toThrow(BadRequestException);
+      expect(mockEntityRepository.softRemove).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException if entity not found', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.remove('non-existent')).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('merge', () => {
-    it('should merge two entities', async () => {
+    it('should merge two entities using soft delete', async () => {
       const sourceEntity = { ...mockEntity, id: 'source-uuid' };
       const targetEntity = { ...mockEntity, id: 'target-uuid' };
 
@@ -274,7 +343,7 @@ describe('EntityService', () => {
         .mockResolvedValueOnce(targetEntity);
       mockIdentifierService.moveToEntity.mockResolvedValue(2);
       mockFactService.moveToEntity.mockResolvedValue(3);
-      mockEntityRepository.remove.mockResolvedValue(sourceEntity);
+      mockEntityRepository.softRemove.mockResolvedValue({ ...sourceEntity, deletedAt: new Date() });
 
       const result = await service.merge('source-uuid', 'target-uuid');
 
@@ -284,12 +353,25 @@ describe('EntityService', () => {
         identifiersMoved: 2,
         factsMoved: 3,
       });
+      expect(mockEntityRepository.softRemove).toHaveBeenCalledWith(sourceEntity);
     });
 
     it('should throw ConflictException when merging with itself', async () => {
       mockEntityRepository.findOne.mockResolvedValue(mockEntity);
 
       await expect(service.merge('test-uuid-1', 'test-uuid-1')).rejects.toThrow(ConflictException);
+    });
+
+    it('should prevent merging owner entity', async () => {
+      const ownerEntity = { ...mockEntity, id: 'owner-uuid', isOwner: true };
+      const targetEntity = { ...mockEntity, id: 'target-uuid' };
+
+      mockEntityRepository.findOne
+        .mockResolvedValueOnce(ownerEntity)
+        .mockResolvedValueOnce(targetEntity);
+
+      await expect(service.merge('owner-uuid', 'target-uuid')).rejects.toThrow(BadRequestException);
+      expect(mockEntityRepository.softRemove).not.toHaveBeenCalled();
     });
   });
 
@@ -593,6 +675,144 @@ describe('EntityService', () => {
       mockEntityRepository.findOne.mockResolvedValue(null);
 
       await expect(service.setOwner('non-existent')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('restore', () => {
+    it('should restore soft-deleted entity with pessimistic lock', async () => {
+      const deletedEntity = { ...mockEntity, deletedAt: new Date() };
+      const restoredEntity = { ...mockEntity, deletedAt: null };
+
+      // Mock transaction query builder chain
+      mockTransactionQueryBuilder.getOne.mockResolvedValue(deletedEntity);
+      mockManager.save.mockResolvedValue(restoredEntity);
+      mockManager.findOne.mockResolvedValue(restoredEntity);
+
+      const result = await service.restore('test-uuid-1');
+
+      expect(result.deletedAt).toBeNull();
+      expect(mockTransactionQueryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+      expect(mockTransactionQueryBuilder.withDeleted).toHaveBeenCalled();
+      expect(mockManager.save).toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException if entity not found', async () => {
+      mockTransactionQueryBuilder.getOne.mockResolvedValue(null);
+
+      await expect(service.restore('non-existent')).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw BadRequestException if entity is not deleted', async () => {
+      const activeEntity = { ...mockEntity, deletedAt: null };
+      mockTransactionQueryBuilder.getOne.mockResolvedValue(activeEntity);
+
+      await expect(service.restore('test-uuid-1')).rejects.toThrow(BadRequestException);
+      expect(mockManager.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findDeleted', () => {
+    it('should return soft-deleted entities', async () => {
+      const deletedEntities = [
+        { ...mockEntity, id: 'deleted-1', deletedAt: new Date() },
+        { ...mockEntity, id: 'deleted-2', deletedAt: new Date() },
+      ];
+      mockEntityRepository.findAndCount.mockResolvedValue([deletedEntities, 2]);
+
+      const result = await service.findDeleted({ limit: 10 });
+
+      expect(result.items).toHaveLength(2);
+      expect(result.total).toBe(2);
+      expect(result.limit).toBe(10);
+      expect(mockEntityRepository.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({ withDeleted: true }),
+      );
+    });
+
+    it('should use default pagination', async () => {
+      mockEntityRepository.findAndCount.mockResolvedValue([[], 0]);
+
+      const result = await service.findDeleted({});
+
+      expect(result.limit).toBe(50);
+      expect(result.offset).toBe(0);
+    });
+  });
+
+  describe('hardDelete', () => {
+    it('should permanently delete entity without references', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(mockEntity);
+      mockEntityRepository.manager.query
+        .mockResolvedValueOnce([{ count: '0' }]) // activities (owner_entity_id OR client_entity_id)
+        .mockResolvedValueOnce([{ count: '0' }]) // commitments (from_entity_id OR to_entity_id)
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
+      mockEntityRepository.remove.mockResolvedValue(mockEntity);
+
+      const result = await service.hardDelete('test-uuid-1', true);
+
+      expect(result.hardDeleted).toBe(true);
+      expect(result.id).toBe('test-uuid-1');
+      expect(mockEntityRepository.remove).toHaveBeenCalledWith(mockEntity);
+    });
+
+    it('should reject without confirm=true', async () => {
+      await expect(service.hardDelete('test-uuid-1', false)).rejects.toThrow(BadRequestException);
+      await expect(service.hardDelete('test-uuid-1', false)).rejects.toThrow(
+        'Hard delete requires explicit confirmation',
+      );
+    });
+
+    it('should throw NotFoundException if entity not found', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.hardDelete('non-existent', true)).rejects.toThrow(NotFoundException);
+    });
+
+    it('should reject if entity has activity references', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(mockEntity);
+      mockEntityRepository.manager.query
+        .mockResolvedValueOnce([{ count: '5' }]) // activities
+        .mockResolvedValueOnce([{ count: '0' }]) // commitments
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
+
+      const promise = service.hardDelete('test-uuid-1', true);
+      await expect(promise).rejects.toThrow(ConflictException);
+      expect(mockEntityRepository.remove).not.toHaveBeenCalled();
+    });
+
+    it('should reject if entity has commitment references', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(mockEntity);
+      mockEntityRepository.manager.query
+        .mockResolvedValueOnce([{ count: '0' }]) // activities
+        .mockResolvedValueOnce([{ count: '3' }]) // commitments
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
+
+      await expect(service.hardDelete('test-uuid-1', true)).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject if entity has activity member references', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(mockEntity);
+      mockEntityRepository.manager.query
+        .mockResolvedValueOnce([{ count: '0' }]) // activities
+        .mockResolvedValueOnce([{ count: '0' }]) // commitments
+        .mockResolvedValueOnce([{ count: '7' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '0' }]); // interaction_participants
+
+      await expect(service.hardDelete('test-uuid-1', true)).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject if entity has participation references', async () => {
+      mockEntityRepository.findOne.mockResolvedValue(mockEntity);
+      mockEntityRepository.manager.query
+        .mockResolvedValueOnce([{ count: '0' }]) // activities
+        .mockResolvedValueOnce([{ count: '0' }]) // commitments
+        .mockResolvedValueOnce([{ count: '0' }]) // activity_members
+        .mockResolvedValueOnce([{ count: '10' }]); // interaction_participants
+
+      await expect(service.hardDelete('test-uuid-1', true)).rejects.toThrow(ConflictException);
     });
   });
 });

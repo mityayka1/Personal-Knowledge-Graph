@@ -29,3 +29,7 @@ export * from './brief.types';
 export * from './brief.constants';
 export * from './confidence.constants';
 export * from './utils/html.utils';
+// Phase D: Jarvis Foundation
+export * from './activity.entity';
+export * from './activity-member.entity';
+export * from './commitment.entity';

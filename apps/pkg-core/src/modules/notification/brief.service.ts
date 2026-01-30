@@ -9,6 +9,10 @@ import {
   EntityFact,
   BriefItem,
   BriefState,
+  Activity,
+  ActivityStatus,
+  Commitment,
+  CommitmentStatus,
 } from '@pkg/entities';
 import { BriefStateService } from './brief-state.service';
 
@@ -33,6 +37,10 @@ export class BriefService {
     private readonly extractedEventRepo: Repository<ExtractedEvent>,
     @InjectRepository(EntityFact)
     private readonly entityFactRepo: Repository<EntityFact>,
+    @InjectRepository(Activity)
+    private readonly activityRepo: Repository<Activity>,
+    @InjectRepository(Commitment)
+    private readonly commitmentRepo: Repository<Commitment>,
   ) {}
 
   /**
@@ -197,6 +205,30 @@ export class BriefService {
           `Skipping status update for entity source: ${item.sourceId}`,
         );
         break;
+
+      case 'activity': {
+        // Map EventStatus to ActivityStatus
+        const activityStatus =
+          status === EventStatus.COMPLETED
+            ? ActivityStatus.COMPLETED
+            : ActivityStatus.CANCELLED;
+        await this.activityRepo.update(item.sourceId, {
+          status: activityStatus,
+        });
+        break;
+      }
+
+      case 'commitment': {
+        // Map EventStatus to CommitmentStatus
+        const commitmentStatus =
+          status === EventStatus.COMPLETED
+            ? CommitmentStatus.COMPLETED
+            : CommitmentStatus.CANCELLED;
+        await this.commitmentRepo.update(item.sourceId, {
+          status: commitmentStatus,
+        });
+        break;
+      }
 
       default:
         this.logger.warn(`Unknown sourceType: ${item.sourceType}`);

@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   Optional,
@@ -7,7 +8,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Not, Repository } from 'typeorm';
 import { EntityRecord, EntityType } from '@pkg/entities';
 import { CreateEntityDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
@@ -48,6 +49,8 @@ export interface EntityGraph {
 
 @Injectable()
 export class EntityService {
+  private readonly logger = new Logger(EntityService.name);
+
   constructor(
     @InjectRepository(EntityRecord)
     private entityRepo: Repository<EntityRecord>,
@@ -117,6 +120,12 @@ export class EntityService {
       throw new NotFoundException(`Entity with id '${id}' not found`);
     }
 
+    // Hide organization link if organization is soft-deleted
+    if (entity.organization?.deletedAt) {
+      entity.organization = null;
+      entity.organizationId = null;
+    }
+
     return entity;
   }
 
@@ -163,10 +172,142 @@ export class EntityService {
     return this.findOne(id);
   }
 
+  /**
+   * Soft delete an entity.
+   * Marks entity as deleted but preserves all data.
+   * Related Activity/Commitment records remain intact.
+   *
+   * @param id - Entity UUID to soft delete
+   * @returns Deletion result with timestamp
+   * @throws BadRequestException if entity is the system owner
+   */
   async remove(id: string) {
     const entity = await this.findOne(id);
+
+    // Prevent deleting the owner entity - would break the system
+    if (entity.isOwner) {
+      throw new BadRequestException(
+        'Cannot delete the owner entity. Assign ownership to another entity first with POST /entities/:id/set-owner.',
+      );
+    }
+
+    // Use TypeORM softRemove which sets deletedAt
+    await this.entityRepo.softRemove(entity);
+
+    this.logger.log(`Soft deleted entity: ${entity.name} (${id})`);
+
+    return {
+      deleted: true,
+      id,
+      deletedAt: new Date(),
+      message: 'Entity soft deleted. Use POST /entities/:id/restore to recover.',
+    };
+  }
+
+  /**
+   * Restore a soft-deleted entity.
+   * Uses pessimistic locking to prevent race conditions.
+   *
+   * @param id - Entity UUID to restore
+   * @returns Restored entity
+   */
+  async restore(id: string): Promise<EntityRecord> {
+    return this.entityRepo.manager.transaction(async (manager) => {
+      // SELECT FOR UPDATE prevents race condition when multiple requests try to restore
+      const entity = await manager
+        .createQueryBuilder(EntityRecord, 'e')
+        .setLock('pessimistic_write')
+        .where('e.id = :id', { id })
+        .withDeleted()
+        .getOne();
+
+      if (!entity) {
+        throw new NotFoundException(`Entity with id '${id}' not found`);
+      }
+
+      if (!entity.deletedAt) {
+        throw new BadRequestException(`Entity '${id}' is not deleted`);
+      }
+
+      // Clear deletedAt to restore the entity
+      entity.deletedAt = null;
+      await manager.save(EntityRecord, entity);
+
+      this.logger.log(`Restored entity: ${entity.name} (${id})`);
+
+      // Fetch with relations for return
+      return manager.findOne(EntityRecord, {
+        where: { id },
+        relations: ['organization', 'identifiers', 'facts'],
+      }) as Promise<EntityRecord>;
+    });
+  }
+
+  /**
+   * Find all soft-deleted entities.
+   *
+   * @returns List of deleted entities with deletion timestamps
+   */
+  async findDeleted(options: { limit?: number; offset?: number } = {}) {
+    const { limit = 50, offset = 0 } = options;
+
+    const [items, total] = await this.entityRepo.findAndCount({
+      where: { deletedAt: Not(IsNull()) },
+      withDeleted: true,
+      relations: ['organization', 'identifiers'],
+      take: limit,
+      skip: offset,
+      order: { deletedAt: 'DESC' },
+    });
+
+    return { items, total, limit, offset };
+  }
+
+  /**
+   * Permanently delete an entity (hard delete).
+   * USE WITH CAUTION: This cannot be undone.
+   *
+   * @param id - Entity UUID to permanently delete
+   * @param confirm - Must be true to proceed
+   */
+  async hardDelete(id: string, confirm: boolean) {
+    if (!confirm) {
+      throw new BadRequestException(
+        'Hard delete requires explicit confirmation. Set confirm=true to proceed.',
+      );
+    }
+
+    // Find with soft-deleted included
+    const entity = await this.entityRepo.findOne({
+      where: { id },
+      withDeleted: true,
+    });
+
+    if (!entity) {
+      throw new NotFoundException(`Entity with id '${id}' not found`);
+    }
+
+    // Check FK references before hard delete
+    const hasReferences = await this.checkEntityReferences(id);
+    if (hasReferences.total > 0) {
+      throw new ConflictException(
+        `Cannot hard delete: entity has ${hasReferences.total} references ` +
+        `(${hasReferences.activities} activities, ${hasReferences.commitments} commitments, ` +
+        `${hasReferences.activityMembers} activity members, ${hasReferences.participations} participations). ` +
+        `These must be deleted or reassigned first.`,
+      );
+    }
+
+    // Permanently remove from database
     await this.entityRepo.remove(entity);
-    return { deleted: true, id };
+
+    this.logger.warn(`HARD deleted entity: ${entity.name} (${id})`);
+
+    return {
+      hardDeleted: true,
+      id,
+      message: 'Entity permanently deleted. This cannot be undone.',
+    };
   }
 
   async merge(sourceId: string, targetId: string) {
@@ -177,14 +318,23 @@ export class EntityService {
       throw new ConflictException('Cannot merge entity with itself');
     }
 
+    // Prevent merging owner entity
+    if (source.isOwner) {
+      throw new BadRequestException(
+        'Cannot merge the owner entity. Assign ownership to target entity first.',
+      );
+    }
+
     // Move identifiers
     const identifiersMoved = await this.identifierService.moveToEntity(sourceId, targetId);
 
     // Move facts
     const factsMoved = await this.factService.moveToEntity(sourceId, targetId);
 
-    // Delete source entity
-    await this.entityRepo.remove(source);
+    // Soft delete source entity (preserves FK references in Activity/Commitment)
+    await this.entityRepo.softRemove(source);
+
+    this.logger.log(`Merged entity ${source.name} (${sourceId}) into ${targetId}`);
 
     return {
       mergedEntityId: targetId,
@@ -336,6 +486,57 @@ export class EntityService {
       centralEntityId: entityId,
       nodes: Array.from(nodes.values()),
       edges,
+    };
+  }
+
+  /**
+   * Check if entity has FK references that would prevent hard delete.
+   * Returns counts of each reference type.
+   *
+   * Checks:
+   * - activities: owner_entity_id OR client_entity_id
+   * - commitments: from_entity_id OR to_entity_id
+   * - activity_members: entity_id
+   * - interaction_participants: entity_id
+   */
+  private async checkEntityReferences(entityId: string): Promise<{
+    activities: number;
+    commitments: number;
+    activityMembers: number;
+    participations: number;
+    total: number;
+  }> {
+    const [activities, commitments, activityMembers, participations] = await Promise.all([
+      // Activities reference entity as owner or client
+      this.entityRepo.manager
+        .query(
+          'SELECT COUNT(*) FROM activities WHERE owner_entity_id = $1 OR client_entity_id = $1',
+          [entityId],
+        )
+        .then((r) => parseInt(r[0].count, 10)),
+      // Commitments reference entity as from or to party
+      this.entityRepo.manager
+        .query(
+          'SELECT COUNT(*) FROM commitments WHERE from_entity_id = $1 OR to_entity_id = $1',
+          [entityId],
+        )
+        .then((r) => parseInt(r[0].count, 10)),
+      // Activity members reference entity directly
+      this.entityRepo.manager
+        .query('SELECT COUNT(*) FROM activity_members WHERE entity_id = $1', [entityId])
+        .then((r) => parseInt(r[0].count, 10)),
+      // Interaction participants reference entity directly
+      this.entityRepo.manager
+        .query('SELECT COUNT(*) FROM interaction_participants WHERE entity_id = $1', [entityId])
+        .then((r) => parseInt(r[0].count, 10)),
+    ]);
+
+    return {
+      activities,
+      commitments,
+      activityMembers,
+      participations,
+      total: activities + commitments + activityMembers + participations,
     };
   }
 }

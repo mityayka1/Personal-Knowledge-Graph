@@ -36,14 +36,25 @@ export class EntityIdentifierService {
     return this.identifierRepo.save(identifier);
   }
 
+  /**
+   * Find identifier by type and value.
+   * Returns null if the linked entity has been soft-deleted.
+   */
   async findByIdentifier(type: IdentifierType, value: string) {
-    return this.identifierRepo.findOne({
+    const identifier = await this.identifierRepo.findOne({
       where: {
         identifierType: type,
         identifierValue: value,
       },
       relations: ['entity'],
     });
+
+    // If entity is soft-deleted, treat identifier as not found
+    if (identifier?.entity?.deletedAt) {
+      return null;
+    }
+
+    return identifier;
   }
 
   async moveToEntity(fromEntityId: string, toEntityId: string) {

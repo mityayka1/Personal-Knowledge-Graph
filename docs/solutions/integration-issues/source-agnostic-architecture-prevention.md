@@ -655,3 +655,7 @@ async proxy(@Req() req: Request, @Res() res: Response) {
 | Direct adapter access | Config validation, CI check | grep for `*_ADAPTER_URL` |
 | path-to-regexp v8 | Named wildcards, array handling | Tests with array params |
 | Missing proxy route | Architecture review | 404 on `/internal/*` paths |
+
+## See Also
+
+- [PR #103 Code Review Fixes](../code-review-fixes/pr103-entity-activity-extraction-20260130.md) — Применение source-agnostic паттерна к ExtractionCarouselState (chatId/messageId → conversationId/messageRef)

@@ -32,7 +32,7 @@ export type ExecutionMode = 'oneshot' | 'agent';
 /**
  * Tool categories for selective tool loading
  */
-export type ToolCategory = 'search' | 'context' | 'events' | 'entities' | 'actions' | 'all';
+export type ToolCategory = 'search' | 'context' | 'events' | 'entities' | 'actions' | 'activities' | 'all';
 
 /**
  * Base parameters for all Claude calls
