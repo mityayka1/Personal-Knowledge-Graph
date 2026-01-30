@@ -582,7 +582,7 @@ export class ExtractionCarouselController {
   }
 
   private formatProjectDetails(lines: string[], project: ExtractedProject): void {
-    lines.push(`<b>${project.name}</b>`);
+    lines.push(`<b>${project.name ?? 'Без названия'}</b>`);
 
     if (project.isNew) {
       lines.push('🆕 Новый проект');
@@ -612,7 +612,7 @@ export class ExtractionCarouselController {
     const statusIcon = task.status === 'done' ? '✅' :
                       task.status === 'in_progress' ? '🔄' : '⏳';
 
-    lines.push(`${statusIcon} <b>${task.title}</b>`);
+    lines.push(`${statusIcon} <b>${task.title ?? 'Без названия'}</b>`);
 
     if (task.projectName) {
       lines.push(`📁 Проект: ${task.projectName}`);
@@ -639,8 +639,8 @@ export class ExtractionCarouselController {
                     commitment.type === 'agreement' ? '🤝' :
                     commitment.type === 'deadline' ? '⏰' : '🔔';
 
-    lines.push(`${typeIcon} <b>${commitment.what}</b>`);
-    lines.push(`👤 ${commitment.from} → ${commitment.to}`);
+    lines.push(`${typeIcon} <b>${commitment.what ?? 'Без описания'}</b>`);
+    lines.push(`👤 ${commitment.from ?? '?'} → ${commitment.to ?? '?'}`);
 
     if (commitment.deadline) {
       lines.push(`📅 До: ${commitment.deadline}`);
@@ -735,17 +735,18 @@ export class ExtractionCarouselController {
   private getItemTitle(item: ExtractionCarouselItem): string {
     switch (item.type) {
       case 'project':
-        return (item.data as ExtractedProject).name;
+        return (item.data as ExtractedProject).name ?? 'Без названия';
       case 'task':
-        return (item.data as ExtractedTask).title;
+        return (item.data as ExtractedTask).title ?? 'Без названия';
       case 'commitment':
-        return (item.data as ExtractedCommitment).what;
+        return (item.data as ExtractedCommitment).what ?? 'Без описания';
       default:
         return 'Unknown';
     }
   }
 
   private truncate(text: string, maxLength: number): string {
+    if (!text) return '';
     if (text.length <= maxLength) return text;
     return text.slice(0, maxLength - 3) + '...';
   }
