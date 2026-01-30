@@ -70,9 +70,9 @@ export class DailySynthesisExtractionService {
       mode: 'oneshot',
       taskType: 'daily_brief', // Reusing existing task type
       prompt,
-      model: 'haiku', // Fast and cheap for extraction
+      model: 'sonnet', // More reliable for complex schema
       schema: DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
-      maxTurns: 3, // 2 minimum for structured output, 3 for safety
+      maxTurns: 5, // Complex schema may need more iterations
       timeout: 120000, // 2 minutes (large prompts need more time)
     });
 
