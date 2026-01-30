@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, IsNull, In } from 'typeorm';
+import { Repository, Between, LessThan, IsNull, In, Not, And } from 'typeorm';
 import {
   ExtractedEvent,
   ExtractedEventStatus,
@@ -455,6 +455,7 @@ export class DigestService {
 
   /**
    * Get overdue activities (tasks with past deadline, still active/idea).
+   * Note: Activities without deadline (NULL) are excluded.
    */
   private async getOverdueActivities(): Promise<Activity[]> {
     const now = new Date();
@@ -462,7 +463,7 @@ export class DigestService {
     return this.activityRepo.find({
       where: {
         activityType: In([ActivityType.TASK, ActivityType.MILESTONE]),
-        deadline: LessThan(now),
+        deadline: And(Not(IsNull()), LessThan(now)),
         status: In([ActivityStatus.ACTIVE, ActivityStatus.IDEA]),
       },
       relations: ['ownerEntity'],
@@ -493,6 +494,7 @@ export class DigestService {
         {
           status: CommitmentStatus.PENDING,
           type: In([CommitmentType.REQUEST, CommitmentType.PROMISE]),
+          dueDate: IsNull(),
         },
       ],
       relations: ['fromEntity', 'toEntity'],
