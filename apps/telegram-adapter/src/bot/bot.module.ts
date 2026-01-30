@@ -15,6 +15,7 @@ import { FactCallbackHandler } from './handlers/fact-callback.handler';
 import { BriefFormatterService } from './services/brief-formatter.service';
 import { NotificationController } from './notification.controller';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
+import { DailyContextCacheService } from '../common/cache';
 
 @Module({
   imports: [ApiModule, ConfigModule],
@@ -33,6 +34,7 @@ import { ApiKeyGuard } from '../common/guards/api-key.guard';
     FactCallbackHandler,
     BriefFormatterService,
     ApiKeyGuard,
+    DailyContextCacheService,
   ],
   exports: [BotService, BriefFormatterService],
 })
