@@ -76,6 +76,12 @@ export class RecallSourceDto {
  * Response data for recall endpoint
  */
 export class RecallResponseDataDto {
+  @ApiProperty({
+    description: 'Session ID for follow-up operations (extract, continue conversation)',
+    example: 'rs_a1b2c3d4e5f6',
+  })
+  sessionId: string;
+
   @ApiProperty({ description: 'Agent answer in natural language (Russian)' })
   answer: string;
 
@@ -412,4 +418,95 @@ export class DailyExtractResponseDto {
 
   @ApiProperty({ type: DailyExtractResponseDataDto })
   data: DailyExtractResponseDataDto;
+}
+
+// =====================================================
+// Recall Session DTOs
+// =====================================================
+
+/**
+ * Recall session data for GET /agent/recall/session/:sessionId
+ */
+export class RecallSessionDataDto {
+  @ApiProperty({ description: 'Session ID', example: 'rs_a1b2c3d4e5f6' })
+  sessionId: string;
+
+  @ApiProperty({ description: 'Original query' })
+  query: string;
+
+  @ApiProperty({ description: 'Date string (YYYY-MM-DD)' })
+  dateStr: string;
+
+  @ApiProperty({ description: 'LLM synthesis answer' })
+  answer: string;
+
+  @ApiProperty({
+    type: [RecallSourceDto],
+    description: 'Sources used in the answer',
+  })
+  sources: RecallSourceDto[];
+
+  @ApiPropertyOptional({
+    enum: ['haiku', 'sonnet', 'opus'],
+    description: 'Model used for synthesis',
+  })
+  model?: 'haiku' | 'sonnet' | 'opus';
+
+  @ApiProperty({ description: 'Session creation timestamp' })
+  createdAt: number;
+}
+
+/**
+ * Response for GET /agent/recall/session/:sessionId
+ */
+export class RecallSessionResponseDto {
+  @ApiProperty({ description: 'Operation success flag' })
+  success: boolean;
+
+  @ApiProperty({ type: RecallSessionDataDto })
+  data: RecallSessionDataDto;
+}
+
+/**
+ * Request DTO for POST /agent/recall/session/:sessionId/followup
+ */
+export class RecallFollowupRequestDto {
+  @ApiProperty({
+    description: 'Follow-up query in context of the session',
+    example: 'А что насчёт дедлайнов?',
+    minLength: 2,
+  })
+  @IsString()
+  @MinLength(2, { message: 'Query must be at least 2 characters' })
+  query: string;
+
+  @ApiPropertyOptional({
+    description: 'Claude model to use (inherits from session if not specified)',
+    enum: ['haiku', 'sonnet', 'opus'],
+  })
+  @IsOptional()
+  @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
+  model?: 'haiku' | 'sonnet' | 'opus';
+}
+
+/**
+ * Request DTO for POST /agent/recall/session/:sessionId/extract
+ */
+export class RecallExtractRequestDto {
+  @ApiPropertyOptional({
+    description: 'Focus topic for extraction (optional)',
+    example: 'Панавто',
+  })
+  @IsOptional()
+  @IsString()
+  focusTopic?: string;
+
+  @ApiPropertyOptional({
+    description: 'Model to use for extraction',
+    enum: ['haiku', 'sonnet', 'opus'],
+    default: 'sonnet',
+  })
+  @IsOptional()
+  @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
+  model?: 'haiku' | 'sonnet' | 'opus';
 }

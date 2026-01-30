@@ -6,6 +6,7 @@ import { ClaudeAgentController } from './claude-agent.controller';
 import { AgentController } from './agent.controller';
 import { SchemaLoaderService } from './schema-loader.service';
 import { ToolsRegistryService } from './tools-registry.service';
+import { RecallSessionService } from './recall-session.service';
 import {
   SearchToolsProvider,
   EntityToolsProvider,
@@ -61,6 +62,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ClaudeAgentService,
     SchemaLoaderService,
     ToolsRegistryService,
+    RecallSessionService,
     // Tool providers (NestJS Injectable)
     SearchToolsProvider,
     EntityToolsProvider,
@@ -73,6 +75,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ClaudeAgentService,
     SchemaLoaderService,
     ToolsRegistryService,
+    RecallSessionService,
     // Export providers for potential external usage
     SearchToolsProvider,
     EntityToolsProvider,

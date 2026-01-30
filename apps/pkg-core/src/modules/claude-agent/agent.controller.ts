@@ -16,6 +16,7 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { ClaudeAgentService } from './claude-agent.service';
+import { RecallSessionService } from './recall-session.service';
 import {
   RecallRequestDto,
   RecallResponseDto,
@@ -25,6 +26,9 @@ import {
   ActActionDto,
   DailyExtractRequestDto,
   DailyExtractResponseDto,
+  RecallSessionResponseDto,
+  RecallFollowupRequestDto,
+  RecallExtractRequestDto,
 } from './dto';
 import {
   RecallSource,
@@ -169,6 +173,7 @@ export class AgentController {
     private readonly claudeAgentService: ClaudeAgentService,
     private readonly entityService: EntityService,
     private readonly dailySynthesisExtractionService: DailySynthesisExtractionService,
+    private readonly recallSessionService: RecallSessionService,
   ) {}
 
   /**
@@ -235,10 +240,24 @@ export class AgentController {
         }),
       );
 
+      const answer = structuredData?.answer || 'Не удалось найти информацию.';
+
+      // Create session for follow-up operations
+      const sessionId = await this.recallSessionService.create({
+        query: dto.query,
+        dateStr: new Date().toISOString().split('T')[0],
+        answer,
+        sources,
+        model: dto.model || 'sonnet',
+      });
+
+      this.logger.log(`Created recall session: ${sessionId}`);
+
       return {
         success: true,
         data: {
-          answer: structuredData?.answer || 'Не удалось найти информацию.',
+          sessionId,
+          answer,
           sources,
           toolsUsed: result.toolsUsed || [],
         },
@@ -250,6 +269,252 @@ export class AgentController {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  /**
+   * GET /agent/recall/session/:sessionId
+   *
+   * Get recall session by ID for displaying context or continuing conversation
+   *
+   * @example
+   * GET /agent/recall/session/rs_a1b2c3d4e5f6
+   */
+  @Get('recall/session/:sessionId')
+  @ApiOperation({
+    summary: 'Get recall session',
+    description: 'Retrieve recall session data by ID for follow-up operations',
+  })
+  @ApiParam({
+    name: 'sessionId',
+    description: 'Session ID from recall response',
+    example: 'rs_a1b2c3d4e5f6',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Session found',
+    type: RecallSessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found or expired' })
+  async getRecallSession(
+    @Param('sessionId') sessionId: string,
+  ): Promise<RecallSessionResponseDto> {
+    this.logger.log(`Get recall session: ${sessionId}`);
+
+    const session = await this.recallSessionService.get(sessionId);
+
+    if (!session) {
+      throw new HttpException(
+        `Session not found or expired: ${sessionId}`,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    return {
+      success: true,
+      data: {
+        sessionId: session.id,
+        query: session.query,
+        dateStr: session.dateStr,
+        answer: session.answer,
+        sources: session.sources,
+        model: session.model,
+        createdAt: session.createdAt,
+      },
+    };
+  }
+
+  /**
+   * POST /agent/recall/session/:sessionId/extract
+   *
+   * Extract structured data from recall session synthesis
+   *
+   * @example
+   * POST /agent/recall/session/rs_a1b2c3d4e5f6/extract
+   * { "focusTopic": "Панавто" }
+   */
+  @Post('recall/session/:sessionId/extract')
+  @ApiOperation({
+    summary: 'Extract structured data from recall session',
+    description:
+      'Extracts projects, tasks, commitments from recall session answer',
+  })
+  @ApiParam({
+    name: 'sessionId',
+    description: 'Session ID from recall response',
+    example: 'rs_a1b2c3d4e5f6',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Extraction completed',
+    type: DailyExtractResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found or expired' })
+  async extractFromSession(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: RecallExtractRequestDto,
+  ): Promise<DailyExtractResponseDto> {
+    this.logger.log(
+      `Extract from recall session: ${sessionId}, focus=${dto.focusTopic || 'none'}`,
+    );
+
+    const session = await this.recallSessionService.get(sessionId);
+
+    if (!session) {
+      throw new HttpException(
+        `Session not found or expired: ${sessionId}`,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    try {
+      const result = await this.dailySynthesisExtractionService.extract({
+        synthesisText: session.answer,
+        date: session.dateStr,
+        focusTopic: dto.focusTopic,
+      });
+
+      return {
+        success: true,
+        data: {
+          projects: result.projects,
+          tasks: result.tasks,
+          commitments: result.commitments,
+          inferredRelations: result.inferredRelations,
+          extractionSummary: result.extractionSummary,
+          tokensUsed: result.tokensUsed,
+          durationMs: result.durationMs,
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Extract from session failed: ${error}`);
+      throw new HttpException(
+        'Failed to extract structured data from session',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * POST /agent/recall/session/:sessionId/followup
+   *
+   * Continue conversation in context of recall session
+   *
+   * @example
+   * POST /agent/recall/session/rs_a1b2c3d4e5f6/followup
+   * { "query": "А что насчёт дедлайнов?" }
+   */
+  @Post('recall/session/:sessionId/followup')
+  @ApiOperation({
+    summary: 'Continue recall conversation',
+    description: 'Send follow-up query in context of existing recall session',
+  })
+  @ApiParam({
+    name: 'sessionId',
+    description: 'Session ID from recall response',
+    example: 'rs_a1b2c3d4e5f6',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Follow-up completed',
+    type: RecallResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found or expired' })
+  async followupRecall(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: RecallFollowupRequestDto,
+  ): Promise<RecallResponseDto> {
+    this.logger.log(`Follow-up recall session: ${sessionId}, query="${dto.query.slice(0, 50)}..."`);
+
+    const session = await this.recallSessionService.get(sessionId);
+
+    if (!session) {
+      throw new HttpException(
+        `Session not found or expired: ${sessionId}`,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    try {
+      // Build context-aware prompt with previous answer
+      const contextPrompt = this.buildFollowupPrompt(
+        dto.query,
+        session.query,
+        session.answer,
+      );
+
+      const result = await this.claudeAgentService.call<RecallStructuredOutput>({
+        mode: 'agent',
+        taskType: 'recall',
+        prompt: contextPrompt,
+        toolCategories: ['search', 'context', 'entities', 'events'],
+        model: dto.model || session.model || 'sonnet',
+        maxTurns: 10,
+        outputFormat: {
+          type: 'json_schema',
+          schema: RECALL_RESPONSE_SCHEMA,
+          strict: true,
+        },
+      });
+
+      const structuredData = result.data as RecallStructuredOutput;
+
+      const sources: RecallSource[] = (structuredData?.sources || []).map(
+        (s) => ({
+          type: (s.type === 'interaction' ? 'interaction' : 'message') as
+            | 'message'
+            | 'interaction',
+          id: s.id,
+          preview: s.preview || '',
+        }),
+      );
+
+      const answer = structuredData?.answer || 'Не удалось найти дополнительную информацию.';
+
+      // Update session with new answer
+      await this.recallSessionService.updateAnswer(sessionId, answer, sources);
+
+      return {
+        success: true,
+        data: {
+          sessionId,
+          answer,
+          sources,
+          toolsUsed: result.toolsUsed || [],
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Follow-up recall failed: ${error}`);
+      throw new HttpException(
+        'Failed to process follow-up request',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Build prompt for follow-up query with context
+   */
+  private buildFollowupPrompt(
+    followupQuery: string,
+    originalQuery: string,
+    previousAnswer: string,
+  ): string {
+    return `Контекст предыдущего запроса:
+Вопрос: "${originalQuery}"
+Ответ: ${previousAnswer}
+
+Уточняющий вопрос: "${followupQuery}"
+
+Найди дополнительную информацию по уточняющему вопросу, учитывая контекст предыдущего разговора.
+
+Используй инструменты:
+1. search_messages — поиск по сообщениям
+2. get_entity_context — контекст о человеке
+3. list_entities — поиск контактов
+
+Заполни поля ответа:
+- answer: ответ на уточняющий вопрос на русском языке
+- sources: массив источников [{type:"message", id:"UUID", preview:"цитата"}]`;
   }
 
   /**

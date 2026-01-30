@@ -72,9 +72,27 @@ export interface RecallSource {
 }
 
 export interface RecallResponseData {
+  /** Session ID for follow-up operations */
+  sessionId: string;
   answer: string;
   sources: RecallSource[];
   toolsUsed: string[];
+}
+
+/** Session data from PKG Core */
+export interface RecallSessionData {
+  sessionId: string;
+  query: string;
+  dateStr: string;
+  answer: string;
+  sources: RecallSource[];
+  model?: 'haiku' | 'sonnet' | 'opus';
+  createdAt: number;
+}
+
+export interface RecallSessionResponse {
+  success: boolean;
+  data: RecallSessionData;
 }
 
 export interface RecallResponse {
@@ -472,6 +490,88 @@ export class PkgCoreApiService {
       const response = await this.client.get<EntitiesResponse>('/entities', {
         params: { search, limit },
       });
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // Recall Session API Methods
+  // ============================================
+
+  /**
+   * Get recall session data by session ID.
+   * Session contains LLM synthesis results for follow-up operations.
+   *
+   * @param sessionId Session ID from recall response (e.g., "rs_a1b2c3d4e5f6")
+   */
+  async getRecallSession(sessionId: string): Promise<RecallSessionResponse | null> {
+    try {
+      const response = await this.client.get<RecallSessionResponse>(
+        `/agent/recall/session/${sessionId}`,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null; // Session not found or expired
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Continue conversation in context of existing recall session.
+   * Uses session's sources as context for follow-up query.
+   *
+   * @param sessionId Session ID from recall response
+   * @param query Follow-up question
+   * @param model Optional Claude model (inherits from session if not specified)
+   * @param timeout Optional timeout in ms (default: 120000)
+   */
+  async followupRecall(
+    sessionId: string,
+    query: string,
+    model?: 'haiku' | 'sonnet' | 'opus',
+    timeout = 120000,
+  ): Promise<RecallResponse> {
+    return this.withRetry(async () => {
+      const body: { query: string; model?: string } = { query };
+      if (model) {
+        body.model = model;
+      }
+      const response = await this.client.post<RecallResponse>(
+        `/agent/recall/session/${sessionId}/followup`,
+        body,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Extract structured data from recall session synthesis.
+   * Extracts projects, tasks, commitments from the session's answer.
+   *
+   * @param sessionId Session ID from recall response
+   * @param focusTopic Optional focus topic for extraction
+   * @param model Optional Claude model (default: sonnet)
+   * @param timeout Optional timeout in ms (default: 120000)
+   */
+  async extractFromSession(
+    sessionId: string,
+    focusTopic?: string,
+    model?: 'haiku' | 'sonnet' | 'opus',
+    timeout = 120000,
+  ): Promise<DailyExtractResponse> {
+    return this.withRetry(async () => {
+      const body: { focusTopic?: string; model?: string } = {};
+      if (focusTopic) body.focusTopic = focusTopic;
+      if (model) body.model = model;
+
+      const response = await this.client.post<DailyExtractResponse>(
+        `/agent/recall/session/${sessionId}/extract`,
+        body,
+        { timeout },
+      );
       return response.data;
     });
   }
