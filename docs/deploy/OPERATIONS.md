@@ -4,6 +4,58 @@
 
 ---
 
+## Подключение к серверу
+
+### SSH доступ
+
+```bash
+ssh mityayka@assistant.mityayka.ru
+```
+
+### Быстрая проверка после деплоя
+
+```bash
+# Одной командой — проверить статус всех контейнеров
+ssh mityayka@assistant.mityayka.ru "cd /opt/apps/pkg/docker && docker compose ps"
+
+# Проверить логи pkg-core за последние 5 минут
+ssh mityayka@assistant.mityayka.ru "docker logs pkg-core --tail 50 --since 5m"
+
+# Проверить логи telegram-adapter
+ssh mityayka@assistant.mityayka.ru "docker logs pkg-telegram-adapter --tail 50 --since 5m"
+
+# Проверить логи dashboard
+ssh mityayka@assistant.mityayka.ru "docker logs pkg-dashboard --tail 50 --since 5m"
+
+# Все логи сразу (follow mode)
+ssh mityayka@assistant.mityayka.ru "cd /opt/apps/pkg/docker && docker compose logs -f --tail 20"
+```
+
+### Проверка health endpoints
+
+```bash
+# С сервера
+curl -s http://localhost:3000/api/v1/health | jq
+curl -s http://localhost:3001/api/v1/health | jq
+curl -s http://localhost:3003/api/health | jq
+
+# Удалённо через SSH
+ssh mityayka@assistant.mityayka.ru "curl -s http://localhost:3000/api/v1/health"
+```
+
+### Контейнеры
+
+| Container | Service | Port |
+|-----------|---------|------|
+| `pkg-core` | PKG Core API | 3000 |
+| `pkg-telegram-adapter` | Telegram Adapter | 3001 |
+| `pkg-dashboard` | Dashboard UI | 3003 |
+| `pkg-bull-board` | Queue Monitor | 3004 |
+| `pkg-n8n` | n8n Workflows | 5678 |
+| `pkg-redis` | Redis | 6379 |
+
+---
+
 ## Мониторинг и логи
 
 ### Просмотр логов
