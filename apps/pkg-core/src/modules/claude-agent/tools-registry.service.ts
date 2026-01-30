@@ -6,6 +6,7 @@ import {
   EventToolsProvider,
   ContextToolsProvider,
   ActionToolsProvider,
+  ActivityToolsProvider,
   type ToolDefinition,
 } from './tools';
 import type { ToolCategory } from './claude-agent.types';
@@ -40,6 +41,9 @@ export class ToolsRegistryService {
     @Optional()
     @Inject(forwardRef(() => ActionToolsProvider))
     private readonly actionToolsProvider: ActionToolsProvider | null,
+    @Optional()
+    @Inject(forwardRef(() => ActivityToolsProvider))
+    private readonly activityToolsProvider: ActivityToolsProvider | null,
   ) {
     // Log availability of context tools
     if (!this.contextToolsProvider?.hasTools()) {
@@ -64,6 +68,7 @@ export class ToolsRegistryService {
         ...this.eventToolsProvider.getTools(),
         ...(this.contextToolsProvider?.getTools() ?? []),
         ...(this.actionToolsProvider?.getTools() ?? []),
+        ...(this.activityToolsProvider?.getTools() ?? []),
       ];
       this.logger.debug(`Aggregated ${this.cachedAllTools.length} tools from all providers`);
     }
@@ -111,6 +116,11 @@ export class ToolsRegistryService {
         case 'actions':
           if (this.actionToolsProvider) {
             tools.push(...this.actionToolsProvider.getTools());
+          }
+          break;
+        case 'activities':
+          if (this.activityToolsProvider) {
+            tools.push(...this.activityToolsProvider.getTools());
           }
           break;
       }
