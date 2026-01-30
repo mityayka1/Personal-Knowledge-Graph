@@ -326,11 +326,11 @@ GET  /api/mini-app/recall/:sessionId       - Recall session results
 GET  /api/mini-app/entity/:id              - Entity profile
 ```
 
-### Phase 2: Core Features
+### Phase 2: Core Features ✅
 
-#### 2.1 Dashboard Page
+#### 2.1 Dashboard Page ✅
 
-**`apps/mini-app/src/pages/index.vue`:**
+**`apps/mini-app/src/pages/index.vue`:** ✅
 
 Секции:
 - **Pending Actions** — события на подтверждение, fact conflicts
@@ -338,7 +338,7 @@ GET  /api/mini-app/entity/:id              - Entity profile
 - **Recent Activity** — последние recall sessions, entities
 - **Quick Actions** — кнопки для частых действий
 
-#### 2.2 Extraction Carousel Page
+#### 2.2 Extraction Carousel Page ✅
 
 **`apps/mini-app/src/pages/extraction/[carouselId].vue`:**
 
@@ -410,27 +410,27 @@ onUnmounted(() => {
 </script>
 ```
 
-#### 2.3 Morning Brief Page
+#### 2.3 Morning Brief Page ✅
 
-**`apps/mini-app/src/pages/brief/[briefId].vue`:**
+**`apps/mini-app/src/pages/brief/[briefId].vue`:** ✅
 
 - Collapsible sections (expand/collapse animations)
 - Each item has action buttons (Done, Write, Remind, Prepare)
 - Pull down to refresh
 - Stats at top (X of Y completed)
 
-#### 2.4 Recall Results Page
+#### 2.4 Recall Results Page ✅
 
-**`apps/mini-app/src/pages/recall/[sessionId].vue`:**
+**`apps/mini-app/src/pages/recall/[sessionId].vue`:** ✅
 
 - Answer card at top
 - Sources list below (expandable)
 - Follow-up input at bottom
 - Save insights button
 
-### Phase 3: Bot Integration
+### Phase 3: Bot Integration ✅
 
-#### 3.1 Deep Links from Bot
+#### 3.1 Deep Links from Bot ✅
 
 **Формат URL:** `t.me/SeBraBot/app?startapp=<encoded_data>`
 
