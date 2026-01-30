@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Context } from 'telegraf';
 import { Message } from 'telegraf/typings/core/types/typegram';
 import {
@@ -29,11 +30,35 @@ type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
 @Injectable()
 export class DailySummaryHandler {
   private readonly logger = new Logger(DailySummaryHandler.name);
+  private readonly miniAppUrl: string | undefined;
 
   constructor(
     private readonly pkgCoreApi: PkgCoreApiService,
     private readonly dailyContextCache: DailyContextCacheService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.miniAppUrl = this.configService.get<string>('MINI_APP_URL');
+  }
+
+  /**
+   * Generate Mini App URL for deep linking.
+   * Format: https://t.me/BotUsername/app?startapp=<type>_<id>
+   */
+  private getMiniAppButton(
+    type: 'extraction' | 'brief' | 'recall' | 'entity',
+    id: string,
+    text = '📱 Открыть в приложении',
+  ): { text: string; web_app: { url: string } } | null {
+    if (!this.miniAppUrl) {
+      return null;
+    }
+
+    const startParam = `${type}_${id}`;
+    return {
+      text,
+      web_app: { url: `${this.miniAppUrl}?startapp=${startParam}` },
+    };
+  }
 
   /**
    * Check if this handler can process the callback
@@ -211,13 +236,22 @@ export class DailySummaryHandler {
         return;
       }
 
-      // Step 4: Update message with first carousel item
+      // Step 4: Update message with first carousel item + Mini App button
       await this.updateButtonStatus(ctx, messageId, 'extracted');
+
+      // Add Mini App button if URL is configured and carouselId exists
+      const miniAppButton = carouselResult.carouselId
+        ? this.getMiniAppButton('extraction', carouselResult.carouselId)
+        : null;
+      const buttonsWithMiniApp = miniAppButton
+        ? [...(carouselResult.buttons || []), [miniAppButton]]
+        : carouselResult.buttons;
+
       await this.updateCarouselMessage(ctx, chatId, carouselMessage.message_id, {
         success: true,
         complete: false,
         message: carouselResult.message,
-        buttons: carouselResult.buttons,
+        buttons: buttonsWithMiniApp,
         chatId: String(chatId),
         messageId: carouselMessage.message_id,
       });

@@ -169,11 +169,16 @@ export interface RescheduleResponse {
 // Carousel API Types
 // ============================================
 
+// Telegram inline keyboard button types
+export type TelegramCallbackButton = { text: string; callback_data: string };
+export type TelegramWebAppButton = { text: string; web_app: { url: string } };
+export type TelegramInlineButton = TelegramCallbackButton | TelegramWebAppButton;
+
 export interface CarouselNavResponse {
   success: boolean;
   complete: boolean;
   message?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramInlineButton>>;
   chatId?: string;
   messageId?: number;
   processedCount?: number;
@@ -330,7 +335,7 @@ export interface CreateExtractionCarouselResponse {
   carouselId?: string;
   total?: number;
   message?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramInlineButton>>;
   error?: string;
 }
 
@@ -339,7 +344,7 @@ export interface ExtractionCarouselNavResponse {
   complete: boolean;
   item?: ExtractionCarouselItem;
   message?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramInlineButton>>;
   chatId?: string;
   messageId?: number;
   index?: number;
