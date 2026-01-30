@@ -9,6 +9,12 @@ import {
   EventType,
   EventStatus,
   EntityRecord,
+  Activity,
+  ActivityStatus,
+  ActivityType,
+  Commitment,
+  CommitmentStatus,
+  CommitmentType,
   escapeHtml,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
@@ -23,6 +29,10 @@ interface MorningBriefData {
   birthdays: EntityRecord[];
   overdueCommitments: EntityEvent[];
   pendingFollowups: EntityEvent[];
+  /** Просроченные задачи из Activity */
+  overdueActivities: Activity[];
+  /** Активные обязательства из Commitment */
+  pendingCommitments: Commitment[];
 }
 
 @Injectable()
@@ -36,6 +46,10 @@ export class DigestService {
     private entityEventRepo: Repository<EntityEvent>,
     @InjectRepository(EntityRecord)
     private entityRepo: Repository<EntityRecord>,
+    @InjectRepository(Activity)
+    private activityRepo: Repository<Activity>,
+    @InjectRepository(Commitment)
+    private commitmentRepo: Repository<Commitment>,
     private telegramNotifier: TelegramNotifierService,
     private notificationService: NotificationService,
     private digestActionStore: DigestActionStoreService,
@@ -55,14 +69,23 @@ export class DigestService {
     endOfDay.setHours(23, 59, 59, 999);
 
     try {
-      const [meetings, deadlines, birthdays, overdueCommitments, pendingFollowups] =
-        await Promise.all([
-          this.getEventsByDateRange(startOfDay, endOfDay, EventType.MEETING),
-          this.getEventsByDateRange(startOfDay, endOfDay, EventType.DEADLINE),
-          this.getEntitiesWithBirthdayToday(),
-          this.getOverdueEvents(EventType.COMMITMENT),
-          this.getOverdueEvents(EventType.FOLLOW_UP),
-        ]);
+      const [
+        meetings,
+        deadlines,
+        birthdays,
+        overdueCommitments,
+        pendingFollowups,
+        overdueActivities,
+        pendingCommitments,
+      ] = await Promise.all([
+        this.getEventsByDateRange(startOfDay, endOfDay, EventType.MEETING),
+        this.getEventsByDateRange(startOfDay, endOfDay, EventType.DEADLINE),
+        this.getEntitiesWithBirthdayToday(),
+        this.getOverdueEvents(EventType.COMMITMENT),
+        this.getOverdueEvents(EventType.FOLLOW_UP),
+        this.getOverdueActivities(),
+        this.getPendingCommitments(),
+      ]);
 
       // Build brief items from data
       const items = this.buildBriefItems({
@@ -71,6 +94,8 @@ export class DigestService {
         birthdays,
         overdueCommitments,
         pendingFollowups,
+        overdueActivities,
+        pendingCommitments,
       });
 
       // If no items, send simple message
@@ -194,6 +219,46 @@ export class DigestService {
         sourceId: followup.id,
         details: followup.description || `Ожидаешь ответа уже ${daysWaiting} дней`,
         entityId: followup.entityId,
+      });
+    }
+
+    // Overdue activities (from Activity table)
+    for (const activity of data.overdueActivities) {
+      const daysOverdue = this.getDaysOverdue(activity.deadline);
+      items.push({
+        type: 'overdue',
+        title: `${activity.name} (просрочено ${daysOverdue} дн.)`,
+        entityName: activity.ownerEntity?.name || 'Без владельца',
+        sourceType: 'activity',
+        sourceId: activity.id,
+        details: activity.description || `Задача просрочена на ${daysOverdue} дней`,
+        entityId: activity.ownerEntityId,
+      });
+    }
+
+    // Pending commitments (from Commitment table)
+    for (const commitment of data.pendingCommitments) {
+      const isOverdue = commitment.dueDate && commitment.dueDate < new Date();
+      const daysInfo = commitment.dueDate
+        ? isOverdue
+          ? `(просрочено ${this.getDaysOverdue(commitment.dueDate)} дн.)`
+          : ''
+        : '— ждёшь ответа';
+
+      // Determine who the commitment is from/to
+      const isFromMe = commitment.type === CommitmentType.PROMISE;
+      const entityName = isFromMe
+        ? commitment.toEntity?.name || 'Неизвестно'
+        : commitment.fromEntity?.name || 'Неизвестно';
+
+      items.push({
+        type: isOverdue ? 'overdue' : 'followup',
+        title: `${commitment.title} ${daysInfo}`,
+        entityName,
+        sourceType: 'commitment',
+        sourceId: commitment.id,
+        details: commitment.description || this.getCommitmentDetails(commitment),
+        entityId: isFromMe ? commitment.toEntityId : commitment.fromEntityId,
       });
     }
 
@@ -376,6 +441,79 @@ export class DigestService {
     });
   }
 
+  /**
+   * Get overdue activities (tasks with past deadline, still active/idea).
+   */
+  private async getOverdueActivities(): Promise<Activity[]> {
+    const now = new Date();
+
+    return this.activityRepo.find({
+      where: {
+        activityType: In([ActivityType.TASK, ActivityType.MILESTONE]),
+        deadline: LessThan(now),
+        status: In([ActivityStatus.ACTIVE, ActivityStatus.IDEA]),
+      },
+      relations: ['ownerEntity'],
+      order: { deadline: 'ASC' },
+      take: 10,
+    });
+  }
+
+  /**
+   * Get pending/overdue commitments from Commitment table.
+   */
+  private async getPendingCommitments(): Promise<Commitment[]> {
+    const now = new Date();
+
+    return this.commitmentRepo.find({
+      where: [
+        // Overdue: pending with past due date
+        {
+          status: CommitmentStatus.PENDING,
+          dueDate: LessThan(now),
+        },
+        // In progress with past due date
+        {
+          status: CommitmentStatus.IN_PROGRESS,
+          dueDate: LessThan(now),
+        },
+        // Pending without due date (waiting for response)
+        {
+          status: CommitmentStatus.PENDING,
+          type: In([CommitmentType.REQUEST, CommitmentType.PROMISE]),
+        },
+      ],
+      relations: ['fromEntity', 'toEntity'],
+      order: { dueDate: 'ASC' },
+      take: 10,
+    });
+  }
+
+  /**
+   * Get human-readable details for a Commitment.
+   */
+  private getCommitmentDetails(commitment: Commitment): string {
+    const typeLabels: Record<CommitmentType, string> = {
+      [CommitmentType.PROMISE]: 'Обещание',
+      [CommitmentType.REQUEST]: 'Запрос',
+      [CommitmentType.AGREEMENT]: 'Договорённость',
+      [CommitmentType.DEADLINE]: 'Дедлайн',
+      [CommitmentType.REMINDER]: 'Напоминание',
+      [CommitmentType.RECURRING]: 'Периодическая задача',
+    };
+
+    const typeLabel = typeLabels[commitment.type] || 'Обязательство';
+    const from = commitment.fromEntity?.name || 'Неизвестно';
+    const to = commitment.toEntity?.name || 'Неизвестно';
+
+    if (commitment.type === CommitmentType.PROMISE) {
+      return `${typeLabel}: ${from} → ${to}`;
+    } else if (commitment.type === CommitmentType.REQUEST) {
+      return `${typeLabel}: ожидаешь от ${from}`;
+    }
+
+    return `${typeLabel}: ${commitment.title}`;
+  }
 
   private formatHourlyDigest(events: ExtractedEvent[]): string {
     const lines: string[] = ['<b>Новые события:</b>', ''];

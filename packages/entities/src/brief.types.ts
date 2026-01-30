@@ -7,7 +7,13 @@
 export type BriefItemType = 'meeting' | 'task' | 'followup' | 'overdue' | 'birthday';
 
 /** Source type for brief item - determines how to update status */
-export type BriefSourceType = 'entity_event' | 'extracted_event' | 'entity_fact' | 'entity';
+export type BriefSourceType =
+  | 'entity_event'
+  | 'extracted_event'
+  | 'entity_fact'
+  | 'entity'
+  | 'activity'
+  | 'commitment';
 
 /** Single item in the brief (accordion section) */
 export interface BriefItem {

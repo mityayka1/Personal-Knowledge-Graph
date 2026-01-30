@@ -2,7 +2,17 @@ import { Module, forwardRef } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
-import { ExtractedEvent, EntityEvent, EntityRecord, EntityIdentifier, Message, Interaction, EntityFact } from '@pkg/entities';
+import {
+  ExtractedEvent,
+  EntityEvent,
+  EntityRecord,
+  EntityIdentifier,
+  Message,
+  Interaction,
+  EntityFact,
+  Activity,
+  Commitment,
+} from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestService } from './digest.service';
@@ -28,7 +38,17 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 @Module({
   imports: [
     HttpModule,
-    TypeOrmModule.forFeature([ExtractedEvent, EntityEvent, EntityRecord, EntityIdentifier, Message, Interaction, EntityFact]),
+    TypeOrmModule.forFeature([
+      ExtractedEvent,
+      EntityEvent,
+      EntityRecord,
+      EntityIdentifier,
+      Message,
+      Interaction,
+      EntityFact,
+      Activity,
+      Commitment,
+    ]),
     BullModule.registerQueue({
       name: 'notification',
       defaultJobOptions: {
