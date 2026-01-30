@@ -46,51 +46,57 @@ export class BriefDataProvider {
 
   /**
    * Fetch all data needed for morning brief.
+   * Consolidated queries: 5 Promise.all calls instead of 7.
    */
   async getMorningBriefData(startOfDay: Date, endOfDay: Date): Promise<MorningBriefData> {
     const [
-      meetings,
-      deadlines,
+      todayEvents,
       birthdays,
-      overdueCommitments,
-      pendingFollowups,
+      overdueEntityEvents,
       overdueActivities,
       pendingCommitments,
     ] = await Promise.all([
-      this.getEventsByDateRange(startOfDay, endOfDay, EventType.MEETING),
-      this.getEventsByDateRange(startOfDay, endOfDay, EventType.DEADLINE),
+      this.getTodayEvents(startOfDay, endOfDay),
       this.getEntitiesWithBirthdayToday(),
-      this.getOverdueEvents(EventType.COMMITMENT),
-      this.getOverdueEvents(EventType.FOLLOW_UP),
+      this.getOverdueEntityEvents(),
       this.getOverdueActivities(),
       this.getPendingCommitments(),
     ]);
 
     return {
-      meetings,
-      deadlines,
+      meetings: todayEvents.meetings,
+      deadlines: todayEvents.deadlines,
       birthdays,
-      overdueCommitments,
-      pendingFollowups,
+      overdueCommitments: overdueEntityEvents.overdueCommitments,
+      pendingFollowups: overdueEntityEvents.pendingFollowups,
       overdueActivities,
       pendingCommitments,
     };
   }
 
-  private async getEventsByDateRange(
+  /**
+   * Get today's events (meetings and deadlines) in a single query.
+   * Results are split by type in memory.
+   */
+  private async getTodayEvents(
     start: Date,
     end: Date,
-    eventType: EventType,
-  ): Promise<EntityEvent[]> {
-    return this.entityEventRepo.find({
+  ): Promise<{ meetings: EntityEvent[]; deadlines: EntityEvent[] }> {
+    const events = await this.entityEventRepo.find({
       where: {
-        eventType,
+        eventType: In([EventType.MEETING, EventType.DEADLINE]),
         eventDate: Between(start, end),
         status: In([EventStatus.SCHEDULED]),
       },
       relations: ['entity'],
       order: { eventDate: 'ASC' },
     });
+
+    // Split by type in memory
+    const meetings = events.filter(e => e.eventType === EventType.MEETING);
+    const deadlines = events.filter(e => e.eventType === EventType.DEADLINE);
+
+    return { meetings, deadlines };
   }
 
   private async getEntitiesWithBirthdayToday(): Promise<EntityRecord[]> {
@@ -98,19 +104,36 @@ export class BriefDataProvider {
     return [];
   }
 
-  private async getOverdueEvents(eventType: EventType): Promise<EntityEvent[]> {
+  /**
+   * Get overdue events (commitments and follow-ups) in a single query.
+   * Results are split by type in memory with individual limits.
+   */
+  private async getOverdueEntityEvents(): Promise<{
+    overdueCommitments: EntityEvent[];
+    pendingFollowups: EntityEvent[];
+  }> {
     const now = new Date();
 
-    return this.entityEventRepo.find({
+    const events = await this.entityEventRepo.find({
       where: {
-        eventType,
+        eventType: In([EventType.COMMITMENT, EventType.FOLLOW_UP]),
         eventDate: LessThan(now),
         status: EventStatus.SCHEDULED,
       },
       relations: ['entity'],
       order: { eventDate: 'ASC' },
-      take: 10,
+      take: 20, // Combined limit to ensure we get enough of each type
     });
+
+    // Split by type in memory and apply individual limits
+    const overdueCommitments = events
+      .filter(e => e.eventType === EventType.COMMITMENT)
+      .slice(0, 10);
+    const pendingFollowups = events
+      .filter(e => e.eventType === EventType.FOLLOW_UP)
+      .slice(0, 10);
+
+    return { overdueCommitments, pendingFollowups };
   }
 
   /**
