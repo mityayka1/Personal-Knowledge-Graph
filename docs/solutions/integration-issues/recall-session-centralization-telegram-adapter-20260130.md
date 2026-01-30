@@ -191,6 +191,27 @@ export { DailyContextCacheService } from './daily-context-cache.service';
                             └─────────────────┘
 ```
 
+## Additional Fixes (Post-Review)
+
+### 6. Cache Key Collision Fix
+
+**Проблема:** Ключ кэша использовал только `messageId`, что могло привести к коллизиям между разными чатами.
+
+**Решение:** Изменён формат ключа на `{chatId}:{messageId}`:
+
+```typescript
+// BEFORE:
+const key = `${CACHE_KEY_PREFIX}${messageId}`;
+
+// AFTER:
+const cacheKey = `${chatId}:${messageId}`;
+const key = `${CACHE_KEY_PREFIX}${cacheKey}`;
+```
+
+### 7. Unused Import Cleanup
+
+Удалён неиспользуемый импорт `RecallSessionData` в `daily-summary.handler.ts` (feedback от GitHub Copilot review).
+
 ## Prevention
 
 1. **Follow Source-Agnostic principle:** Adapters should be stateless proxies, not data owners
@@ -198,6 +219,7 @@ export { DailyContextCacheService } from './daily-context-cache.service';
 3. **Interface changes:** When modifying DTOs, search for all usages including test mocks
 4. **Export cleanup:** When removing types from a file, update index.ts exports immediately
 5. **CI validation:** Run `pnpm build` on both services before committing
+6. **Cache key design:** Use composite keys (chatId:messageId) for multi-tenant/multi-chat systems
 
 ## Verification Commands
 
