@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   Optional,
@@ -7,7 +8,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Not, Repository } from 'typeorm';
 import { EntityRecord, EntityType } from '@pkg/entities';
 import { CreateEntityDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
@@ -48,6 +49,8 @@ export interface EntityGraph {
 
 @Injectable()
 export class EntityService {
+  private readonly logger = new Logger(EntityService.name);
+
   constructor(
     @InjectRepository(EntityRecord)
     private entityRepo: Repository<EntityRecord>,
@@ -163,10 +166,114 @@ export class EntityService {
     return this.findOne(id);
   }
 
+  /**
+   * Soft delete an entity.
+   * Marks entity as deleted but preserves all data.
+   * Related Activity/Commitment records remain intact.
+   *
+   * @param id - Entity UUID to soft delete
+   * @returns Deletion result with timestamp
+   */
   async remove(id: string) {
     const entity = await this.findOne(id);
+
+    // Use TypeORM softRemove which sets deletedAt
+    await this.entityRepo.softRemove(entity);
+
+    this.logger.log(`Soft deleted entity: ${entity.name} (${id})`);
+
+    return {
+      deleted: true,
+      id,
+      deletedAt: new Date(),
+      message: 'Entity soft deleted. Use POST /entities/:id/restore to recover.',
+    };
+  }
+
+  /**
+   * Restore a soft-deleted entity.
+   *
+   * @param id - Entity UUID to restore
+   * @returns Restored entity
+   */
+  async restore(id: string): Promise<EntityRecord> {
+    // Find with soft-deleted entities included
+    const entity = await this.entityRepo.findOne({
+      where: { id },
+      withDeleted: true,
+      relations: ['organization', 'identifiers', 'facts'],
+    });
+
+    if (!entity) {
+      throw new NotFoundException(`Entity with id '${id}' not found`);
+    }
+
+    if (!entity.deletedAt) {
+      throw new BadRequestException(`Entity '${id}' is not deleted`);
+    }
+
+    // Use TypeORM recover which clears deletedAt
+    await this.entityRepo.recover(entity);
+
+    this.logger.log(`Restored entity: ${entity.name} (${id})`);
+
+    return this.findOne(id);
+  }
+
+  /**
+   * Find all soft-deleted entities.
+   *
+   * @returns List of deleted entities with deletion timestamps
+   */
+  async findDeleted(options: { limit?: number; offset?: number } = {}) {
+    const { limit = 50, offset = 0 } = options;
+
+    const [items, total] = await this.entityRepo.findAndCount({
+      where: { deletedAt: Not(IsNull()) },
+      withDeleted: true,
+      relations: ['organization', 'identifiers'],
+      take: limit,
+      skip: offset,
+      order: { deletedAt: 'DESC' },
+    });
+
+    return { items, total, limit, offset };
+  }
+
+  /**
+   * Permanently delete an entity (hard delete).
+   * USE WITH CAUTION: This cannot be undone.
+   *
+   * @param id - Entity UUID to permanently delete
+   * @param confirm - Must be true to proceed
+   */
+  async hardDelete(id: string, confirm: boolean) {
+    if (!confirm) {
+      throw new BadRequestException(
+        'Hard delete requires explicit confirmation. Set confirm=true to proceed.',
+      );
+    }
+
+    // Find with soft-deleted included
+    const entity = await this.entityRepo.findOne({
+      where: { id },
+      withDeleted: true,
+    });
+
+    if (!entity) {
+      throw new NotFoundException(`Entity with id '${id}' not found`);
+    }
+
+    // Permanently remove from database
     await this.entityRepo.remove(entity);
-    return { deleted: true, id };
+
+    this.logger.warn(`HARD deleted entity: ${entity.name} (${id})`);
+
+    return {
+      hardDeleted: true,
+      id,
+      message: 'Entity permanently deleted. This cannot be undone.',
+    };
   }
 
   async merge(sourceId: string, targetId: string) {

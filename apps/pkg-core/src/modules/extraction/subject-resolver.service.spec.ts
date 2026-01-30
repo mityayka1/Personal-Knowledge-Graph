@@ -58,6 +58,10 @@ describe('SubjectResolverService', () => {
       participations: [],
       createdAt: new Date(),
       updatedAt: new Date(),
+      deletedAt: null,
+      get isDeleted() {
+        return this.deletedAt !== null;
+      },
     };
   }
 

@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   OneToMany,
   JoinColumn,
@@ -87,4 +88,21 @@ export class EntityRecord {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  /**
+   * Soft delete timestamp.
+   * When set, entity is considered deleted but data is preserved.
+   * TypeORM automatically excludes soft-deleted entities from queries.
+   * Use { withDeleted: true } to include them.
+   */
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz' })
+  @Index('idx_entities_deleted_at')
+  deletedAt: Date | null;
+
+  /**
+   * Check if entity is soft-deleted.
+   */
+  get isDeleted(): boolean {
+    return this.deletedAt !== null;
+  }
 }
