@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
 import { Activity, ActivityStatus } from '@pkg/entities';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   DailySynthesisExtractionParams,
   DailySynthesisExtractionResult,
@@ -30,6 +31,7 @@ export class DailySynthesisExtractionService {
 
   constructor(
     private readonly claudeAgentService: ClaudeAgentService,
+    private readonly settingsService: SettingsService,
     @InjectRepository(Activity)
     private readonly activityRepo: Repository<Activity>,
   ) {}
@@ -63,6 +65,11 @@ export class DailySynthesisExtractionService {
       activityContext,
     });
 
+    // Get model from settings (default: sonnet for complex schema reliability)
+    const model = await this.settingsService.getDailySynthesisModel();
+
+    this.logger.debug(`[daily-extraction] Using model: ${model}`);
+
     // Call Claude with structured output
     // Note: maxTurns must be >= 2 when using outputFormat with json_schema
     // because Claude needs one turn to call StructuredOutput tool and another to complete
@@ -70,7 +77,7 @@ export class DailySynthesisExtractionService {
       mode: 'oneshot',
       taskType: 'daily_brief', // Reusing existing task type
       prompt,
-      model: 'sonnet', // More reliable for complex schema
+      model,
       schema: DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
       maxTurns: 5, // Complex schema may need more iterations
       timeout: 120000, // 2 minutes (large prompts need more time)

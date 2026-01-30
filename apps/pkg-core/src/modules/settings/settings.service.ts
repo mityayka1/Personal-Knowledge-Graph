@@ -31,6 +31,12 @@ const DEFAULT_SETTINGS: Array<{
     category: 'extraction',
   },
   {
+    key: 'extraction.dailySynthesisModel',
+    value: 'sonnet',
+    description: 'Модель Claude для daily synthesis extraction (haiku, sonnet, opus). Sonnet рекомендуется для сложных JSON схем.',
+    category: 'extraction',
+  },
+  {
     key: 'extraction.minMessageLength',
     value: 20,
     description: 'Минимальная длина сообщения для извлечения событий (символов)',
@@ -188,6 +194,7 @@ export class SettingsService implements OnModuleInit {
     autoSaveThreshold: number;
     minConfidence: number;
     model: string;
+    dailySynthesisModel: string;
     minMessageLength: number;
     maxQuoteLength: number;
     maxContentLength: number;
@@ -196,6 +203,7 @@ export class SettingsService implements OnModuleInit {
       autoSaveThreshold,
       minConfidence,
       model,
+      dailySynthesisModel,
       minMessageLength,
       maxQuoteLength,
       maxContentLength,
@@ -203,6 +211,7 @@ export class SettingsService implements OnModuleInit {
       this.getValue<number>('extraction.autoSaveThreshold'),
       this.getValue<number>('extraction.minConfidence'),
       this.getValue<string>('extraction.model'),
+      this.getValue<string>('extraction.dailySynthesisModel'),
       this.getValue<number>('extraction.minMessageLength'),
       this.getValue<number>('extraction.maxQuoteLength'),
       this.getValue<number>('extraction.maxContentLength'),
@@ -212,10 +221,20 @@ export class SettingsService implements OnModuleInit {
       autoSaveThreshold: autoSaveThreshold ?? 0.95,
       minConfidence: minConfidence ?? 0.6,
       model: model ?? 'haiku',
+      dailySynthesisModel: dailySynthesisModel ?? 'sonnet',
       minMessageLength: minMessageLength ?? 20,
       maxQuoteLength: maxQuoteLength ?? 500,
       maxContentLength: maxContentLength ?? 1000,
     };
+  }
+
+  /**
+   * Get daily synthesis extraction model.
+   * Separate from regular extraction model because daily synthesis uses complex JSON schema.
+   */
+  async getDailySynthesisModel(): Promise<'haiku' | 'sonnet' | 'opus'> {
+    const model = await this.getValue<string>('extraction.dailySynthesisModel');
+    return (model ?? 'sonnet') as 'haiku' | 'sonnet' | 'opus';
   }
 
   // Helper to get notification settings
