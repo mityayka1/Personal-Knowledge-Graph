@@ -16,6 +16,7 @@ import {
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestService } from './digest.service';
+import { BriefDataProvider } from './brief-data-provider.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService } from './carousel-state.service';
 import { NotificationSchedulerService } from './notification-scheduler.service';
@@ -67,6 +68,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     TelegramNotifierService,
     NotificationService,
     DigestService,
+    BriefDataProvider,
     DigestActionStoreService,
     CarouselStateService,
     NotificationSchedulerService,
@@ -81,6 +83,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     TelegramNotifierService,
     NotificationService,
     DigestService,
+    BriefDataProvider,
     DigestActionStoreService,
     CarouselStateService,
     ApprovalService,

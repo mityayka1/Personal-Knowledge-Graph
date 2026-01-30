@@ -1,19 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThan, IsNull, In, Not, And } from 'typeorm';
+import { Repository } from 'typeorm';
 import {
   ExtractedEvent,
-  ExtractedEventStatus,
   ExtractedEventType,
-  EntityEvent,
-  EventType,
-  EventStatus,
-  EntityRecord,
-  Activity,
-  ActivityStatus,
-  ActivityType,
   Commitment,
-  CommitmentStatus,
   CommitmentType,
   escapeHtml,
 } from '@pkg/entities';
@@ -22,18 +13,7 @@ import { NotificationService } from './notification.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { CarouselStateService } from './carousel-state.service';
 import { BriefStateService, BriefItem } from './brief-state.service';
-
-interface MorningBriefData {
-  meetings: EntityEvent[];
-  deadlines: EntityEvent[];
-  birthdays: EntityRecord[];
-  overdueCommitments: EntityEvent[];
-  pendingFollowups: EntityEvent[];
-  /** Просроченные задачи из Activity */
-  overdueActivities: Activity[];
-  /** Активные обязательства из Commitment */
-  pendingCommitments: Commitment[];
-}
+import { BriefDataProvider, MorningBriefData } from './brief-data-provider.service';
 
 @Injectable()
 export class DigestService {
@@ -42,14 +22,7 @@ export class DigestService {
   constructor(
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
-    @InjectRepository(EntityEvent)
-    private entityEventRepo: Repository<EntityEvent>,
-    @InjectRepository(EntityRecord)
-    private entityRepo: Repository<EntityRecord>,
-    @InjectRepository(Activity)
-    private activityRepo: Repository<Activity>,
-    @InjectRepository(Commitment)
-    private commitmentRepo: Repository<Commitment>,
+    private briefDataProvider: BriefDataProvider,
     private telegramNotifier: TelegramNotifierService,
     private notificationService: NotificationService,
     private digestActionStore: DigestActionStoreService,
@@ -78,34 +51,11 @@ export class DigestService {
     ));
 
     try {
-      const [
-        meetings,
-        deadlines,
-        birthdays,
-        overdueCommitments,
-        pendingFollowups,
-        overdueActivities,
-        pendingCommitments,
-      ] = await Promise.all([
-        this.getEventsByDateRange(startOfDay, endOfDay, EventType.MEETING),
-        this.getEventsByDateRange(startOfDay, endOfDay, EventType.DEADLINE),
-        this.getEntitiesWithBirthdayToday(),
-        this.getOverdueEvents(EventType.COMMITMENT),
-        this.getOverdueEvents(EventType.FOLLOW_UP),
-        this.getOverdueActivities(),
-        this.getPendingCommitments(),
-      ]);
+      // Fetch all data via BriefDataProvider
+      const data = await this.briefDataProvider.getMorningBriefData(startOfDay, endOfDay);
 
       // Build brief items from data
-      const items = this.buildBriefItems({
-        meetings,
-        deadlines,
-        birthdays,
-        overdueCommitments,
-        pendingFollowups,
-        overdueActivities,
-        pendingCommitments,
-      });
+      const items = this.buildBriefItems(data);
 
       // If no items, send simple message
       if (items.length === 0) {
@@ -433,99 +383,6 @@ export class DigestService {
       await this.carouselStateService.delete(carouselId);
       this.logger.error('Failed to send carousel message');
     }
-  }
-
-  private async getEventsByDateRange(
-    start: Date,
-    end: Date,
-    eventType: EventType,
-  ): Promise<EntityEvent[]> {
-    return this.entityEventRepo.find({
-      where: {
-        eventType,
-        eventDate: Between(start, end),
-        status: In([EventStatus.SCHEDULED]),
-      },
-      relations: ['entity'],
-      order: { eventDate: 'ASC' },
-    });
-  }
-
-  private async getEntitiesWithBirthdayToday(): Promise<EntityRecord[]> {
-    // Get today's month and day
-    const today = new Date();
-    const month = today.getMonth() + 1;
-    const day = today.getDate();
-
-    // Query entities with birthday on this date
-    // Note: This requires birthday to be stored as a fact
-    // For now, return empty array - this would need EntityFactService integration
-    return [];
-  }
-
-  private async getOverdueEvents(eventType: EventType): Promise<EntityEvent[]> {
-    const now = new Date();
-
-    return this.entityEventRepo.find({
-      where: {
-        eventType,
-        eventDate: LessThan(now),
-        status: EventStatus.SCHEDULED,
-      },
-      relations: ['entity'],
-      order: { eventDate: 'ASC' },
-      take: 10,
-    });
-  }
-
-  /**
-   * Get overdue activities (tasks with past deadline, still active/idea).
-   * Note: Activities without deadline (NULL) are excluded.
-   */
-  private async getOverdueActivities(): Promise<Activity[]> {
-    const now = new Date();
-
-    return this.activityRepo.find({
-      where: {
-        activityType: In([ActivityType.TASK, ActivityType.MILESTONE]),
-        deadline: And(Not(IsNull()), LessThan(now)),
-        status: In([ActivityStatus.ACTIVE, ActivityStatus.IDEA]),
-      },
-      relations: ['ownerEntity'],
-      order: { deadline: 'ASC' },
-      take: 10,
-    });
-  }
-
-  /**
-   * Get pending/overdue commitments from Commitment table.
-   */
-  private async getPendingCommitments(): Promise<Commitment[]> {
-    const now = new Date();
-
-    return this.commitmentRepo.find({
-      where: [
-        // Overdue: pending with past due date
-        {
-          status: CommitmentStatus.PENDING,
-          dueDate: LessThan(now),
-        },
-        // In progress with past due date
-        {
-          status: CommitmentStatus.IN_PROGRESS,
-          dueDate: LessThan(now),
-        },
-        // Pending without due date (waiting for response)
-        {
-          status: CommitmentStatus.PENDING,
-          type: In([CommitmentType.REQUEST, CommitmentType.PROMISE]),
-          dueDate: IsNull(),
-        },
-      ],
-      relations: ['fromEntity', 'toEntity'],
-      order: { dueDate: 'ASC' },
-      take: 10,
-    });
   }
 
   /**
