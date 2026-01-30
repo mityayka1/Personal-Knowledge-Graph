@@ -72,7 +72,7 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Handle save callback
+   * Handle save callback — uses idempotent save API to prevent duplicate saves
    */
   private async handleSaveCallback(ctx: Context, callbackData: string): Promise<void> {
     const match = callbackData.match(/^ds_save:(\d+)$/);
@@ -82,6 +82,7 @@ export class DailySummaryHandler {
     }
 
     const chatId = ctx.chat?.id;
+    const userId = ctx.from?.id?.toString();
     if (!chatId) {
       await ctx.answerCbQuery('Ошибка контекста');
       return;
@@ -95,26 +96,36 @@ export class DailySummaryHandler {
       return;
     }
 
-    // Fetch session data from PKG Core
-    const sessionResponse = await this.pkgCoreApi.getRecallSession(sessionId);
-    if (!sessionResponse?.data) {
-      await ctx.answerCbQuery('Сессия не найдена (возможно, истекла)');
-      return;
-    }
-
-    const session = sessionResponse.data;
-
     await ctx.answerCbQuery('💾 Сохраняю...');
 
     try {
-      const result = await this.pkgCoreApi.saveDailySummary(
-        session.answer,
-        session.dateStr,
-      );
+      // Use idempotent save API (prevents duplicate saves)
+      const result = await this.pkgCoreApi.saveRecallSession(sessionId, userId);
 
       if (result.success) {
-        await this.updateButtonStatus(ctx, messageId, 'saved');
-        this.logger.log(`Daily summary saved, factId: ${result.factId}`);
+        if (result.alreadySaved) {
+          // Already saved — update button but don't show error
+          await this.updateButtonStatus(ctx, messageId, 'saved');
+          this.logger.log(`Daily summary already saved, factId: ${result.factId}`);
+        } else {
+          // First save — create the actual fact
+          const sessionResponse = await this.pkgCoreApi.getRecallSession(sessionId);
+          if (sessionResponse?.data) {
+            const factResult = await this.pkgCoreApi.saveDailySummary(
+              sessionResponse.data.answer,
+              sessionResponse.data.dateStr,
+            );
+            if (factResult.success) {
+              await this.updateButtonStatus(ctx, messageId, 'saved');
+              this.logger.log(`Daily summary saved, factId: ${factResult.factId}`);
+            } else {
+              await ctx.reply(`❌ Ошибка сохранения факта: ${factResult.error}`);
+              this.logger.error(`Failed to save daily summary fact: ${factResult.error}`);
+            }
+          } else {
+            await ctx.reply('❌ Сессия не найдена');
+          }
+        }
       } else {
         await ctx.reply(`❌ Ошибка сохранения: ${result.error}`);
         this.logger.error(`Failed to save daily summary: ${result.error}`);

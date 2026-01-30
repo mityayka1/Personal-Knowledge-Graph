@@ -29,6 +29,8 @@ import {
   RecallSessionResponseDto,
   RecallFollowupRequestDto,
   RecallExtractRequestDto,
+  RecallSaveRequestDto,
+  RecallSaveResponseDto,
 } from './dto';
 import {
   RecallSource,
@@ -249,6 +251,7 @@ export class AgentController {
         answer,
         sources,
         model: dto.model || 'sonnet',
+        userId: dto.userId,
       });
 
       this.logger.log(`Created recall session: ${sessionId}`);
@@ -489,6 +492,97 @@ export class AgentController {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  /**
+   * POST /agent/recall/session/:sessionId/save
+   *
+   * Mark recall session insights as saved (idempotent operation).
+   * Used by adapters to prevent duplicate saves when user clicks "Save" button multiple times.
+   *
+   * @example
+   * POST /agent/recall/session/rs_a1b2c3d4e5f6/save
+   * { "userId": "864381617" }
+   */
+  @Post('recall/session/:sessionId/save')
+  @ApiOperation({
+    summary: 'Save recall session insights',
+    description:
+      'Mark session as saved with idempotency protection. Returns existing factId if already saved.',
+  })
+  @ApiParam({
+    name: 'sessionId',
+    description: 'Session ID from recall response',
+    example: 'rs_a1b2c3d4e5f6',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Save operation completed',
+    type: RecallSaveResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found or expired' })
+  @ApiResponse({ status: 403, description: 'Unauthorized - userId mismatch' })
+  async saveRecallSession(
+    @Param('sessionId') sessionId: string,
+    @Body() dto: RecallSaveRequestDto,
+  ): Promise<RecallSaveResponseDto> {
+    this.logger.log(`Save recall session: ${sessionId}, userId=${dto.userId || 'none'}`);
+
+    // First verify session exists
+    const session = await this.recallSessionService.get(sessionId);
+
+    if (!session) {
+      throw new HttpException(
+        `Session not found or expired: ${sessionId}`,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Verify userId if provided
+    if (dto.userId && session.userId && session.userId !== dto.userId) {
+      this.logger.warn(
+        `Unauthorized save attempt: session=${sessionId}, expected=${session.userId}, got=${dto.userId}`,
+      );
+      throw new HttpException(
+        'Unauthorized: session belongs to another user',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    // Generate a factId for this save (caller will create the actual fact)
+    // Using session ID + timestamp to ensure uniqueness
+    const factId = `fact_${sessionId}_${Date.now()}`;
+
+    // Atomically mark as saved (idempotency protection)
+    const result = await this.recallSessionService.markAsSaved(
+      sessionId,
+      factId,
+      dto.userId,
+    );
+
+    if (result.alreadySaved) {
+      this.logger.log(`Session ${sessionId} already saved as fact ${result.existingFactId}`);
+      return {
+        success: true,
+        alreadySaved: true,
+        factId: result.existingFactId,
+      };
+    }
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: 'Failed to mark session as saved',
+      };
+    }
+
+    this.logger.log(`Session ${sessionId} marked as saved, factId=${factId}`);
+
+    return {
+      success: true,
+      alreadySaved: false,
+      factId,
+    };
   }
 
   /**

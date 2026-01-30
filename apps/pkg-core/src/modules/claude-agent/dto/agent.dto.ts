@@ -51,6 +51,14 @@ export class RecallRequestDto {
   @IsOptional()
   @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
   model?: 'haiku' | 'sonnet' | 'opus';
+
+  @ApiPropertyOptional({
+    description: 'User ID for session ownership (multi-user safety)',
+    example: '864381617',
+  })
+  @IsOptional()
+  @IsString()
+  userId?: string;
 }
 
 /**
@@ -487,6 +495,36 @@ export class RecallFollowupRequestDto {
   @IsOptional()
   @IsIn(['haiku', 'sonnet', 'opus'], { message: 'model must be haiku, sonnet, or opus' })
   model?: 'haiku' | 'sonnet' | 'opus';
+}
+
+/**
+ * Request DTO for POST /agent/recall/session/:sessionId/save
+ */
+export class RecallSaveRequestDto {
+  @ApiPropertyOptional({
+    description: 'User ID for verification (multi-user safety)',
+    example: '864381617',
+  })
+  @IsOptional()
+  @IsString()
+  userId?: string;
+}
+
+/**
+ * Response for save endpoint
+ */
+export class RecallSaveResponseDto {
+  @ApiProperty({ description: 'Operation success flag' })
+  success: boolean;
+
+  @ApiPropertyOptional({ description: 'Created fact ID (if newly saved)' })
+  factId?: string;
+
+  @ApiPropertyOptional({ description: 'Whether this session was already saved' })
+  alreadySaved?: boolean;
+
+  @ApiPropertyOptional({ description: 'Error message if failed' })
+  error?: string;
 }
 
 /**

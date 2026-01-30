@@ -95,6 +95,19 @@ export interface RecallSessionResponse {
   data: RecallSessionData;
 }
 
+/** Request for saving recall session insights */
+export interface RecallSaveRequest {
+  userId?: string;
+}
+
+/** Response from save recall session endpoint */
+export interface RecallSaveResponse {
+  success: boolean;
+  factId?: string;
+  alreadySaved?: boolean;
+  error?: string;
+}
+
 export interface RecallResponse {
   success: boolean;
   data: RecallResponseData;
@@ -574,6 +587,39 @@ export class PkgCoreApiService {
       );
       return response.data;
     });
+  }
+
+  /**
+   * Save recall session insights as a fact (idempotent).
+   * Returns existing factId if already saved, preventing duplicate saves.
+   *
+   * @param sessionId Session ID from recall response
+   * @param userId Optional user ID for verification (multi-user safety)
+   */
+  async saveRecallSession(
+    sessionId: string,
+    userId?: string,
+  ): Promise<RecallSaveResponse> {
+    try {
+      const body: RecallSaveRequest = {};
+      if (userId) body.userId = userId;
+
+      const response = await this.client.post<RecallSaveResponse>(
+        `/agent/recall/session/${sessionId}/save`,
+        body,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 404) {
+          return { success: false, error: 'Session not found or expired' };
+        }
+        if (error.response?.status === 403) {
+          return { success: false, error: 'Unauthorized: session belongs to another user' };
+        }
+      }
+      throw error;
+    }
   }
 
   private async withRetry<T>(operation: () => Promise<T>): Promise<T> {
