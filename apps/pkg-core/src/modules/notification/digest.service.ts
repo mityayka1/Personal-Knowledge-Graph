@@ -62,11 +62,20 @@ export class DigestService {
    * Uses accordion UI with action buttons.
    */
   async sendMorningBrief(): Promise<void> {
-    const today = new Date();
-    const startOfDay = new Date(today);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(today);
-    endOfDay.setHours(23, 59, 59, 999);
+    const now = new Date();
+    // Use UTC to avoid timezone issues
+    const startOfDay = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      0, 0, 0, 0
+    ));
+    const endOfDay = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      23, 59, 59, 999
+    ));
 
     try {
       const [
@@ -273,6 +282,22 @@ export class DigestService {
         entityId: isFromMe ? commitment.toEntityId : commitment.fromEntityId,
       });
     }
+
+    // Sort by priority: overdue items first, then by date
+    items.sort((a, b) => {
+      // Priority 1: overdue items come first
+      const aOverdue = a.type === 'overdue' ? 0 : 1;
+      const bOverdue = b.type === 'overdue' ? 0 : 1;
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+
+      // Priority 2: meetings come before other types (time-sensitive)
+      const aMeeting = a.type === 'meeting' ? 0 : 1;
+      const bMeeting = b.type === 'meeting' ? 0 : 1;
+      if (aMeeting !== bMeeting) return aMeeting - bMeeting;
+
+      // Priority 3: alphabetically by entity name for stable order
+      return a.entityName.localeCompare(b.entityName);
+    });
 
     return items;
   }
