@@ -65,7 +65,8 @@ function formatSettingKey(key: string): string {
   const labels: Record<string, string> = {
     'extraction.autoSaveThreshold': 'Порог авто-сохранения',
     'extraction.minConfidence': 'Минимальная уверенность',
-    'extraction.model': 'Модель Claude',
+    'extraction.model': 'Модель (факты)',
+    'extraction.dailySynthesisModel': 'Модель (daily синтез)',
     'session.gapThresholdMinutes': 'Порог разделения сессий',
   };
   return labels[key] || key;
@@ -98,8 +99,10 @@ const groupedSettings = computed(() => {
 });
 
 const categoryLabels: Record<string, string> = {
-  extraction: 'Извлечение фактов',
+  extraction: 'Извлечение данных',
   session: 'Настройки сессий',
+  inference: 'Вывод связей',
+  notification: 'Уведомления',
   general: 'Общие',
 };
 
@@ -190,7 +193,7 @@ onMounted(() => {
             </div>
 
             <!-- Select for model -->
-            <div v-else-if="setting.key === 'extraction.model'">
+            <div v-else-if="setting.key === 'extraction.model' || setting.key === 'extraction.dailySynthesisModel'">
               <select
                 :id="setting.key"
                 v-model="editedSettings[setting.key]"
@@ -252,8 +255,12 @@ onMounted(() => {
             не отображаются. Рекомендуется 0.5-0.7.
           </p>
           <p>
-            <strong>Модель Claude:</strong> Haiku — быстрый и дешёвый, Sonnet — баланс
-            скорости и качества, Opus — максимальное качество.
+            <strong>Модель (факты):</strong> Модель для извлечения фактов из сообщений.
+            Haiku — быстрый и дешёвый, Sonnet — баланс скорости и качества.
+          </p>
+          <p>
+            <strong>Модель (daily синтез):</strong> Модель для /daily extraction (сложная JSON схема).
+            Sonnet рекомендуется для надёжности, Haiku может давать ошибки.
           </p>
           <p>
             <strong>Порог разделения сессий:</strong> Если между сообщениями прошло больше
