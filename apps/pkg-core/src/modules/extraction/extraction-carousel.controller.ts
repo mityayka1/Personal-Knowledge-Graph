@@ -9,6 +9,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNumber, IsArray, IsOptional } from 'class-validator';
 import {
   ExtractionCarouselStateService,
   ExtractionCarouselNavResult,
@@ -30,29 +31,39 @@ import {
 
 class CreateExtractionCarouselDto {
   @ApiProperty({ description: 'Telegram chat ID' })
+  @IsString()
   chatId: string;
 
   @ApiProperty({ description: 'Telegram message ID for edit operations' })
+  @IsNumber()
   messageId: number;
 
   @ApiProperty({ type: [Object], description: 'Extracted projects' })
+  @IsArray()
   projects: ExtractedProject[];
 
   @ApiProperty({ type: [Object], description: 'Extracted tasks' })
+  @IsArray()
   tasks: ExtractedTask[];
 
   @ApiProperty({ type: [Object], description: 'Extracted commitments' })
+  @IsArray()
   commitments: ExtractedCommitment[];
 
   @ApiProperty({ required: false, description: 'Synthesis date (ISO format)' })
+  @IsString()
+  @IsOptional()
   synthesisDate?: string;
 
   @ApiProperty({ required: false, description: 'Focus topic if specified' })
+  @IsString()
+  @IsOptional()
   focusTopic?: string;
 }
 
 class PersistExtractionDto {
   @ApiProperty({ description: 'Owner entity ID (user entity)' })
+  @IsString()
   ownerEntityId: string;
 }
 
