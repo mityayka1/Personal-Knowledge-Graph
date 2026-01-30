@@ -22,98 +22,156 @@ export interface DailyContext {
 }
 
 const CACHE_KEY_PREFIX = 'daily-context:';
+const MAX_MEMORY_CONTEXTS = 100;
 
 /**
- * DailyContextCacheService — Redis-based cache для daily summary контекстов.
+ * DailyContextCacheService — cache для daily summary контекстов.
  *
- * Решает проблему потери контекста при перезапуске сервера.
- * Ранее использовался in-memory Map, который терял данные при рестарте.
+ * Использует Redis если доступен, иначе fallback на in-memory Map.
+ * In-memory fallback теряет данные при рестарте, но позволяет работать без Redis.
  */
 @Injectable()
 export class DailyContextCacheService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DailyContextCacheService.name);
-  private redis: Redis;
+  private redis: Redis | null = null;
+  private redisAvailable = false;
   private ttlSeconds: number;
+
+  // Fallback in-memory cache when Redis is unavailable
+  private memoryCache = new Map<number, DailyContext>();
 
   constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit() {
     const redisUrl = this.configService.get<string>('redis.url', 'redis://localhost:6379');
-    this.ttlSeconds = this.configService.get<number>('redis.dailyContextTtl', 86400); // 24 hours default
+    this.ttlSeconds = this.configService.get<number>('redis.dailyContextTtl', 86400);
 
-    this.redis = new Redis(redisUrl, {
-      maxRetriesPerRequest: 3,
-      retryStrategy: (times) => {
-        if (times > 3) {
-          this.logger.error('Redis connection failed after 3 retries');
-          return null; // Stop retrying
+    try {
+      this.redis = new Redis(redisUrl, {
+        maxRetriesPerRequest: 3,
+        retryStrategy: (times) => {
+          if (times > 3) {
+            this.logger.warn('Redis connection failed after 3 retries, using in-memory fallback');
+            return null;
+          }
+          return Math.min(times * 200, 2000);
+        },
+        lazyConnect: true, // Don't connect immediately
+      });
+
+      this.redis.on('connect', () => {
+        this.redisAvailable = true;
+        this.logger.log('Connected to Redis for daily context cache');
+      });
+
+      this.redis.on('error', (err) => {
+        if (this.redisAvailable) {
+          this.logger.error(`Redis error: ${err.message}`);
         }
-        return Math.min(times * 200, 2000);
-      },
-    });
+        this.redisAvailable = false;
+      });
 
-    this.redis.on('connect', () => {
-      this.logger.log('Connected to Redis for daily context cache');
-    });
+      this.redis.on('close', () => {
+        this.redisAvailable = false;
+      });
 
-    this.redis.on('error', (err) => {
-      this.logger.error(`Redis error: ${err.message}`);
-    });
+      // Try to connect
+      await this.redis.connect();
+    } catch (error) {
+      this.logger.warn(`Redis unavailable (${(error as Error).message}), using in-memory fallback`);
+      this.redisAvailable = false;
+    }
   }
 
   async onModuleDestroy() {
     if (this.redis) {
-      await this.redis.quit();
-      this.logger.log('Redis connection closed');
+      try {
+        await this.redis.quit();
+        this.logger.log('Redis connection closed');
+      } catch {
+        // Ignore errors on shutdown
+      }
     }
   }
 
   /**
    * Сохранить контекст daily summary.
-   *
-   * @param messageId - ID сообщения в Telegram (используется как ключ)
-   * @param context - Контекст для сохранения
    */
   async set(messageId: number, context: DailyContext): Promise<void> {
-    const key = `${CACHE_KEY_PREFIX}${messageId}`;
-    try {
-      await this.redis.setex(key, this.ttlSeconds, JSON.stringify(context));
-      this.logger.debug(`[cache] Saved daily context for messageId=${messageId}, TTL=${this.ttlSeconds}s`);
-    } catch (error) {
-      this.logger.error(`[cache] Failed to save context for messageId=${messageId}: ${error}`);
+    if (this.redisAvailable && this.redis) {
+      const key = `${CACHE_KEY_PREFIX}${messageId}`;
+      try {
+        await this.redis.setex(key, this.ttlSeconds, JSON.stringify(context));
+        this.logger.debug(`[redis] Saved daily context for messageId=${messageId}`);
+        return;
+      } catch (error) {
+        this.logger.warn(`[redis] Failed to save, falling back to memory: ${error}`);
+      }
     }
+
+    // Fallback to in-memory
+    this.memoryCache.set(messageId, context);
+    this.cleanupMemoryCache();
+    this.logger.debug(`[memory] Saved daily context for messageId=${messageId}`);
   }
 
   /**
    * Получить контекст daily summary.
-   *
-   * @param messageId - ID сообщения в Telegram
-   * @returns Контекст или null если не найден
    */
   async get(messageId: number): Promise<DailyContext | null> {
-    const key = `${CACHE_KEY_PREFIX}${messageId}`;
-    try {
-      const data = await this.redis.get(key);
-      if (!data) {
-        this.logger.debug(`[cache] No context found for messageId=${messageId}`);
-        return null;
+    if (this.redisAvailable && this.redis) {
+      const key = `${CACHE_KEY_PREFIX}${messageId}`;
+      try {
+        const data = await this.redis.get(key);
+        if (data) {
+          this.logger.debug(`[redis] Found context for messageId=${messageId}`);
+          return JSON.parse(data) as DailyContext;
+        }
+      } catch (error) {
+        this.logger.warn(`[redis] Failed to get, checking memory: ${error}`);
       }
-      return JSON.parse(data) as DailyContext;
-    } catch (error) {
-      this.logger.error(`[cache] Failed to get context for messageId=${messageId}: ${error}`);
-      return null;
+    }
+
+    // Try memory cache (even if Redis available - might have been saved before Redis was up)
+    const memoryResult = this.memoryCache.get(messageId);
+    if (memoryResult) {
+      this.logger.debug(`[memory] Found context for messageId=${messageId}`);
+      return memoryResult;
+    }
+
+    this.logger.debug(`[cache] No context found for messageId=${messageId}`);
+    return null;
+  }
+
+  /**
+   * Удалить контекст.
+   */
+  async delete(messageId: number): Promise<void> {
+    // Delete from both stores
+    this.memoryCache.delete(messageId);
+
+    if (this.redisAvailable && this.redis) {
+      const key = `${CACHE_KEY_PREFIX}${messageId}`;
+      try {
+        await this.redis.del(key);
+      } catch {
+        // Ignore
+      }
     }
   }
 
   /**
-   * Удалить контекст (опционально, для cleanup).
+   * Cleanup in-memory cache to prevent memory leak.
    */
-  async delete(messageId: number): Promise<void> {
-    const key = `${CACHE_KEY_PREFIX}${messageId}`;
-    try {
-      await this.redis.del(key);
-    } catch (error) {
-      this.logger.error(`[cache] Failed to delete context for messageId=${messageId}: ${error}`);
+  private cleanupMemoryCache(): void {
+    if (this.memoryCache.size > MAX_MEMORY_CONTEXTS) {
+      const keysToDelete = Array.from(this.memoryCache.keys()).slice(
+        0,
+        this.memoryCache.size - MAX_MEMORY_CONTEXTS,
+      );
+      for (const key of keysToDelete) {
+        this.memoryCache.delete(key);
+      }
     }
   }
 }
