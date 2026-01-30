@@ -73,7 +73,7 @@ export class DailySynthesisExtractionService {
       model: 'haiku', // Fast and cheap for extraction
       schema: DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
       maxTurns: 3, // 2 minimum for structured output, 3 for safety
-      timeout: 60000, // 1 minute
+      timeout: 120000, // 2 minutes (large prompts need more time)
     });
 
     const durationMs = Date.now() - startTime;
