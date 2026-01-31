@@ -18,7 +18,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import * as request from 'supertest';
+import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import {
   Activity,
@@ -30,10 +30,12 @@ import {
   PendingApproval,
   PendingApprovalStatus,
   PendingApprovalItemType,
-  Entity as EntityRecord,
+  EntityRecord,
   EntityType,
   EntityFact,
   EntityFactStatus,
+  FactSource,
+  FactCategory,
 } from '@pkg/entities';
 
 describe('Pending Approval API (e2e)', () => {
@@ -86,10 +88,14 @@ describe('Pending Approval API (e2e)', () => {
 
   afterAll(async () => {
     await cleanupTestData();
-    // Also cleanup test entity
-    await dataSource.query(
-      `DELETE FROM entities WHERE id = '${testOwnerEntityId}'`,
-    );
+    // Also cleanup test entity (after activities due to FK)
+    try {
+      await dataSource.query(`DELETE FROM entities WHERE id = $1`, [
+        testOwnerEntityId,
+      ]);
+    } catch (e) {
+      console.warn('Entity cleanup warning:', (e as Error).message);
+    }
     await app.close();
   });
 
@@ -99,36 +105,38 @@ describe('Pending Approval API (e2e)', () => {
 
   async function cleanupTestData() {
     try {
-      // Delete pending approvals first (FK constraints)
+      // Delete pending approvals first (no FK, but clean before targets)
       await dataSource.query(`
         DELETE FROM pending_approvals
-        WHERE batch_id LIKE '${testPrefix}%'
-           OR batch_id = '${testBatchId}'
+        WHERE batch_id = $1
            OR target_id IN (
-             SELECT id FROM activities WHERE owner_entity_id = '${testOwnerEntityId}'
+             SELECT id FROM activities WHERE owner_entity_id = $2
            )
            OR target_id IN (
-             SELECT id FROM commitments WHERE from_entity_id = '${testOwnerEntityId}'
+             SELECT id FROM commitments WHERE from_entity_id = $2
            )
            OR target_id IN (
-             SELECT id FROM entity_facts WHERE entity_id = '${testOwnerEntityId}'
+             SELECT id FROM entity_facts WHERE entity_id = $2
            )
-      `);
+      `, [testBatchId, testOwnerEntityId]);
 
       // Delete activities
-      await dataSource.query(`
-        DELETE FROM activities WHERE owner_entity_id = '${testOwnerEntityId}'
-      `);
+      await dataSource.query(
+        `DELETE FROM activities WHERE owner_entity_id = $1`,
+        [testOwnerEntityId],
+      );
 
       // Delete commitments
-      await dataSource.query(`
-        DELETE FROM commitments WHERE from_entity_id = '${testOwnerEntityId}'
-      `);
+      await dataSource.query(
+        `DELETE FROM commitments WHERE from_entity_id = $1`,
+        [testOwnerEntityId],
+      );
 
       // Delete entity facts
-      await dataSource.query(`
-        DELETE FROM entity_facts WHERE entity_id = '${testOwnerEntityId}'
-      `);
+      await dataSource.query(
+        `DELETE FROM entity_facts WHERE entity_id = $1`,
+        [testOwnerEntityId],
+      );
     } catch (e) {
       console.warn('Cleanup warning:', (e as Error).message);
     }
@@ -165,7 +173,7 @@ describe('Pending Approval API (e2e)', () => {
   ): Promise<Commitment> {
     return commitmentRepo.save({
       title,
-      commitmentType: CommitmentType.PROMISE,
+      type: CommitmentType.PROMISE,
       status,
       fromEntityId: testOwnerEntityId,
       toEntityId: testOwnerEntityId,
@@ -182,7 +190,8 @@ describe('Pending Approval API (e2e)', () => {
       factType,
       value,
       status,
-      source: 'test',
+      source: FactSource.EXTRACTED,
+      category: FactCategory.PROFESSIONAL,
     });
   }
 
@@ -479,7 +488,7 @@ describe('Pending Approval API (e2e)', () => {
       );
 
       // Verify initial state
-      expect(activity.deletedAt).toBeUndefined();
+      expect(activity.deletedAt).toBeNull();
 
       const response = await request(app.getHttpServer())
         .post(`/pending-approval/${approval.id}/reject`)
