@@ -4,9 +4,13 @@ import {
   Post,
   Param,
   Body,
+  Query,
   UseGuards,
   NotFoundException,
   Logger,
+  HttpCode,
+  HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { TelegramAuthGuard, TelegramUser } from '../guards/telegram-auth.guard';
 import { TgUser } from '../decorators/telegram-user.decorator';
@@ -364,6 +368,199 @@ export class TelegramMiniAppController {
         })) ?? [],
     };
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // Pending Approval Endpoints
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/mini-app/pending-approval
+   *
+   * List pending approvals with optional filters.
+   */
+  @Get('pending-approval')
+  async listPendingApprovals(
+    @Query('batchId') batchId?: string,
+    @Query('status') status?: string,
+    @Query('limit') limitStr?: string,
+    @Query('offset') offsetStr?: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`listPendingApprovals for user ${user?.id}`);
+
+    const limit = Math.min(Math.max(1, parseInt(limitStr || '50', 10) || 50), 100);
+    const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
+
+    const { items, total } = await this.pendingApprovalService.list({
+      batchId,
+      status: status as PendingApprovalStatus,
+      limit,
+      offset,
+    });
+
+    return {
+      items: items.map((item) => this.mapPendingApprovalToResponse(item)),
+      total,
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * GET /api/mini-app/pending-approval/batch/:batchId/stats
+   *
+   * Get batch statistics.
+   * Note: This route must come before :id route to avoid conflict.
+   */
+  @Get('pending-approval/batch/:batchId/stats')
+  async getPendingApprovalBatchStats(
+    @Param('batchId', ParseUUIDPipe) batchId: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`getPendingApprovalBatchStats ${batchId} for user ${user?.id}`);
+
+    const stats = await this.pendingApprovalService.getBatchStats(batchId);
+
+    return {
+      batchId,
+      ...stats,
+    };
+  }
+
+  /**
+   * POST /api/mini-app/pending-approval/batch/:batchId/approve
+   *
+   * Approve all pending items in a batch.
+   */
+  @Post('pending-approval/batch/:batchId/approve')
+  @HttpCode(HttpStatus.OK)
+  async approvePendingBatch(
+    @Param('batchId', ParseUUIDPipe) batchId: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`approvePendingBatch ${batchId} for user ${user?.id}`);
+
+    const result = await this.pendingApprovalService.approveBatch(batchId);
+
+    return {
+      approved: result.processed,
+      errors: result.errors,
+    };
+  }
+
+  /**
+   * POST /api/mini-app/pending-approval/batch/:batchId/reject
+   *
+   * Reject all pending items in a batch.
+   */
+  @Post('pending-approval/batch/:batchId/reject')
+  @HttpCode(HttpStatus.OK)
+  async rejectPendingBatch(
+    @Param('batchId', ParseUUIDPipe) batchId: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`rejectPendingBatch ${batchId} for user ${user?.id}`);
+
+    const result = await this.pendingApprovalService.rejectBatch(batchId);
+
+    return {
+      rejected: result.processed,
+      errors: result.errors,
+    };
+  }
+
+  /**
+   * GET /api/mini-app/pending-approval/:id
+   *
+   * Get a single pending approval by ID.
+   */
+  @Get('pending-approval/:id')
+  async getPendingApproval(
+    @Param('id', ParseUUIDPipe) id: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`getPendingApproval ${id} for user ${user?.id}`);
+
+    const approval = await this.pendingApprovalService.getById(id);
+
+    if (!approval) {
+      throw new NotFoundException(`Pending approval ${id} not found`);
+    }
+
+    return this.mapPendingApprovalToResponse(approval);
+  }
+
+  /**
+   * POST /api/mini-app/pending-approval/:id/approve
+   *
+   * Approve a single pending item.
+   */
+  @Post('pending-approval/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  async approvePendingApproval(
+    @Param('id', ParseUUIDPipe) id: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`approvePendingApproval ${id} for user ${user?.id}`);
+
+    await this.pendingApprovalService.approve(id);
+
+    return { success: true };
+  }
+
+  /**
+   * POST /api/mini-app/pending-approval/:id/reject
+   *
+   * Reject a single pending item.
+   */
+  @Post('pending-approval/:id/reject')
+  @HttpCode(HttpStatus.OK)
+  async rejectPendingApproval(
+    @Param('id', ParseUUIDPipe) id: string,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`rejectPendingApproval ${id} for user ${user?.id}`);
+
+    await this.pendingApprovalService.reject(id);
+
+    return { success: true };
+  }
+
+  /**
+   * Map PendingApproval entity to API response format.
+   */
+  private mapPendingApprovalToResponse(approval: PendingApproval) {
+    return {
+      id: approval.id,
+      itemType: approval.itemType,
+      targetId: approval.targetId,
+      confidence: approval.confidence,
+      sourceQuote: approval.sourceQuote,
+      status: approval.status,
+      createdAt: approval.createdAt.toISOString(),
+      target: this.extractTargetData(approval),
+    };
+  }
+
+  /**
+   * Extract target entity data based on item type.
+   * TODO: Load actual target entity data based on itemType and targetId.
+   * For now, returns basic info from sourceQuote.
+   */
+  private extractTargetData(approval: PendingApproval): Record<string, unknown> | undefined {
+    // For now, return basic info - full target loading would require
+    // querying EntityFact/Activity/Commitment tables
+    if (approval.sourceQuote) {
+      return {
+        preview: approval.sourceQuote.substring(0, 200),
+      };
+    }
+    return undefined;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Extraction Carousel Helpers
+  // ─────────────────────────────────────────────────────────────
 
   /**
    * Map internal carousel state to API response format.
