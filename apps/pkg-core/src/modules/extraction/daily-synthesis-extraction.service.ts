@@ -143,6 +143,10 @@ export class DailySynthesisExtractionService {
       throw new Error('DraftExtractionService not available');
     }
 
+    if (!params.ownerEntityId) {
+      throw new Error('ownerEntityId is required for extractAndSave');
+    }
+
     // 1. Extract structured data from synthesis
     const extraction = await this.extract(params);
 
