@@ -382,7 +382,16 @@ onUnmounted(() => {
 
       <!-- Navigation & Actions -->
       <div class="p-4 border-t border-tg-secondary-bg">
-        <!-- Action buttons row -->
+        <!-- Primary action -->
+        <button
+          class="btn btn-primary w-full mb-3"
+          :disabled="store.isProcessing || store.currentItem.status !== 'pending'"
+          @click="handleApprove"
+        >
+          {{ store.isProcessing ? 'Обработка...' : 'Подтвердить' }}
+        </button>
+
+        <!-- Secondary actions row -->
         <div class="flex gap-3 mb-3">
           <button
             class="btn btn-secondary flex-1 text-red-500"
