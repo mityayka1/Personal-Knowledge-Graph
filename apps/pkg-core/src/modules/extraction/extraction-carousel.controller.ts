@@ -109,6 +109,23 @@ interface CreateCarouselResponse {
 // Controller
 // ─────────────────────────────────────────────────────────────────
 
+/**
+ * @deprecated Use PendingApprovalController instead. This Redis-based carousel
+ * is being replaced with a PostgreSQL-based Draft Entities + PendingApproval pattern.
+ *
+ * The new approach:
+ * - Uses POST /extraction/daily/extract-and-save to create draft entities
+ * - Draft entities + pending_approval records stored in PostgreSQL (no TTL)
+ * - Approve/reject via PendingApprovalController endpoints
+ *
+ * Callback prefixes:
+ * - `exc_*` — old carousel (this controller, deprecated)
+ * - `pa_*` — new PendingApproval flow (recommended)
+ *
+ * @see PendingApprovalController
+ * @see DailySynthesisExtractionController
+ * @see docs/plans/2026-01-31-refactor-extraction-carousel-to-pending-facts-plan.md
+ */
 @ApiTags('extraction-carousel')
 @Controller('extraction-carousel')
 export class ExtractionCarouselController {
@@ -117,7 +134,13 @@ export class ExtractionCarouselController {
   constructor(
     private readonly carouselService: ExtractionCarouselStateService,
     private readonly persistenceService: ExtractionPersistenceService,
-  ) {}
+  ) {
+    // Log deprecation warning once on controller instantiation
+    this.logger.warn(
+      'ExtractionCarouselController is DEPRECATED. ' +
+        'Use PendingApprovalController for new extraction flows.',
+    );
+  }
 
   /**
    * Create a new extraction carousel

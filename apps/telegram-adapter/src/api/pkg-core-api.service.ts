@@ -392,6 +392,89 @@ export interface PersistExtractionResponse {
   error?: string;
 }
 
+// ============================================
+// PendingApproval API Types (Phase 2.3: New Flow)
+// ============================================
+
+export type PendingApprovalItemType = 'project' | 'task' | 'commitment';
+export type PendingApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export interface PendingApprovalItem {
+  id: string;
+  itemType: PendingApprovalItemType;
+  targetId: string;
+  batchId: string;
+  status: PendingApprovalStatus;
+  confidence: number;
+  sourceQuote?: string;
+  sourceInteractionId?: string;
+  messageRef?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+export interface PendingApprovalListResponse {
+  items: PendingApprovalItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface PendingApprovalBatchStats {
+  batchId: string;
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface PendingApprovalActionResponse {
+  success: boolean;
+  id: string;
+}
+
+export interface PendingApprovalBatchActionResponse {
+  batchId: string;
+  processed: number;
+  failed: number;
+  errors?: string[];
+}
+
+export interface ExtractAndSaveDto {
+  synthesisText: string;
+  ownerEntityId: string;
+  date?: string;
+  focusTopic?: string;
+  messageRef?: string;
+  sourceInteractionId?: string;
+}
+
+export interface ExtractAndSaveResponse {
+  batchId: string;
+  counts: {
+    projects: number;
+    tasks: number;
+    commitments: number;
+  };
+  approvals: Array<{
+    id: string;
+    itemType: PendingApprovalItemType;
+    targetId: string;
+    confidence: number;
+    sourceQuote?: string;
+  }>;
+  extraction: {
+    projectsExtracted: number;
+    tasksExtracted: number;
+    commitmentsExtracted: number;
+    relationsInferred: number;
+    summary: string;
+    tokensUsed: number;
+    durationMs: number;
+  };
+  errors?: string[];
+}
+
 @Injectable()
 export class PkgCoreApiService {
   private readonly logger = new Logger(PkgCoreApiService.name);
@@ -1258,6 +1341,134 @@ export class PkgCoreApiService {
       const response = await this.client.post<PersistExtractionResponse>(
         `/extraction-carousel/${carouselId}/persist`,
         { ownerEntityId } as PersistExtractionDto,
+      );
+      return response.data;
+    });
+  }
+
+  // ============================================
+  // PendingApproval API Methods (Phase 2.3: New Flow)
+  // ============================================
+
+  /**
+   * Extract data from synthesis and save as draft entities with PendingApproval.
+   * This is the NEW flow replacing Redis carousel.
+   *
+   * @param dto Extraction parameters
+   * @param timeout Optional timeout in ms (default: 120000 for LLM operations)
+   */
+  async extractAndSave(
+    dto: ExtractAndSaveDto,
+    timeout = 120000,
+  ): Promise<ExtractAndSaveResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<ExtractAndSaveResponse>(
+        '/extraction/daily/extract-and-save',
+        dto,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * List pending approvals with optional filters.
+   */
+  async listPendingApprovals(options?: {
+    batchId?: string;
+    status?: PendingApprovalStatus;
+    limit?: number;
+    offset?: number;
+  }): Promise<PendingApprovalListResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<PendingApprovalListResponse>(
+        '/pending-approval',
+        { params: options },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Get a single pending approval by ID.
+   */
+  async getPendingApproval(id: string): Promise<PendingApprovalItem | null> {
+    try {
+      const response = await this.client.get<PendingApprovalItem>(
+        `/pending-approval/${id}`,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get batch statistics for pending approvals.
+   */
+  async getPendingApprovalBatchStats(
+    batchId: string,
+  ): Promise<PendingApprovalBatchStats> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<PendingApprovalBatchStats>(
+        `/pending-approval/batch/${batchId}/stats`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Approve a single pending item.
+   * Transitions draft entity to active status.
+   */
+  async approvePendingItem(id: string): Promise<PendingApprovalActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalActionResponse>(
+        `/pending-approval/${id}/approve`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject a single pending item.
+   * Soft-deletes the draft entity.
+   */
+  async rejectPendingItem(id: string): Promise<PendingApprovalActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalActionResponse>(
+        `/pending-approval/${id}/reject`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Approve all pending items in a batch.
+   */
+  async approvePendingBatch(
+    batchId: string,
+  ): Promise<PendingApprovalBatchActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalBatchActionResponse>(
+        `/pending-approval/batch/${batchId}/approve`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject all pending items in a batch.
+   */
+  async rejectPendingBatch(
+    batchId: string,
+  ): Promise<PendingApprovalBatchActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalBatchActionResponse>(
+        `/pending-approval/batch/${batchId}/reject`,
       );
       return response.data;
     });

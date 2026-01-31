@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { Activity, ActivityType, ActivityStatus } from '@pkg/entities';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { SettingsService } from '../settings/settings.service';
+import { DraftExtractionService } from './draft-extraction.service';
 import { DailySynthesisExtractionResponse } from './daily-synthesis-extraction.types';
 
 describe('DailySynthesisExtractionService', () => {
@@ -101,6 +103,23 @@ describe('DailySynthesisExtractionService', () => {
           provide: getRepositoryToken(Activity),
           useValue: {
             createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
+          },
+        },
+        {
+          provide: SettingsService,
+          useValue: {
+            getSettings: jest.fn().mockResolvedValue({ theme: 'light' }),
+            getDailySynthesisModel: jest.fn().mockResolvedValue('haiku'),
+          },
+        },
+        {
+          provide: DraftExtractionService,
+          useValue: {
+            createDrafts: jest.fn().mockResolvedValue({
+              batchId: 'batch-123',
+              counts: { projects: 0, tasks: 0, commitments: 0 },
+              approvals: [],
+            }),
           },
         },
       ],

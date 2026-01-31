@@ -8,6 +8,8 @@ import {
   Message,
   Interaction,
   Activity,
+  Commitment,
+  PendingApproval,
   EntityRecord,
 } from '@pkg/entities';
 import { FactExtractionService } from './fact-extraction.service';
@@ -31,7 +33,9 @@ import { UnifiedExtractionService } from './unified-extraction.service';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
 import { ExtractionCarouselStateService } from './extraction-carousel-state.service';
 import { ExtractionPersistenceService } from './extraction-persistence.service';
+import { DraftExtractionService } from './draft-extraction.service';
 import { ResolutionModule } from '../resolution/resolution.module';
+import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
 import { EntityEventModule } from '../entity-event/entity-event.module';
@@ -51,6 +55,8 @@ import { ActivityModule } from '../activity/activity.module';
       Message,
       Interaction,
       Activity,
+      Commitment,
+      PendingApproval,
       EntityRecord,
     ]),
     BullModule.registerQueue({
@@ -72,6 +78,7 @@ import { ActivityModule } from '../activity/activity.module';
     EmbeddingModule,
     forwardRef(() => ConfirmationModule),
     ActivityModule,
+    PendingApprovalModule,
   ],
   controllers: [ExtractionController, ExtractedEventController, ExtractionCarouselController],
   providers: [
@@ -93,6 +100,7 @@ import { ActivityModule } from '../activity/activity.module';
     DailySynthesisExtractionService,
     ExtractionCarouselStateService,
     ExtractionPersistenceService,
+    DraftExtractionService,
   ],
   exports: [
     FactExtractionService,
@@ -112,6 +120,7 @@ import { ActivityModule } from '../activity/activity.module';
     DailySynthesisExtractionService,
     ExtractionCarouselStateService,
     ExtractionPersistenceService,
+    DraftExtractionService,
   ],
 })
 export class ExtractionModule {}

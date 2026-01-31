@@ -35,6 +35,7 @@ import { InternalProxyModule } from './modules/internal-proxy/internal-proxy.mod
 import { ConfirmationModule } from './modules/confirmation/confirmation.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { TelegramMiniAppModule } from './modules/telegram-mini-app/telegram-mini-app.module';
+import { PendingApprovalModule } from './modules/pending-approval/pending-approval.module';
 
 @Module({
   imports: [
@@ -118,6 +119,7 @@ import { TelegramMiniAppModule } from './modules/telegram-mini-app/telegram-mini
     ConfirmationModule,
     ActivityModule,
     TelegramMiniAppModule,
+    PendingApprovalModule,
   ],
   providers: [
     // Global Combined Auth Guard - supports JWT and API Key

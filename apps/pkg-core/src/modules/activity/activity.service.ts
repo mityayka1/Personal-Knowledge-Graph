@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, TreeRepository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import {
   Activity,
   ActivityType,
@@ -151,6 +152,10 @@ export class ActivityService {
 
   /**
    * Создать новую активность.
+   *
+   * ВАЖНО: Используем QueryBuilder.insert() вместо repository.save()
+   * для обхода бага TypeORM 0.3.x с ClosureSubjectExecutor.
+   * @see https://github.com/typeorm/typeorm/issues/9658
    */
   async create(dto: CreateActivityDto): Promise<Activity> {
     // Вычислить depth и materialized path
@@ -165,30 +170,42 @@ export class ActivityService {
         : parent.id;
     }
 
-    const activity = this.activityRepo.create({
+    // Генерируем ID вручную, т.к. QueryBuilder не возвращает entity
+    const activityId = randomUUID();
+
+    // Используем QueryBuilder для обхода closure-table бага
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const values: any = {
+      id: activityId,
       name: dto.name,
       activityType: dto.activityType,
-      description: dto.description,
+      description: dto.description ?? null,
       status: dto.status ?? ActivityStatus.ACTIVE,
       priority: dto.priority,
       context: dto.context,
-      parentId: dto.parentId,
+      parentId: dto.parentId ?? null,
       depth,
       materializedPath,
       ownerEntityId: dto.ownerEntityId,
-      clientEntityId: dto.clientEntityId,
-      deadline: dto.deadline ? new Date(dto.deadline) : undefined,
-      startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-      recurrenceRule: dto.recurrenceRule,
-      tags: dto.tags,
-      progress: dto.progress,
-      metadata: dto.metadata,
-    });
+      clientEntityId: dto.clientEntityId ?? null,
+      deadline: dto.deadline ? new Date(dto.deadline) : null,
+      startDate: dto.startDate ? new Date(dto.startDate) : null,
+      recurrenceRule: dto.recurrenceRule ?? null,
+      tags: dto.tags ?? null,
+      progress: dto.progress ?? null,
+      metadata: dto.metadata ?? null,
+    };
 
-    const saved = await this.activityRepo.save(activity);
-    this.logger.log(`Created activity: ${saved.id} (${saved.name})`);
+    await this.activityRepo
+      .createQueryBuilder()
+      .insert()
+      .into(Activity)
+      .values(values)
+      .execute();
 
-    return this.findOne(saved.id);
+    this.logger.log(`Created activity: ${activityId} (${dto.name})`);
+
+    return this.findOne(activityId);
   }
 
   /**
