@@ -39,6 +39,11 @@ const router = createRouter({
       name: 'entity',
       component: () => import('./pages/entity/[entityId].vue'),
     },
+    {
+      path: '/pending-approval/:batchId',
+      name: 'pending-approval',
+      component: () => import('./pages/pending-approval/[batchId].vue'),
+    },
   ],
 })
 
@@ -55,6 +60,7 @@ router.beforeEach((to, _from, next) => {
         extraction: `/extraction/${id}`,
         recall: `/recall/${id}`,
         entity: `/entity/${id}`,
+        approval: `/pending-approval/${id}`,
       }
 
       const route = routeMap[type]
