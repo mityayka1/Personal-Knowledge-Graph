@@ -70,6 +70,7 @@ export class TelegramAuthGuard implements CanActivate {
   private readonly botToken: string;
   private readonly maxAgeSeconds: number;
   private readonly allowedUserIds: Set<number>;
+  private readonly bypassAuth: boolean;
 
   constructor(private readonly configService: ConfigService) {
     this.botToken = this.configService.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
@@ -77,6 +78,12 @@ export class TelegramAuthGuard implements CanActivate {
       'TG_INIT_DATA_MAX_AGE',
       86400, // 24 hours default
     );
+
+    // Auth bypass for debugging (DANGER: only use in development!)
+    this.bypassAuth = this.configService.get<string>('MINI_APP_AUTH_BYPASS', 'false') === 'true';
+    if (this.bypassAuth) {
+      this.logger.warn('⚠️ MINI_APP_AUTH_BYPASS=true - TelegramAuthGuard is DISABLED! DO NOT USE IN PRODUCTION!');
+    }
 
     // Parse whitelist of allowed Telegram user IDs
     // Format: comma-separated list of IDs, e.g., "123456789,987654321"
@@ -101,6 +108,21 @@ export class TelegramAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<TelegramAuthRequest>();
+
+    // Bypass auth for debugging
+    if (this.bypassAuth) {
+      request.telegramInitData = {
+        auth_date: Math.floor(Date.now() / 1000),
+        hash: 'bypass',
+      };
+      request.telegramUser = {
+        id: 1,
+        first_name: 'Debug',
+        username: 'debug_user',
+      };
+      return true;
+    }
+
     const authHeader = request.headers['authorization'];
 
     if (!authHeader) {
