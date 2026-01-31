@@ -105,7 +105,7 @@ export class PendingApproval {
    * Telegram message reference for updating inline keyboards.
    * Format: "chatId:messageId"
    */
-  @Column({ name: 'message_ref', length: 100, nullable: true })
+  @Column({ name: 'message_ref', type: 'varchar', length: 100, nullable: true })
   messageRef: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
