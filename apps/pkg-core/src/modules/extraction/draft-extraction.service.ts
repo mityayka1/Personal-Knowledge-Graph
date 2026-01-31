@@ -202,8 +202,11 @@ export class DraftExtractionService {
   /**
    * Create draft Activity (PROJECT) + PendingApproval.
    *
-   * Uses injected repository instead of transactional manager to avoid
-   * TypeORM 0.3.x closure-table bug.
+   * CRITICAL: Uses QueryBuilder.insert() to bypass TypeORM closure-table bug.
+   * The save() method triggers ClosureSubjectExecutor which fails with
+   * "Cannot read properties of undefined (reading 'getEntityValue')".
+   *
+   * @see https://github.com/typeorm/typeorm/issues/9658
    */
   private async createDraftProject(
     project: ExtractedProject,
@@ -217,27 +220,39 @@ export class DraftExtractionService {
       clientEntityId = client?.id ?? null;
     }
 
-    // Create draft Activity using injected repository
-    const activity = this.activityRepo.create({
-      name: project.name,
-      activityType: ActivityType.PROJECT,
-      status: ActivityStatus.DRAFT,
-      ownerEntityId: input.ownerEntityId,
-      clientEntityId,
-      depth: 0,
-      materializedPath: null,
-      metadata: {
-        extractedFrom: 'daily_synthesis',
-        synthesisDate: input.synthesisDate,
-        focusTopic: input.focusTopic,
-        participants: project.participants,
-        sourceQuote: project.sourceQuote,
-        confidence: project.confidence,
-        draftBatchId: batchId,
-      },
-    });
+    // Generate ID manually since QueryBuilder doesn't return the entity
+    const activityId = randomUUID();
 
-    const savedActivity = await this.activityRepo.save(activity);
+    // Use QueryBuilder to bypass closure-table logic
+    await this.activityRepo
+      .createQueryBuilder()
+      .insert()
+      .into(Activity)
+      .values({
+        id: activityId,
+        name: project.name,
+        activityType: ActivityType.PROJECT,
+        status: ActivityStatus.DRAFT,
+        ownerEntityId: input.ownerEntityId,
+        clientEntityId,
+        depth: 0,
+        materializedPath: null,
+        metadata: {
+          extractedFrom: 'daily_synthesis',
+          synthesisDate: input.synthesisDate,
+          focusTopic: input.focusTopic,
+          participants: project.participants,
+          sourceQuote: project.sourceQuote,
+          confidence: project.confidence,
+          draftBatchId: batchId,
+        },
+      })
+      .execute();
+
+    // Fetch the inserted entity
+    const savedActivity = await this.activityRepo.findOneOrFail({
+      where: { id: activityId },
+    });
 
     // Create PendingApproval linking to the draft
     const approval = this.approvalRepo.create({
@@ -259,8 +274,11 @@ export class DraftExtractionService {
   /**
    * Create draft Activity (TASK) + PendingApproval.
    *
-   * Uses injected repository instead of transactional manager to avoid
-   * TypeORM 0.3.x closure-table bug.
+   * CRITICAL: Uses QueryBuilder.insert() to bypass TypeORM closure-table bug.
+   * The save() method triggers ClosureSubjectExecutor which fails with
+   * "Cannot read properties of undefined (reading 'getEntityValue')".
+   *
+   * @see https://github.com/typeorm/typeorm/issues/9658
    */
   private async createDraftTask(
     task: ExtractedTask,
@@ -282,29 +300,41 @@ export class DraftExtractionService {
       }
     }
 
-    // Create draft Activity using injected repository
-    const activity = this.activityRepo.create({
-      name: task.title,
-      activityType: ActivityType.TASK,
-      status: ActivityStatus.DRAFT,
-      priority: this.mapPriority(task.priority),
-      parentId: parentId ?? null,
-      depth,
-      materializedPath,
-      ownerEntityId: input.ownerEntityId,
-      deadline: task.deadline ? new Date(task.deadline) : null,
-      metadata: {
-        extractedFrom: 'daily_synthesis',
-        synthesisDate: input.synthesisDate,
-        focusTopic: input.focusTopic,
-        assignee: task.assignee,
-        sourceQuote: task.sourceQuote,
-        confidence: task.confidence,
-        draftBatchId: batchId,
-      },
-    });
+    // Generate ID manually since QueryBuilder doesn't return the entity
+    const activityId = randomUUID();
 
-    const savedActivity = await this.activityRepo.save(activity);
+    // Use QueryBuilder to bypass closure-table logic
+    await this.activityRepo
+      .createQueryBuilder()
+      .insert()
+      .into(Activity)
+      .values({
+        id: activityId,
+        name: task.title,
+        activityType: ActivityType.TASK,
+        status: ActivityStatus.DRAFT,
+        priority: this.mapPriority(task.priority),
+        parentId: parentId ?? null,
+        depth,
+        materializedPath,
+        ownerEntityId: input.ownerEntityId,
+        deadline: task.deadline ? new Date(task.deadline) : null,
+        metadata: {
+          extractedFrom: 'daily_synthesis',
+          synthesisDate: input.synthesisDate,
+          focusTopic: input.focusTopic,
+          assignee: task.assignee,
+          sourceQuote: task.sourceQuote,
+          confidence: task.confidence,
+          draftBatchId: batchId,
+        },
+      })
+      .execute();
+
+    // Fetch the inserted entity
+    const savedActivity = await this.activityRepo.findOneOrFail({
+      where: { id: activityId },
+    });
 
     // Create PendingApproval linking to the draft
     const approval = this.approvalRepo.create({
