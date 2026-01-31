@@ -93,6 +93,14 @@ function getActivityIcon(type: string): string {
   return icons[type] || '📌'
 }
 
+function getActionPath(action: DashboardData['pendingActions'][0]): string {
+  // Route approval type to pending-approval page, others to extraction
+  if (action.type === 'approval') {
+    return `/pending-approval/${action.id}`
+  }
+  return `/extraction/${action.id}`
+}
+
 onMounted(loadDashboard)
 </script>
 
@@ -131,7 +139,7 @@ onMounted(loadDashboard)
             v-for="action in data.pendingActions"
             :key="action.id"
             class="list-item w-full text-left"
-            @click="navigateTo(`/extraction/${action.id}`)"
+            @click="navigateTo(getActionPath(action))"
           >
             <span class="text-xl mr-3">{{ getActionIcon(action.type) }}</span>
             <div class="flex-1 min-w-0">
