@@ -9,6 +9,7 @@ import {
 } from '@pkg/entities';
 import { PendingApprovalService } from './pending-approval.service';
 import { PendingApprovalController } from './pending-approval.controller';
+import { PendingApprovalCleanupService } from './pending-approval-cleanup.service';
 
 /**
  * Module for pending approval workflow.
@@ -34,7 +35,7 @@ import { PendingApprovalController } from './pending-approval.controller';
     ConfigModule,
   ],
   controllers: [PendingApprovalController],
-  providers: [PendingApprovalService],
-  exports: [PendingApprovalService],
+  providers: [PendingApprovalService, PendingApprovalCleanupService],
+  exports: [PendingApprovalService, PendingApprovalCleanupService],
 })
 export class PendingApprovalModule {}
