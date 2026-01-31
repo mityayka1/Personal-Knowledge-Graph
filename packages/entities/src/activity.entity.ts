@@ -89,8 +89,17 @@ export enum ActivityContext {
 /**
  * Activity — универсальная сущность для всех "дел" человека.
  *
- * Использует closure-table для эффективных иерархических запросов.
- * TypeORM автоматически создаст таблицу `activities_closure` для хранения связей.
+ * Использует ТРИ паттерна иерархии одновременно:
+ * 1. **Closure-table** (@Tree) — для findAncestors/findDescendants через activities_closure
+ * 2. **Adjacency List** (parentId) — для прямого доступа к родителю
+ * 3. **Materialized Path** — для быстрого LIKE-поиска потомков
+ *
+ * ВАЖНО: При перемещении узлов необходимо вызывать cascadeUpdateDescendantPaths()
+ * для синхронизации depth/materializedPath с closure-table.
+ *
+ * ВАЖНО: Из-за бага TypeORM 0.3.x с ClosureSubjectExecutor, для создания
+ * новых Activity используй QueryBuilder.insert() вместо repository.save().
+ * @see https://github.com/typeorm/typeorm/issues/9658
  *
  * Примеры иерархий:
  * - Работа (AREA) → ГуглШитс.ру (BUSINESS) → Канал (DIRECTION) → Видео про формулы (PROJECT)
