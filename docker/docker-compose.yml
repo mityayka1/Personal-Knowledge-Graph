@@ -61,6 +61,7 @@ services:
       # Telegram Mini App
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       ALLOWED_TELEGRAM_IDS: ${ALLOWED_TELEGRAM_IDS:-}
+      MINI_APP_AUTH_BYPASS: ${MINI_APP_AUTH_BYPASS:-false}
     volumes:
       - file-storage:/data/files
       # Claude runtime data (writable) - credentials copied on startup

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cron } from '@nestjs/schedule';
-import { DataSource, Repository, In, IsNull, Not } from 'typeorm';
+import { DataSource, Repository, In, IsNull, Not, LessThan } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import {
   PendingApproval,
@@ -90,25 +90,22 @@ export class PendingApprovalCleanupService {
     let hasMore = true;
 
     while (hasMore) {
+      // Filter by date in SQL query (not in memory) to ensure all old records are found
       const approvals = await this.approvalRepo.find({
         where: {
           status: PendingApprovalStatus.REJECTED,
-          reviewedAt: Not(IsNull()),
+          reviewedAt: LessThan(cutoffDate),
         },
+        order: { reviewedAt: 'ASC' },
         take: this.batchSize,
       });
 
-      const oldApprovals = approvals.filter(
-        (a) => a.reviewedAt && a.reviewedAt < cutoffDate,
-      );
-
-      if (oldApprovals.length === 0) {
-        hasMore = false;
+      if (approvals.length === 0) {
         break;
       }
 
       await this.dataSource.transaction(async (manager) => {
-        const byType = this.groupByItemType(oldApprovals);
+        const byType = this.groupByItemType(approvals);
 
         for (const [itemType, ids] of Object.entries(byType)) {
           const deletedCount = await this.hardDeleteTargets(
@@ -119,7 +116,7 @@ export class PendingApprovalCleanupService {
           totalTargets += deletedCount;
         }
 
-        const approvalIds = oldApprovals.map((a) => a.id);
+        const approvalIds = approvals.map((a) => a.id);
         await manager.delete(PendingApproval, { id: In(approvalIds) });
         totalApprovals += approvalIds.length;
       });
@@ -230,12 +227,20 @@ export class PendingApprovalCleanupService {
         return 0;
     }
 
+    // TypeORM raw query for PostgreSQL DELETE returns result with rowCount property
     const result = await manager.query(
       `DELETE FROM ${tableName} WHERE id = ANY($1::uuid[])`,
       [targetIds],
     );
 
-    return result[1] || 0;
+    // PostgreSQL pg driver: result is array with rowCount as property on the array itself
+    // Or for some versions, it's directly an object with rowCount
+    const rowCount =
+      (result as unknown as { rowCount?: number })?.rowCount ??
+      (Array.isArray(result) ? (result as unknown as { rowCount?: number }).rowCount : undefined) ??
+      0;
+
+    return rowCount;
   }
 
   private async cleanupOrphanedEntityType(

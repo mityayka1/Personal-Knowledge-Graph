@@ -14,8 +14,6 @@ import {
   PendingApproval,
   PendingApprovalItemType,
   PendingApprovalStatus,
-  EntityFact,
-  EntityFactStatus,
   EntityRecord,
 } from '@pkg/entities';
 import {

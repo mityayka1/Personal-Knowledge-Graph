@@ -10,9 +10,7 @@ import {
   EntityFact,
   EntityFactStatus,
   Activity,
-  ActivityStatus,
   Commitment,
-  CommitmentStatus,
 } from '@pkg/entities';
 
 describe('PendingApprovalCleanupService', () => {
@@ -203,12 +201,14 @@ describe('PendingApprovalCleanupService', () => {
     it('should hard-delete rejected approvals older than retention period', async () => {
       const oldApproval = createMockRejectedApprovalOld();
 
-      // First batch: one old rejected approval
+      // First batch: one old rejected approval (filtered by LessThan in SQL)
       mockApprovalRepository.find
         .mockResolvedValueOnce([oldApproval])
         .mockResolvedValueOnce([]);
 
-      mockManager.query.mockResolvedValue([{}, 1]); // DELETE returns affected count
+      // TypeORM raw query for DELETE returns result with rowCount property
+      const deleteResult = { rowCount: 1 };
+      mockManager.query.mockResolvedValue(deleteResult);
       mockManager.delete.mockResolvedValue({ affected: 1 });
 
       const result = await service.cleanupRejectedApprovals();
@@ -223,23 +223,13 @@ describe('PendingApprovalCleanupService', () => {
     });
 
     it('should NOT delete rejected approvals younger than retention period', async () => {
-      const recentApproval: Partial<PendingApproval> = {
-        id: 'approval-recent-1',
-        itemType: PendingApprovalItemType.FACT,
-        targetId: 'fact-recent-1',
-        batchId: 'batch-1',
-        status: PendingApprovalStatus.REJECTED,
-        confidence: 0.7,
-        reviewedAt: recentDate,
-        createdAt: recentDate,
-      };
-
-      // Return only recent rejected approval
-      mockApprovalRepository.find.mockResolvedValueOnce([recentApproval]);
+      // With LessThan filtering in SQL, recent approvals are NOT returned from DB
+      // So the mock should return empty array (simulating SQL filtering)
+      mockApprovalRepository.find.mockResolvedValueOnce([]);
 
       const result = await service.cleanupRejectedApprovals();
 
-      // Recent approval is filtered out because reviewedAt < cutoffDate is false
+      // No approvals returned from DB because LessThan(cutoffDate) filters them
       expect(result.approvals).toBe(0);
       expect(result.targets).toBe(0);
       expect(mockDataSource.transaction).not.toHaveBeenCalled();

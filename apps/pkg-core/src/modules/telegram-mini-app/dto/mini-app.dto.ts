@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsObject } from 'class-validator';
+import { IsString, IsOptional, IsObject } from 'class-validator';
 
 export class BriefItemActionDto {
   @IsString()

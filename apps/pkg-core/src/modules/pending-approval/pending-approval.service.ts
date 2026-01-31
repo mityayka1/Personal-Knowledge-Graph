@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, LessThan } from 'typeorm';
+import { DataSource, Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import {
   PendingApproval,

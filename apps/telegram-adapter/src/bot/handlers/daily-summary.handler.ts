@@ -41,7 +41,10 @@ export class DailySummaryHandler {
     private readonly dailyContextCache: DailyContextCacheService,
     private readonly configService: ConfigService,
   ) {
-    this.miniAppUrl = this.configService.get<string>('MINI_APP_URL');
+    // Support both MINI_APP_URL and TELEGRAM_MINI_APP_URL for backward compatibility
+    this.miniAppUrl =
+      this.configService.get<string>('MINI_APP_URL') ||
+      this.configService.get<string>('TELEGRAM_MINI_APP_URL');
   }
 
   /**
@@ -49,7 +52,7 @@ export class DailySummaryHandler {
    * Format: https://t.me/BotUsername/app?startapp=<type>_<id>
    */
   private getMiniAppButton(
-    type: 'extraction' | 'brief' | 'recall' | 'entity',
+    type: 'extraction' | 'brief' | 'recall' | 'entity' | 'approval',
     id: string,
     text = '📱 Открыть в приложении',
   ): { text: string; web_app: { url: string } } | null {
@@ -236,9 +239,9 @@ export class DailySummaryHandler {
             [
               { text: '📋 Просмотреть по одному', callback_data: `pa_list:${result.batchId}:0` },
             ],
-            // Mini App button if available
+            // Mini App button if available (use 'approval' type for DB-based pending approval flow)
             ...(this.miniAppUrl
-              ? [[this.getMiniAppButton('extraction', result.batchId, '📱 Открыть в приложении')!]]
+              ? [[this.getMiniAppButton('approval', result.batchId, '📱 Открыть в приложении')!]]
               : []),
           ],
         },
