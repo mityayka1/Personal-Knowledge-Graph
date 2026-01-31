@@ -69,6 +69,7 @@ export class TelegramAuthGuard implements CanActivate {
   private readonly logger = new Logger(TelegramAuthGuard.name);
   private readonly botToken: string;
   private readonly maxAgeSeconds: number;
+  private readonly allowedUserIds: Set<number>;
 
   constructor(private readonly configService: ConfigService) {
     this.botToken = this.configService.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
@@ -76,6 +77,26 @@ export class TelegramAuthGuard implements CanActivate {
       'TG_INIT_DATA_MAX_AGE',
       86400, // 24 hours default
     );
+
+    // Parse whitelist of allowed Telegram user IDs
+    // Format: comma-separated list of IDs, e.g., "123456789,987654321"
+    const allowedIdsStr = this.configService.get<string>('ALLOWED_TELEGRAM_IDS', '');
+    this.allowedUserIds = new Set(
+      allowedIdsStr
+        .split(',')
+        .map((id) => parseInt(id.trim(), 10))
+        .filter((id) => !isNaN(id) && id > 0),
+    );
+
+    if (this.allowedUserIds.size > 0) {
+      this.logger.log(
+        `Mini App access whitelist enabled: ${this.allowedUserIds.size} user(s)`,
+      );
+    } else {
+      this.logger.warn(
+        'ALLOWED_TELEGRAM_IDS not configured - Mini App is open to all bot users!',
+      );
+    }
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -100,6 +121,19 @@ export class TelegramAuthGuard implements CanActivate {
       const initData = this.validateAndParse(initDataRaw);
       request.telegramInitData = initData;
       request.telegramUser = initData.user;
+
+      // Check whitelist if configured
+      if (this.allowedUserIds.size > 0) {
+        const userId = initData.user?.id;
+        if (!userId || !this.allowedUserIds.has(userId)) {
+          this.logger.warn(
+            `Access denied for user ${userId} (@${initData.user?.username}) - not in whitelist`,
+          );
+          throw new UnauthorizedException(
+            'Access denied. You are not authorized to use this app.',
+          );
+        }
+      }
 
       this.logger.debug(
         `Authenticated Telegram user: ${initData.user?.id} (@${initData.user?.username})`,
