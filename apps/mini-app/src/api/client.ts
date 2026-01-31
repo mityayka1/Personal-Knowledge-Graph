@@ -187,6 +187,87 @@ class ApiClient {
       }>
     }>(`/entity/${entityId}`)
   }
+
+  // Pending Approvals
+  async getPendingApprovals(params?: { batchId?: string; status?: string; limit?: number; offset?: number }) {
+    const query = new URLSearchParams()
+    if (params?.batchId) query.set('batchId', params.batchId)
+    if (params?.status) query.set('status', params.status)
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
+    const queryString = query.toString()
+    return this.request<{
+      items: Array<{
+        id: string
+        itemType: 'fact' | 'project' | 'task' | 'commitment'
+        targetId: string
+        confidence: number
+        sourceQuote: string | null
+        status: 'pending' | 'approved' | 'rejected'
+        createdAt: string
+        target?: {
+          name?: string
+          title?: string
+          value?: string
+          factType?: string
+        }
+      }>
+      total: number
+      limit: number
+      offset: number
+    }>(`/pending-approval${queryString ? `?${queryString}` : ''}`)
+  }
+
+  async getPendingApproval(id: string) {
+    return this.request<{
+      id: string
+      itemType: 'fact' | 'project' | 'task' | 'commitment'
+      targetId: string
+      confidence: number
+      sourceQuote: string | null
+      status: 'pending' | 'approved' | 'rejected'
+      createdAt: string
+      target?: {
+        name?: string
+        title?: string
+        value?: string
+        factType?: string
+      }
+    }>(`/pending-approval/${id}`)
+  }
+
+  async approvePendingApproval(id: string) {
+    return this.request<{ success: boolean }>(`/pending-approval/${id}/approve`, {
+      method: 'POST',
+    })
+  }
+
+  async rejectPendingApproval(id: string) {
+    return this.request<{ success: boolean }>(`/pending-approval/${id}/reject`, {
+      method: 'POST',
+    })
+  }
+
+  async getPendingApprovalBatchStats(batchId: string) {
+    return this.request<{
+      total: number
+      pending: number
+      approved: number
+      rejected: number
+    }>(`/pending-approval/batch/${batchId}/stats`)
+  }
+
+  async approvePendingBatch(batchId: string) {
+    return this.request<{ approved: number; errors: string[] }>(`/pending-approval/batch/${batchId}/approve`, {
+      method: 'POST',
+    })
+  }
+
+  async rejectPendingBatch(batchId: string) {
+    return this.request<{ rejected: number; errors: string[] }>(`/pending-approval/batch/${batchId}/reject`, {
+      method: 'POST',
+    })
+  }
 }
 
 export const api = new ApiClient()
