@@ -93,17 +93,39 @@ export interface CreateExtractionCarouselInput {
  *
  * Redis key format: extraction_carousel:{carouselId}
  * TTL: 1 hour (shorter than event carousel since these are temporary)
+ *
+ * @deprecated Use PendingApprovalService instead. This Redis-based carousel
+ * is being replaced with a PostgreSQL-based Draft Entities + PendingApproval pattern.
+ * The new approach stores draft entities directly in the database, eliminating
+ * data loss from TTL expiration and enabling full API access.
+ *
+ * Migration:
+ * - DailySummaryHandler now uses POST /extraction/daily/extract-and-save
+ * - This creates draft entities + pending_approval records in PostgreSQL
+ * - Approve/reject operations are handled by PendingApprovalController
+ *
+ * @see PendingApprovalService
+ * @see DailySynthesisExtractionService
+ * @see docs/plans/2026-01-31-refactor-extraction-carousel-to-pending-facts-plan.md
  */
 @Injectable()
 export class ExtractionCarouselStateService {
   private readonly logger = new Logger(ExtractionCarouselStateService.name);
   private readonly KEY_PREFIX = 'extraction_carousel:';
   private readonly TTL_SECONDS = 3600; // 1 hour
+  private deprecationWarningLogged = false;
 
   constructor(
     @InjectRedis()
     private readonly redis: Redis,
-  ) {}
+  ) {
+    // Log deprecation warning once on service instantiation
+    this.logger.warn(
+      'ExtractionCarouselStateService is DEPRECATED. ' +
+        'Use PendingApprovalService for new extraction flows. ' +
+        'See: docs/plans/2026-01-31-refactor-extraction-carousel-to-pending-facts-plan.md',
+    );
+  }
 
   /**
    * Create a new extraction carousel and return its ID.

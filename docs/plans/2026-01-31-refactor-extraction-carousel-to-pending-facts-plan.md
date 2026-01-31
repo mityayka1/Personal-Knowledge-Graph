@@ -438,14 +438,14 @@ apps/pkg-core/src/database/migrations/XXXX-create-pending-approvals.ts (new)
 apps/pkg-core/src/database/migrations/XXXX-add-status-to-entity-facts.ts (new)
 ```
 
-### Phase 2: Extraction Flow (2-3 дня)
+### Phase 2: Extraction Flow (2-3 дня) ✅
 
 **Цель:** Переключить extraction на создание draft entities
 
-- [ ] Модифицировать SecondBrainExtractionService для создания drafts + approvals
-- [ ] Обновить DailySummaryHandler для работы с PendingApprovalService
-- [ ] Сохранять messageRef для обновления Telegram сообщений
-- [ ] Deprecate ExtractionCarouselStateService (оставить для обратной совместимости)
+- [x] Модифицировать SecondBrainExtractionService для создания drafts + approvals
+- [x] Обновить DailySummaryHandler для работы с PendingApprovalService
+- [x] Сохранять messageRef для обновления Telegram сообщений
+- [x] Deprecate ExtractionCarouselStateService (оставить для обратной совместимости)
 - [ ] Integration tests
 
 **Файлы:**
@@ -459,7 +459,7 @@ apps/pkg-core/src/modules/extraction/extraction-carousel-state.service.ts (depre
 
 **Цель:** REST API + Mini App integration
 
-- [ ] REST endpoints: GET /pending-approvals, PATCH /:id, POST /batch/:batchId/approve|reject
+- [x] REST endpoints: GET /pending-approvals, PATCH /:id, POST /batch/:batchId/approve|reject
 - [ ] Обновить dashboard endpoint для показа pending approvals
 - [ ] Frontend: обновить список pending items
 - [ ] Frontend: добавить batch approve/reject кнопки

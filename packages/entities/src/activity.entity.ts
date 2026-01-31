@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
@@ -44,6 +45,8 @@ export enum ActivityType {
  * Статус активности
  */
 export enum ActivityStatus {
+  /** Черновик — ожидает подтверждения пользователем */
+  DRAFT = 'draft',
   /** Идея, не начата */
   IDEA = 'idea',
   /** Активна, в работе */
@@ -135,7 +138,7 @@ export class Activity {
     type: 'varchar',
     length: 20,
     default: ActivityStatus.ACTIVE,
-    comment: 'Статус: idea, active, paused, completed, cancelled, archived',
+    comment: 'Статус: draft, idea, active, paused, completed, cancelled, archived',
   })
   status: ActivityStatus;
 
@@ -349,4 +352,17 @@ export class Activity {
   })
   @Index()
   lastActivityAt: Date | null;
+
+  /**
+   * Soft delete timestamp.
+   * Записи с deletedAt != null считаются удалёнными.
+   * Используется для rejected draft entities в approval workflow.
+   */
+  @DeleteDateColumn({
+    name: 'deleted_at',
+    type: 'timestamptz',
+    comment: 'Soft delete: rejected drafts и отменённые активности',
+  })
+  @Index()
+  deletedAt: Date | null;
 }

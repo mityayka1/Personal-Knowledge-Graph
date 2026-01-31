@@ -13,6 +13,10 @@ import {
   PendingApprovalStatus,
   EntityFact,
   EntityFactStatus,
+  Activity,
+  ActivityStatus,
+  Commitment,
+  CommitmentStatus,
 } from '@pkg/entities';
 
 /**
@@ -68,6 +72,10 @@ export class PendingApprovalService {
     private readonly approvalRepo: Repository<PendingApproval>,
     @InjectRepository(EntityFact)
     private readonly factRepo: Repository<EntityFact>,
+    @InjectRepository(Activity)
+    private readonly activityRepo: Repository<Activity>,
+    @InjectRepository(Commitment)
+    private readonly commitmentRepo: Repository<Commitment>,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
@@ -410,19 +418,25 @@ export class PendingApprovalService {
       }
 
       case PendingApprovalItemType.PROJECT:
-      case PendingApprovalItemType.TASK:
-        // TODO: Implement when Activity entity is ready
-        this.logger.warn(
-          `activateTarget for ${itemType} not yet implemented`,
+      case PendingApprovalItemType.TASK: {
+        // Activity entity handles both projects and tasks
+        const activityResult = await manager.update(
+          Activity,
+          { id: targetId },
+          { status: ActivityStatus.ACTIVE },
         );
-        return false;
+        return (activityResult.affected ?? 0) > 0;
+      }
 
-      case PendingApprovalItemType.COMMITMENT:
-        // TODO: Implement when Commitment has status field
-        this.logger.warn(
-          `activateTarget for ${itemType} not yet implemented`,
+      case PendingApprovalItemType.COMMITMENT: {
+        // Commitment: draft → pending (the natural initial state)
+        const commitmentResult = await manager.update(
+          Commitment,
+          { id: targetId },
+          { status: CommitmentStatus.PENDING },
         );
-        return false;
+        return (commitmentResult.affected ?? 0) > 0;
+      }
 
       default:
         this.logger.error(`Unknown item type: ${itemType}`);
@@ -445,17 +459,11 @@ export class PendingApprovalService {
 
       case PendingApprovalItemType.PROJECT:
       case PendingApprovalItemType.TASK:
-        // TODO: Implement when Activity entity is ready
-        this.logger.warn(
-          `softDeleteTarget for ${itemType} not yet implemented`,
-        );
+        await manager.softDelete(Activity, { id: targetId });
         break;
 
       case PendingApprovalItemType.COMMITMENT:
-        // TODO: Implement when Commitment has deletedAt field
-        this.logger.warn(
-          `softDeleteTarget for ${itemType} not yet implemented`,
-        );
+        await manager.softDelete(Commitment, { id: targetId });
         break;
 
       default:
@@ -478,17 +486,11 @@ export class PendingApprovalService {
 
       case PendingApprovalItemType.PROJECT:
       case PendingApprovalItemType.TASK:
-        // TODO: Implement when Activity entity is ready
-        this.logger.warn(
-          `hardDeleteTarget for ${itemType} not yet implemented`,
-        );
+        await manager.delete(Activity, { id: targetId });
         break;
 
       case PendingApprovalItemType.COMMITMENT:
-        // TODO: Implement when Commitment entity is ready
-        this.logger.warn(
-          `hardDeleteTarget for ${itemType} not yet implemented`,
-        );
+        await manager.delete(Commitment, { id: targetId });
         break;
 
       default:

@@ -1,7 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
-import { Activity, ActivityStatus } from '@pkg/entities';
+import { Activity, ActivityStatus, PendingApproval } from '@pkg/entities';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
 import {
@@ -10,6 +10,7 @@ import {
   DailySynthesisExtractionResponse,
   DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
 } from './daily-synthesis-extraction.types';
+import { DraftExtractionService, DraftExtractionResult } from './draft-extraction.service';
 
 /**
  * DailySynthesisExtractionService — extracts structured data from /daily synthesis.
@@ -34,6 +35,9 @@ export class DailySynthesisExtractionService {
     private readonly settingsService: SettingsService,
     @InjectRepository(Activity)
     private readonly activityRepo: Repository<Activity>,
+    @Optional()
+    @Inject(forwardRef(() => DraftExtractionService))
+    private readonly draftExtractionService: DraftExtractionService | null,
   ) {}
 
   /**
@@ -108,6 +112,71 @@ export class DailySynthesisExtractionService {
       durationMs,
       extractedAt: new Date(),
     };
+  }
+
+  /**
+   * Extract structured data and immediately create draft entities with pending approvals.
+   *
+   * This is the new Draft Entities + PendingApproval flow that replaces the Redis carousel.
+   * Instead of storing extraction results in Redis for carousel navigation,
+   * we create DRAFT entities in the database with PendingApproval records.
+   *
+   * Flow:
+   * 1. Call extract() to get projects/tasks/commitments from synthesis
+   * 2. Pass results to DraftExtractionService.createDrafts()
+   * 3. Return batchId and approvals for Telegram UI
+   *
+   * @param params - Extraction parameters
+   * @param messageRef - Telegram message reference for updates (e.g., "telegram:chat:123:msg:456")
+   * @param sourceInteractionId - Optional interaction ID for tracking
+   * @returns Extraction result combined with draft creation result
+   */
+  async extractAndSave(
+    params: DailySynthesisExtractionParams,
+    messageRef?: string,
+    sourceInteractionId?: string,
+  ): Promise<{
+    extraction: DailySynthesisExtractionResult;
+    drafts: DraftExtractionResult;
+  }> {
+    if (!this.draftExtractionService) {
+      throw new Error('DraftExtractionService not available');
+    }
+
+    // 1. Extract structured data from synthesis
+    const extraction = await this.extract(params);
+
+    // 2. Create drafts + pending approvals
+    const drafts = await this.draftExtractionService.createDrafts({
+      ownerEntityId: params.ownerEntityId,
+      projects: extraction.projects,
+      tasks: extraction.tasks,
+      commitments: extraction.commitments,
+      sourceInteractionId,
+      messageRef,
+      synthesisDate: params.date,
+      focusTopic: params.focusTopic,
+    });
+
+    this.logger.log(
+      `[daily-extraction] extractAndSave complete: ` +
+        `batch=${drafts.batchId}, ` +
+        `${drafts.counts.projects} projects, ${drafts.counts.tasks} tasks, ` +
+        `${drafts.counts.commitments} commitments created as drafts`,
+    );
+
+    return { extraction, drafts };
+  }
+
+  /**
+   * Get pending approvals for a batch.
+   * Used by Telegram adapter to display approval UI.
+   */
+  async getPendingApprovalsForBatch(batchId: string): Promise<PendingApproval[]> {
+    // This will be implemented via PendingApprovalService
+    // For now, this is a placeholder showing the intended integration point
+    this.logger.debug(`[daily-extraction] getPendingApprovalsForBatch(${batchId})`);
+    return [];
   }
 
   /**

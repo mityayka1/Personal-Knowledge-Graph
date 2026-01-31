@@ -13,6 +13,8 @@ import {
   PendingApprovalStatus,
   EntityFact,
   EntityFactStatus,
+  Activity,
+  Commitment,
 } from '@pkg/entities';
 
 describe('PendingApprovalService', () => {
@@ -66,6 +68,20 @@ describe('PendingApprovalService', () => {
     delete: jest.fn(),
   };
 
+  const mockActivityRepository = {
+    findOne: jest.fn(),
+    update: jest.fn(),
+    softDelete: jest.fn(),
+    delete: jest.fn(),
+  };
+
+  const mockCommitmentRepository = {
+    findOne: jest.fn(),
+    update: jest.fn(),
+    softDelete: jest.fn(),
+    delete: jest.fn(),
+  };
+
   // Transaction manager mock
   const mockManager = {
     findOne: jest.fn(),
@@ -108,6 +124,14 @@ describe('PendingApprovalService', () => {
         {
           provide: getRepositoryToken(EntityFact),
           useValue: mockFactRepository,
+        },
+        {
+          provide: getRepositoryToken(Activity),
+          useValue: mockActivityRepository,
+        },
+        {
+          provide: getRepositoryToken(Commitment),
+          useValue: mockCommitmentRepository,
         },
         {
           provide: DataSource,
@@ -321,6 +345,8 @@ describe('PendingApprovalService', () => {
           PendingApprovalService,
           { provide: getRepositoryToken(PendingApproval), useValue: mockApprovalRepository },
           { provide: getRepositoryToken(EntityFact), useValue: mockFactRepository },
+          { provide: getRepositoryToken(Activity), useValue: mockActivityRepository },
+          { provide: getRepositoryToken(Commitment), useValue: mockCommitmentRepository },
           { provide: DataSource, useValue: mockDataSource },
           { provide: ConfigService, useValue: mockConfigService },
         ],
@@ -429,6 +455,8 @@ describe('PendingApprovalService', () => {
           PendingApprovalService,
           { provide: getRepositoryToken(PendingApproval), useValue: mockApprovalRepository },
           { provide: getRepositoryToken(EntityFact), useValue: mockFactRepository },
+          { provide: getRepositoryToken(Activity), useValue: mockActivityRepository },
+          { provide: getRepositoryToken(Commitment), useValue: mockCommitmentRepository },
           { provide: DataSource, useValue: mockDataSource },
           { provide: ConfigService, useValue: mockConfigService },
         ],
