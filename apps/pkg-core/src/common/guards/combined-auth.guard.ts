@@ -75,6 +75,12 @@ export class CombinedAuthGuard implements CanActivate {
 
     // Check Authorization header
     const authHeader = request.headers.authorization;
+
+    // Skip if using Telegram Mini App auth (handled by TelegramAuthGuard)
+    if (authHeader?.startsWith('tma ')) {
+      return { authType: null, token: null };
+    }
+
     if (authHeader?.startsWith('Bearer ')) {
       const token = authHeader.slice(7);
 

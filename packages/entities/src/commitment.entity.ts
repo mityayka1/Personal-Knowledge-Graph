@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
@@ -35,6 +36,8 @@ export enum CommitmentType {
  * Статус обязательства
  */
 export enum CommitmentStatus {
+  /** Черновик — ожидает подтверждения пользователем */
+  DRAFT = 'draft',
   /** Ожидает выполнения */
   PENDING = 'pending',
   /** В процессе выполнения */
@@ -128,7 +131,7 @@ export class Commitment {
     type: 'varchar',
     length: 20,
     default: CommitmentStatus.PENDING,
-    comment: 'Статус: pending, in_progress, completed, cancelled, overdue, deferred',
+    comment: 'Статус: draft, pending, in_progress, completed, cancelled, overdue, deferred',
   })
   status: CommitmentStatus;
 
@@ -349,4 +352,17 @@ export class Commitment {
    */
   @UpdateDateColumn({ name: 'updated_at', comment: 'Дата последнего обновления' })
   updatedAt: Date;
+
+  /**
+   * Soft delete timestamp.
+   * Записи с deletedAt != null считаются удалёнными.
+   * Используется для rejected draft entities в approval workflow.
+   */
+  @DeleteDateColumn({
+    name: 'deleted_at',
+    type: 'timestamptz',
+    comment: 'Soft delete: rejected drafts и отменённые обязательства',
+  })
+  @Index()
+  deletedAt: Date | null;
 }

@@ -29,6 +29,7 @@ import {
   ClaudeAgentRun,
   User,
   ExtractedEvent,
+  PendingApproval,
   // Phase D: Jarvis Foundation
   Activity,
   ActivityMember,
@@ -62,6 +63,7 @@ export const ALL_ENTITIES = [
   ClaudeAgentRun,
   User,
   ExtractedEvent,
+  PendingApproval,
   // Phase D: Jarvis Foundation
   Activity,
   ActivityMember,

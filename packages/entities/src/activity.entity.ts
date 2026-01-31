@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
@@ -44,6 +45,8 @@ export enum ActivityType {
  * Статус активности
  */
 export enum ActivityStatus {
+  /** Черновик — ожидает подтверждения пользователем */
+  DRAFT = 'draft',
   /** Идея, не начата */
   IDEA = 'idea',
   /** Активна, в работе */
@@ -86,8 +89,17 @@ export enum ActivityContext {
 /**
  * Activity — универсальная сущность для всех "дел" человека.
  *
- * Использует closure-table для эффективных иерархических запросов.
- * TypeORM автоматически создаст таблицу `activities_closure` для хранения связей.
+ * Использует ТРИ паттерна иерархии одновременно:
+ * 1. **Closure-table** (@Tree) — для findAncestors/findDescendants через activities_closure
+ * 2. **Adjacency List** (parentId) — для прямого доступа к родителю
+ * 3. **Materialized Path** — для быстрого LIKE-поиска потомков
+ *
+ * ВАЖНО: При перемещении узлов необходимо вызывать cascadeUpdateDescendantPaths()
+ * для синхронизации depth/materializedPath с closure-table.
+ *
+ * ВАЖНО: Из-за бага TypeORM 0.3.x с ClosureSubjectExecutor, для создания
+ * новых Activity используй QueryBuilder.insert() вместо repository.save().
+ * @see https://github.com/typeorm/typeorm/issues/9658
  *
  * Примеры иерархий:
  * - Работа (AREA) → ГуглШитс.ру (BUSINESS) → Канал (DIRECTION) → Видео про формулы (PROJECT)
@@ -135,7 +147,7 @@ export class Activity {
     type: 'varchar',
     length: 20,
     default: ActivityStatus.ACTIVE,
-    comment: 'Статус: idea, active, paused, completed, cancelled, archived',
+    comment: 'Статус: draft, idea, active, paused, completed, cancelled, archived',
   })
   status: ActivityStatus;
 
@@ -349,4 +361,17 @@ export class Activity {
   })
   @Index()
   lastActivityAt: Date | null;
+
+  /**
+   * Soft delete timestamp.
+   * Записи с deletedAt != null считаются удалёнными.
+   * Используется для rejected draft entities в approval workflow.
+   */
+  @DeleteDateColumn({
+    name: 'deleted_at',
+    type: 'timestamptz',
+    comment: 'Soft delete: rejected drafts и отменённые активности',
+  })
+  @Index()
+  deletedAt: Date | null;
 }

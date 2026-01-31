@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { DailySummaryHandler } from './daily-summary.handler';
 import { PkgCoreApiService } from '../../api/pkg-core-api.service';
 import { DailyContextCacheService } from '../../common/cache';
@@ -48,6 +49,15 @@ describe('DailySummaryHandler', () => {
       getExtractionCarouselStats: jest.fn(),
       getOwnerEntity: jest.fn(),
       persistExtractionCarousel: jest.fn(),
+      // New PendingApproval API methods
+      extractAndSave: jest.fn(),
+      listPendingApprovals: jest.fn(),
+      getPendingApproval: jest.fn(),
+      getPendingApprovalBatchStats: jest.fn(),
+      approvePendingItem: jest.fn(),
+      rejectPendingItem: jest.fn(),
+      approvePendingBatch: jest.fn(),
+      rejectPendingBatch: jest.fn(),
     };
 
     const mockDailyContextCache = {
@@ -56,11 +66,16 @@ describe('DailySummaryHandler', () => {
       deleteSessionId: jest.fn(),
     };
 
+    const mockConfigService = {
+      get: jest.fn().mockReturnValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DailySummaryHandler,
         { provide: PkgCoreApiService, useValue: mockPkgCoreApi },
         { provide: DailyContextCacheService, useValue: mockDailyContextCache },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
@@ -81,6 +96,14 @@ describe('DailySummaryHandler', () => {
       expect(handler.canHandle('exc_next:carousel123')).toBe(true);
       expect(handler.canHandle('exc_confirm:carousel123')).toBe(true);
       expect(handler.canHandle('exc_skip:carousel123')).toBe(true);
+    });
+
+    it('should return true for pending approval callbacks', () => {
+      expect(handler.canHandle('pa_approve_all:batch123')).toBe(true);
+      expect(handler.canHandle('pa_reject_all:batch123')).toBe(true);
+      expect(handler.canHandle('pa_list:batch123:0')).toBe(true);
+      expect(handler.canHandle('pa_approve:item123')).toBe(true);
+      expect(handler.canHandle('pa_reject:item123')).toBe(true);
     });
 
     it('should return false for other callbacks', () => {
@@ -162,7 +185,7 @@ describe('DailySummaryHandler', () => {
   });
 
   describe('handleCallback - extract', () => {
-    it('should extract and create carousel successfully', async () => {
+    it('should extract and save with new pending approval flow', async () => {
       const ctx = mockCtx();
       (ctx.callbackQuery as any).data = 'ds_extract:100';
 
@@ -179,29 +202,51 @@ describe('DailySummaryHandler', () => {
           createdAt: Date.now(),
         },
       });
-      pkgCoreApi.extractFromSession.mockResolvedValue({
-        success: true,
-        data: {
-          projects: [{ name: 'Project A', isNew: true, participants: [], confidence: 0.9 }],
-          tasks: [],
-          commitments: [],
-          inferredRelations: [],
-          extractionSummary: 'Found 1 project',
+      pkgCoreApi.getOwnerEntity.mockResolvedValue({ id: 'owner-uuid', name: 'Me' });
+      pkgCoreApi.extractAndSave.mockResolvedValue({
+        batchId: 'batch-123',
+        counts: { projects: 1, tasks: 2, commitments: 0 },
+        approvals: [
+          { id: 'pa-1', itemType: 'project', targetId: 'proj-1', confidence: 0.9 },
+          { id: 'pa-2', itemType: 'task', targetId: 'task-1', confidence: 0.85 },
+          { id: 'pa-3', itemType: 'task', targetId: 'task-2', confidence: 0.8 },
+        ],
+        extraction: {
+          projectsExtracted: 1,
+          tasksExtracted: 2,
+          commitmentsExtracted: 0,
+          relationsInferred: 0,
+          summary: 'Extracted 1 project, 2 tasks',
           tokensUsed: 100,
           durationMs: 500,
         },
-      });
-      pkgCoreApi.createExtractionCarousel.mockResolvedValue({
-        success: true,
-        carouselId: 'carousel-123',
-        message: 'Project A',
-        buttons: [[{ text: '✅', callback_data: 'exc_confirm:carousel-123' }]],
       });
 
       await handler.handleCallback(ctx);
 
       expect(ctx.answerCbQuery).toHaveBeenCalledWith('📈 Извлекаю структуру...');
-      expect(pkgCoreApi.extractFromSession).toHaveBeenCalledWith('rs_abc123', undefined, 'sonnet');
+      expect(pkgCoreApi.extractAndSave).toHaveBeenCalledWith({
+        synthesisText: 'Test answer',
+        ownerEntityId: 'owner-uuid',
+        date: '2026-01-30',
+        messageRef: 'telegram:chat:123456:msg:100',
+        sourceInteractionId: undefined,
+      });
+      // Should show summary with buttons
+      expect(ctx.reply).toHaveBeenCalledWith(
+        expect.stringContaining('📈 <b>Извлечённая структура</b>'),
+        expect.objectContaining({
+          parse_mode: 'HTML',
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ text: '✅ Подтвердить все' }),
+                expect.objectContaining({ text: '❌ Отклонить все' }),
+              ]),
+            ]),
+          }),
+        }),
+      );
     });
 
     it('should handle no structured data found', async () => {
@@ -221,14 +266,17 @@ describe('DailySummaryHandler', () => {
           createdAt: Date.now(),
         },
       });
-      pkgCoreApi.extractFromSession.mockResolvedValue({
-        success: true,
-        data: {
-          projects: [],
-          tasks: [],
-          commitments: [],
-          inferredRelations: [],
-          extractionSummary: 'No data found',
+      pkgCoreApi.getOwnerEntity.mockResolvedValue({ id: 'owner-uuid', name: 'Me' });
+      pkgCoreApi.extractAndSave.mockResolvedValue({
+        batchId: 'batch-empty',
+        counts: { projects: 0, tasks: 0, commitments: 0 },
+        approvals: [],
+        extraction: {
+          projectsExtracted: 0,
+          tasksExtracted: 0,
+          commitmentsExtracted: 0,
+          relationsInferred: 0,
+          summary: 'No data found',
           tokensUsed: 50,
           durationMs: 200,
         },
@@ -237,6 +285,33 @@ describe('DailySummaryHandler', () => {
       await handler.handleCallback(ctx);
 
       expect(ctx.reply).toHaveBeenCalledWith('ℹ️ Структурированных данных не обнаружено.');
+    });
+
+    it('should handle owner not found', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'ds_extract:100';
+
+      dailyContextCache.getSessionId.mockResolvedValue('rs_abc123');
+      pkgCoreApi.getRecallSession.mockResolvedValue({
+        success: true,
+        data: {
+          sessionId: 'rs_abc123',
+          query: 'test',
+          dateStr: '2026-01-30',
+          answer: 'Test answer',
+          sources: [],
+          model: 'sonnet',
+          createdAt: Date.now(),
+        },
+      });
+      pkgCoreApi.getOwnerEntity.mockResolvedValue(null);
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Владелец не найден');
+      expect(ctx.reply).toHaveBeenCalledWith(
+        '⚠️ Не найден владелец (entity "me"). Используйте /settings для настройки.',
+      );
     });
 
     it('should handle session not found', async () => {
@@ -357,6 +432,201 @@ describe('DailySummaryHandler', () => {
       await handler.handleCallback(ctx);
 
       expect(ctx.answerCbQuery).toHaveBeenCalledWith('Неверный формат');
+    });
+  });
+
+  describe('handleCallback - pending approval', () => {
+    it('should approve all items in batch', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'pa_approve_all:batch-123';
+
+      pkgCoreApi.approvePendingBatch.mockResolvedValue({
+        batchId: 'batch-123',
+        processed: 5,
+        failed: 0,
+      });
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('✅ Подтверждаю все...');
+      expect(pkgCoreApi.approvePendingBatch).toHaveBeenCalledWith('batch-123');
+      expect(ctx.telegram.editMessageText).toHaveBeenCalledWith(
+        123456,
+        100,
+        undefined,
+        expect.stringContaining('Все элементы подтверждены'),
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
+    });
+
+    it('should reject all items in batch', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'pa_reject_all:batch-123';
+
+      pkgCoreApi.rejectPendingBatch.mockResolvedValue({
+        batchId: 'batch-123',
+        processed: 5,
+        failed: 0,
+      });
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('❌ Отклоняю все...');
+      expect(pkgCoreApi.rejectPendingBatch).toHaveBeenCalledWith('batch-123');
+      expect(ctx.telegram.editMessageText).toHaveBeenCalledWith(
+        123456,
+        100,
+        undefined,
+        expect.stringContaining('Все элементы отклонены'),
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
+    });
+
+    it('should list pending items for review', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'pa_list:batch-123:0';
+
+      pkgCoreApi.listPendingApprovals.mockResolvedValue({
+        items: [
+          {
+            id: 'pa-1',
+            itemType: 'project' as const,
+            targetId: 'proj-1',
+            batchId: 'batch-123',
+            status: 'pending' as const,
+            confidence: 0.9,
+            sourceQuote: 'Project Alpha launch',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        total: 3,
+        limit: 1,
+        offset: 0,
+      });
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalled();
+      expect(pkgCoreApi.listPendingApprovals).toHaveBeenCalledWith({
+        batchId: 'batch-123',
+        status: 'pending',
+        limit: 1,
+        offset: 0,
+      });
+      expect(ctx.telegram.editMessageText).toHaveBeenCalledWith(
+        123456,
+        100,
+        undefined,
+        expect.stringContaining('🏗 Проект'),
+        expect.objectContaining({
+          parse_mode: 'HTML',
+          reply_markup: expect.objectContaining({
+            inline_keyboard: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ text: '✅ Подтвердить' }),
+                expect.objectContaining({ text: '❌ Отклонить' }),
+              ]),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    it('should show completion when no more pending items', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'pa_list:batch-123:0';
+
+      pkgCoreApi.listPendingApprovals.mockResolvedValue({
+        items: [],
+        total: 0,
+        limit: 1,
+        offset: 0,
+      });
+      pkgCoreApi.getPendingApprovalBatchStats.mockResolvedValue({
+        batchId: 'batch-123',
+        total: 3,
+        pending: 0,
+        approved: 2,
+        rejected: 1,
+      });
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.telegram.editMessageText).toHaveBeenCalledWith(
+        123456,
+        100,
+        undefined,
+        expect.stringContaining('Обработка завершена'),
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
+    });
+
+    it('should approve single item and continue to next', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'pa_approve:pa-1';
+
+      pkgCoreApi.approvePendingItem.mockResolvedValue({ success: true, id: 'pa-1' });
+      pkgCoreApi.getPendingApproval.mockResolvedValue({
+        id: 'pa-1',
+        itemType: 'project' as const,
+        targetId: 'proj-1',
+        batchId: 'batch-123',
+        status: 'approved' as const,
+        confidence: 0.9,
+        createdAt: new Date().toISOString(),
+      });
+      pkgCoreApi.listPendingApprovals.mockResolvedValue({
+        items: [],
+        total: 0,
+        limit: 1,
+        offset: 0,
+      });
+      pkgCoreApi.getPendingApprovalBatchStats.mockResolvedValue({
+        batchId: 'batch-123',
+        total: 1,
+        pending: 0,
+        approved: 1,
+        rejected: 0,
+      });
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('✅ Подтверждаю...');
+      expect(pkgCoreApi.approvePendingItem).toHaveBeenCalledWith('pa-1');
+    });
+
+    it('should reject single item and continue to next', async () => {
+      const ctx = mockCtx();
+      (ctx.callbackQuery as any).data = 'pa_reject:pa-1';
+
+      pkgCoreApi.rejectPendingItem.mockResolvedValue({ success: true, id: 'pa-1' });
+      pkgCoreApi.getPendingApproval.mockResolvedValue({
+        id: 'pa-1',
+        itemType: 'project' as const,
+        targetId: 'proj-1',
+        batchId: 'batch-123',
+        status: 'rejected' as const,
+        confidence: 0.9,
+        createdAt: new Date().toISOString(),
+      });
+      pkgCoreApi.listPendingApprovals.mockResolvedValue({
+        items: [],
+        total: 0,
+        limit: 1,
+        offset: 0,
+      });
+      pkgCoreApi.getPendingApprovalBatchStats.mockResolvedValue({
+        batchId: 'batch-123',
+        total: 1,
+        pending: 0,
+        approved: 0,
+        rejected: 1,
+      });
+
+      await handler.handleCallback(ctx);
+
+      expect(ctx.answerCbQuery).toHaveBeenCalledWith('❌ Отклоняю...');
+      expect(pkgCoreApi.rejectPendingItem).toHaveBeenCalledWith('pa-1');
     });
   });
 

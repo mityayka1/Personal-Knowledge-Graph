@@ -28,6 +28,26 @@ Personal Knowledge Graph — система для интеллектуальн�
 - **PKG Core** — центральный сервис с API, entity management, search, хранение данных
 - **Worker (n8n)** — асинхронные задачи: транскрипция, LLM-анализ через Claude Code CLI
 
+## Production Server
+
+| Параметр | Значение |
+|----------|----------|
+| **SSH** | `ssh mityayka@assistant.mityayka.ru` |
+| **Директория** | `/opt/apps/pkg` |
+| **PKG Core API** | `https://assistant.mityayka.ru/api/v1/` |
+
+```bash
+# Подключение к серверу
+ssh mityayka@assistant.mityayka.ru
+
+# Переход в директорию проекта
+cd /opt/apps/pkg
+
+# Логи
+docker compose logs -f pkg-core
+docker compose logs -f telegram-adapter
+```
+
 ## Документация
 
 | Документ | Описание |

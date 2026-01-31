@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
   Index,
@@ -62,6 +63,16 @@ export enum FactSource {
   MANUAL = 'manual',
   EXTRACTED = 'extracted',
   IMPORTED = 'imported',
+}
+
+/**
+ * Workflow status for draft entities pattern.
+ * - draft: Created but not yet approved by user
+ * - active: Approved and visible in queries
+ */
+export enum EntityFactStatus {
+  DRAFT = 'draft',
+  ACTIVE = 'active',
 }
 
 @Entity('entity_facts')
@@ -142,6 +153,26 @@ export class EntityFact {
 
   @Column({ name: 'valid_until', type: 'date', nullable: true })
   validUntil: Date | null;
+
+  /**
+   * Workflow status for draft entities pattern.
+   * - draft: Created by extraction, pending user approval
+   * - active: Approved and visible in normal queries
+   *
+   * Default is 'active' for backward compatibility with existing data.
+   */
+  @Column({ length: 10, default: EntityFactStatus.ACTIVE })
+  @Index()
+  status: EntityFactStatus;
+
+  /**
+   * Soft delete timestamp for rejected drafts.
+   * Set when user rejects extracted fact.
+   * Cleanup job hard-deletes after retention period.
+   */
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz' })
+  @Index()
+  deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
