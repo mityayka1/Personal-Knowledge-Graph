@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePendingApprovalStore } from '@/stores/pending-approval'
-import { useMainButton, useBackButton } from '@/composables/useTelegram'
+import { useBackButton } from '@/composables/useTelegram'
 import { useSmartHaptics } from '@/composables/useSmartHaptics'
 import { usePopup } from '@/composables/useTelegram'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
@@ -11,7 +11,6 @@ import ErrorState from '@/components/common/ErrorState.vue'
 const route = useRoute()
 const router = useRouter()
 const store = usePendingApprovalStore()
-const mainButton = useMainButton()
 const backButton = useBackButton()
 const haptics = useSmartHaptics()
 const popup = usePopup()
@@ -102,12 +101,7 @@ function getDueDate(): string | null {
 
 async function handleApprove() {
   haptics.confirm()
-  mainButton.showProgress()
-
   await store.approve()
-
-  mainButton.hideProgress()
-  updateMainButton()
 
   if (store.isComplete) {
     haptics.complete()
@@ -117,13 +111,11 @@ async function handleApprove() {
 async function handleReject() {
   haptics.reject()
   await store.reject()
-  updateMainButton()
 }
 
 function handleSkip() {
   haptics.skip()
   store.skip()
-  updateMainButton()
 }
 
 function handlePrevious() {
@@ -150,12 +142,7 @@ async function handleApproveAll() {
   if (!confirmed) return
 
   haptics.confirm()
-  mainButton.showProgress()
-
   await store.approveAll()
-
-  mainButton.hideProgress()
-  updateMainButton()
   haptics.complete()
 }
 
@@ -166,26 +153,7 @@ async function handleRejectAll() {
   if (!confirmed) return
 
   haptics.reject()
-  mainButton.showProgress()
-
   await store.rejectAll()
-
-  mainButton.hideProgress()
-  updateMainButton()
-}
-
-function updateMainButton() {
-  if (store.isComplete) {
-    mainButton.setText('Готово')
-    mainButton.onClick(() => {
-      haptics.navigate()
-      router.push('/')
-    })
-  } else {
-    mainButton.setText('Подтвердить')
-    mainButton.onClick(handleApprove)
-  }
-  mainButton.show()
 }
 
 function handleBack() {
@@ -200,18 +168,12 @@ function handleFinish() {
 
 onMounted(async () => {
   await store.load(batchId.value)
-  updateMainButton()
 
   backButton.onClick(handleBack)
   backButton.show()
 })
 
-watch(() => store.currentItem, () => {
-  updateMainButton()
-})
-
 onUnmounted(() => {
-  mainButton.hide()
   backButton.hide()
   store.reset()
 })
