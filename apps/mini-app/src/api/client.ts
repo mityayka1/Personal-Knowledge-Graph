@@ -1,6 +1,6 @@
 import { useTelegram } from '@/composables/useTelegram'
 
-const API_BASE = '/api/mini-app'
+const API_BASE = '/api/v1/mini-app'
 
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'

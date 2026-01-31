@@ -31,9 +31,9 @@ import { ConfigService } from '@nestjs/config';
  * All endpoints are protected by TelegramAuthGuard which validates
  * the initData signature from Telegram.
  *
- * Base path: /api/mini-app
+ * Base path: /api/v1/mini-app (global prefix + controller path)
  */
-@Controller('api/mini-app')
+@Controller('mini-app')
 @Public() // Bypass CombinedAuthGuard - TelegramAuthGuard handles Mini App auth
 @UseGuards(TelegramAuthGuard)
 export class TelegramMiniAppController {
