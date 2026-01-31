@@ -18,6 +18,12 @@ import {
   ExtractionCarouselItem,
 } from '../../extraction/extraction-carousel-state.service';
 import { RecallSessionService } from '../../claude-agent/recall-session.service';
+import { PendingApprovalService } from '../../pending-approval/pending-approval.service';
+import {
+  PendingApproval,
+  PendingApprovalStatus,
+  PendingApprovalItemType,
+} from '@pkg/entities';
 import {
   BriefItemActionDto,
   ConfirmExtractionDto,
@@ -44,6 +50,7 @@ export class TelegramMiniAppController {
     private readonly entityService: EntityService,
     private readonly extractionCarouselService: ExtractionCarouselStateService,
     private readonly recallSessionService: RecallSessionService,
+    private readonly pendingApprovalService: PendingApprovalService,
     private readonly configService: ConfigService,
   ) {
     this.ownerTelegramId = this.configService.get<number>('OWNER_TELEGRAM_ID', 0);
@@ -80,13 +87,90 @@ export class TelegramMiniAppController {
   async getDashboard(@TgUser() user: TelegramUser) {
     this.logger.debug(`getDashboard for user ${user?.id}`);
 
-    // TODO: Implement actual data fetching
-    // For now, return stub data for UI development
+    // Fetch pending approvals grouped by batch
+    const { items: pendingApprovals } = await this.pendingApprovalService.list({
+      status: PendingApprovalStatus.PENDING,
+      limit: 100, // Reasonable limit for dashboard
+    });
+
+    // Group by batchId and create pending actions
+    const batchMap = new Map<
+      string,
+      { items: PendingApproval[]; types: Set<string> }
+    >();
+
+    for (const approval of pendingApprovals) {
+      if (!batchMap.has(approval.batchId)) {
+        batchMap.set(approval.batchId, { items: [], types: new Set() });
+      }
+      const batch = batchMap.get(approval.batchId)!;
+      batch.items.push(approval);
+      batch.types.add(approval.itemType);
+    }
+
+    const pendingActions = Array.from(batchMap.entries()).map(
+      ([batchId, { items, types }]) => {
+        // Determine primary type for display
+        const typeArray = Array.from(types);
+        const primaryType =
+          typeArray.length === 1 ? typeArray[0] : 'extraction';
+
+        // Generate title based on content
+        const title = this.generateBatchTitle(items, typeArray);
+
+        return {
+          type: 'approval' as const,
+          id: batchId,
+          title,
+          count: items.length,
+        };
+      },
+    );
+
     return {
-      pendingActions: [],
-      todayBrief: null,
-      recentActivity: [],
+      pendingActions,
+      todayBrief: null, // TODO: Implement brief fetching
+      recentActivity: [], // TODO: Implement recent activity
     };
+  }
+
+  /**
+   * Generate a human-readable title for a batch of pending approvals.
+   */
+  private generateBatchTitle(
+    items: PendingApproval[],
+    types: string[],
+  ): string {
+    if (types.length === 1) {
+      const type = types[0];
+      const count = items.length;
+      switch (type) {
+        case PendingApprovalItemType.FACT:
+          return `${count} ${this.pluralize(count, 'факт', 'факта', 'фактов')}`;
+        case PendingApprovalItemType.PROJECT:
+          return `${count} ${this.pluralize(count, 'проект', 'проекта', 'проектов')}`;
+        case PendingApprovalItemType.TASK:
+          return `${count} ${this.pluralize(count, 'задача', 'задачи', 'задач')}`;
+        case PendingApprovalItemType.COMMITMENT:
+          return `${count} ${this.pluralize(count, 'обязательство', 'обязательства', 'обязательств')}`;
+        default:
+          return `${count} элементов`;
+      }
+    }
+
+    // Mixed types
+    return `${items.length} извлечённых элементов`;
+  }
+
+  /**
+   * Russian pluralization helper.
+   */
+  private pluralize(n: number, one: string, few: string, many: string): string {
+    const mod10 = n % 10;
+    const mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return one;
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+    return many;
   }
 
   /**

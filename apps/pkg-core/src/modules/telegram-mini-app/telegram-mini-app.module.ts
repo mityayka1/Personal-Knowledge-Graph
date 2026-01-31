@@ -5,6 +5,7 @@ import { TelegramAuthGuard } from './guards/telegram-auth.guard';
 import { EntityModule } from '../entity/entity.module';
 import { ExtractionModule } from '../extraction/extraction.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 
 /**
  * Module for Telegram Mini App API.
@@ -17,6 +18,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
  * - EntityModule for entity profiles
  * - ExtractionModule for carousel state
  * - ClaudeAgentModule for recall sessions
+ * - PendingApprovalModule for pending approvals on dashboard
  */
 @Module({
   imports: [
@@ -24,6 +26,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     EntityModule,
     ExtractionModule,
     ClaudeAgentModule,
+    PendingApprovalModule,
   ],
   controllers: [TelegramMiniAppController],
   providers: [TelegramAuthGuard],
