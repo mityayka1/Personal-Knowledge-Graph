@@ -58,6 +58,9 @@ services:
       PKG_CORE_API_KEY: ${API_KEY:?API_KEY is required}
       # Claude CLI
       CLAUDE_WORKSPACE_PATH: /app/claude-workspace
+      # Telegram Mini App
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      ALLOWED_TELEGRAM_IDS: ${ALLOWED_TELEGRAM_IDS:-}
     volumes:
       - file-storage:/data/files
       # Claude runtime data (writable) - credentials copied on startup
