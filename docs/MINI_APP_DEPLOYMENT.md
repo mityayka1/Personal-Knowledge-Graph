@@ -39,12 +39,22 @@ server {
     }
 
     # API proxy to pkg-core
+    # Mini App calls /api/v1/mini-app/* which gets proxied to pkg-core
     location /api/ {
         proxy_pass http://127.0.0.1:3000/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header Authorization $http_authorization;
     }
 }
 ```
+
+### API Routing
+
+Mini App API доступен по пути `/api/v1/mini-app/*`:
+- Frontend вызывает: `/api/v1/mini-app/dashboard`
+- Nginx проксирует на: `http://127.0.0.1:3000/api/v1/mini-app/dashboard`
+- NestJS маршрут: `API_PREFIX(/api/v1) + @Controller('mini-app')`
 
 ### SSL Certificate
 
