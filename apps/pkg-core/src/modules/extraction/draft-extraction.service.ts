@@ -202,6 +202,10 @@ export class DraftExtractionService {
 
   /**
    * Create draft Activity (PROJECT) + PendingApproval.
+   *
+   * Note: Activity uses @Tree('closure-table') decorator which requires
+   * TreeRepository for proper save operation. Using manager.save() directly
+   * causes "getEntityValue is undefined" error in TypeORM 0.3.x.
    */
   private async createDraftProject(
     manager: import('typeorm').EntityManager,
@@ -216,13 +220,18 @@ export class DraftExtractionService {
       clientEntityId = client?.id ?? null;
     }
 
+    // Get TreeRepository for Activity (required for closure-table entities)
+    const treeRepo = manager.getTreeRepository(Activity);
+
     // Create draft Activity
-    const activity = manager.create(Activity, {
+    const activity = treeRepo.create({
       name: project.name,
       activityType: ActivityType.PROJECT,
       status: ActivityStatus.DRAFT, // DRAFT status for approval workflow
       ownerEntityId: input.ownerEntityId,
       clientEntityId,
+      depth: 0, // Root level for new projects
+      materializedPath: null,
       metadata: {
         extractedFrom: 'daily_synthesis',
         synthesisDate: input.synthesisDate,
@@ -234,7 +243,7 @@ export class DraftExtractionService {
       },
     });
 
-    const savedActivity = await manager.save(Activity, activity);
+    const savedActivity = await treeRepo.save(activity);
 
     // Create PendingApproval linking to the draft
     const approval = manager.create(PendingApproval, {
@@ -255,6 +264,9 @@ export class DraftExtractionService {
 
   /**
    * Create draft Activity (TASK) + PendingApproval.
+   *
+   * Note: Activity uses @Tree('closure-table') decorator which requires
+   * TreeRepository for proper save operation.
    */
   private async createDraftTask(
     manager: import('typeorm').EntityManager,
@@ -263,13 +275,32 @@ export class DraftExtractionService {
     batchId: string,
     parentId?: string,
   ): Promise<{ activity: Activity; approval: PendingApproval }> {
+    // Get TreeRepository for Activity (required for closure-table entities)
+    const treeRepo = manager.getTreeRepository(Activity);
+
+    // Compute depth and materializedPath if parent exists
+    let depth = 0;
+    let materializedPath: string | null = null;
+
+    if (parentId) {
+      const parent = await treeRepo.findOne({ where: { id: parentId } });
+      if (parent) {
+        depth = parent.depth + 1;
+        materializedPath = parent.materializedPath
+          ? `${parent.materializedPath}/${parent.id}`
+          : parent.id;
+      }
+    }
+
     // Create draft Activity
-    const activity = manager.create(Activity, {
+    const activity = treeRepo.create({
       name: task.title,
       activityType: ActivityType.TASK,
       status: ActivityStatus.DRAFT, // DRAFT status for approval workflow
       priority: this.mapPriority(task.priority),
       parentId: parentId ?? null,
+      depth,
+      materializedPath,
       ownerEntityId: input.ownerEntityId,
       deadline: task.deadline ? new Date(task.deadline) : null,
       metadata: {
@@ -283,7 +314,7 @@ export class DraftExtractionService {
       },
     });
 
-    const savedActivity = await manager.save(Activity, activity);
+    const savedActivity = await treeRepo.save(activity);
 
     // Create PendingApproval linking to the draft
     const approval = manager.create(PendingApproval, {
