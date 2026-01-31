@@ -180,7 +180,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col">
+  <div class="h-screen flex flex-col overflow-hidden">
     <!-- Loading -->
     <div v-if="store.loading" class="flex-1 flex items-center justify-center">
       <LoadingSpinner size="lg" />
