@@ -46,9 +46,13 @@ function getDisplayTitle(): string {
   const item = store.currentItem
   if (!item) return 'Без названия'
 
+  // For commitments, use title from target
   if (item.target?.title) return item.target.title
+  // For facts/other types
   if (item.target?.name) return item.target.name
   if (item.target?.value) return item.target.value
+  // Fallback to source quote
+  if (item.sourceQuote) return item.sourceQuote.substring(0, 100)
 
   return 'Без названия'
 }
@@ -57,11 +61,43 @@ function getDisplaySubtitle(): string {
   const item = store.currentItem
   if (!item) return ''
 
+  // For commitments, show type name
+  if (item.itemType === 'commitment' && item.target?.typeName) {
+    return item.target.typeName
+  }
+
+  // For facts, show fact type
   if (item.itemType === 'fact' && item.target?.factType) {
     return item.target.factType
   }
 
   return ''
+}
+
+function getCounterparty(): string | null {
+  const item = store.currentItem
+  if (!item || item.itemType !== 'commitment') return null
+
+  // Show the other party in the commitment
+  const from = item.target?.fromEntity?.name
+  const to = item.target?.toEntity?.name
+
+  if (from && to) {
+    return `${from} → ${to}`
+  }
+  return from || to || null
+}
+
+function getDueDate(): string | null {
+  const item = store.currentItem
+  if (!item?.target?.dueDate) return null
+
+  const date = new Date(item.target.dueDate)
+  return date.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
+  })
 }
 
 async function handleApprove() {
@@ -261,7 +297,7 @@ onUnmounted(() => {
       <!-- Card -->
       <div class="flex-1 p-4 overflow-y-auto">
         <div class="card">
-          <!-- Type Badge -->
+          <!-- Type Badge + Confidence -->
           <div class="flex items-center gap-2 mb-3">
             <span class="w-6 h-6 flex items-center justify-center rounded-full bg-tg-secondary-bg text-xs font-medium text-tg-accent">
               {{ getTypeIcon(store.currentItem.itemType) }}
@@ -269,24 +305,39 @@ onUnmounted(() => {
             <span class="text-sm font-medium text-tg-accent">
               {{ getTypeName(store.currentItem.itemType) }}
             </span>
+            <span v-if="getDisplaySubtitle()" class="text-xs text-tg-hint">
+              · {{ getDisplaySubtitle() }}
+            </span>
             <span class="ml-auto text-sm text-tg-hint">
               {{ formatConfidence(store.currentItem.confidence) }}
             </span>
           </div>
 
           <!-- Title -->
-          <h2 class="text-xl font-bold text-tg-text mb-1">
+          <h2 class="text-lg font-bold text-tg-text mb-2">
             {{ getDisplayTitle() }}
           </h2>
 
-          <!-- Subtitle (e.g., fact type) -->
-          <p v-if="getDisplaySubtitle()" class="text-sm text-tg-accent mb-3">
-            {{ getDisplaySubtitle() }}
+          <!-- Description if available -->
+          <p v-if="store.currentItem.target?.description" class="text-sm text-tg-text mb-3">
+            {{ store.currentItem.target.description }}
           </p>
 
+          <!-- Counterparty & Due Date row -->
+          <div v-if="getCounterparty() || getDueDate()" class="flex flex-wrap gap-3 mb-3">
+            <div v-if="getCounterparty()" class="flex items-center gap-1 text-sm">
+              <span class="text-tg-hint">👤</span>
+              <span class="text-tg-text">{{ getCounterparty() }}</span>
+            </div>
+            <div v-if="getDueDate()" class="flex items-center gap-1 text-sm">
+              <span class="text-tg-hint">📅</span>
+              <span class="text-tg-text">{{ getDueDate() }}</span>
+            </div>
+          </div>
+
           <!-- Source Quote -->
-          <div v-if="store.currentItem.sourceQuote" class="mt-4">
-            <p class="text-xs text-tg-hint mb-1">Источник:</p>
+          <div v-if="store.currentItem.sourceQuote && store.currentItem.target?.title" class="mt-3 pt-3 border-t border-tg-secondary-bg">
+            <p class="text-xs text-tg-hint mb-1">Из переписки:</p>
             <blockquote class="border-l-2 border-tg-accent pl-3 py-1 text-sm text-tg-hint italic">
               "{{ store.currentItem.sourceQuote }}"
             </blockquote>

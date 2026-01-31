@@ -11,10 +11,27 @@ export interface PendingApprovalItem {
   status: 'pending' | 'approved' | 'rejected'
   createdAt: string
   target?: {
+    // Common fields
     name?: string
     title?: string
     value?: string
+    preview?: string
+    // Fact fields
     factType?: string
+    // Commitment fields
+    description?: string
+    type?: string
+    typeName?: string
+    dueDate?: string
+    priority?: string
+    fromEntity?: {
+      id: string
+      name: string
+    }
+    toEntity?: {
+      id: string
+      name: string
+    }
   }
 }
 

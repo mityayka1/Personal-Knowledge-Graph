@@ -23,10 +23,12 @@ import {
 } from '../../extraction/extraction-carousel-state.service';
 import { RecallSessionService } from '../../claude-agent/recall-session.service';
 import { PendingApprovalService } from '../../pending-approval/pending-approval.service';
+import { CommitmentService } from '../../activity/commitment.service';
 import {
   PendingApproval,
   PendingApprovalStatus,
   PendingApprovalItemType,
+  CommitmentType,
 } from '@pkg/entities';
 import {
   BriefItemActionDto,
@@ -55,6 +57,7 @@ export class TelegramMiniAppController {
     private readonly extractionCarouselService: ExtractionCarouselStateService,
     private readonly recallSessionService: RecallSessionService,
     private readonly pendingApprovalService: PendingApprovalService,
+    private readonly commitmentService: CommitmentService,
     private readonly configService: ConfigService,
   ) {
     this.ownerTelegramId = this.configService.get<number>('OWNER_TELEGRAM_ID', 0);
@@ -399,7 +402,9 @@ export class TelegramMiniAppController {
     });
 
     return {
-      items: items.map((item) => this.mapPendingApprovalToResponse(item)),
+      items: await Promise.all(
+        items.map((item) => this.mapPendingApprovalToResponse(item)),
+      ),
       total,
       limit,
       offset,
@@ -487,7 +492,7 @@ export class TelegramMiniAppController {
       throw new NotFoundException(`Pending approval ${id} not found`);
     }
 
-    return this.mapPendingApprovalToResponse(approval);
+    return await this.mapPendingApprovalToResponse(approval);
   }
 
   /**
@@ -528,8 +533,9 @@ export class TelegramMiniAppController {
 
   /**
    * Map PendingApproval entity to API response format.
+   * Loads full target data for rich display.
    */
-  private mapPendingApprovalToResponse(approval: PendingApproval) {
+  private async mapPendingApprovalToResponse(approval: PendingApproval) {
     return {
       id: approval.id,
       itemType: approval.itemType,
@@ -538,24 +544,75 @@ export class TelegramMiniAppController {
       sourceQuote: approval.sourceQuote,
       status: approval.status,
       createdAt: approval.createdAt.toISOString(),
-      target: this.extractTargetData(approval),
+      target: await this.loadTargetData(approval),
     };
   }
 
   /**
-   * Extract target entity data based on item type.
-   * TODO: Load actual target entity data based on itemType and targetId.
-   * For now, returns basic info from sourceQuote.
+   * Load full target entity data based on item type.
+   * Returns rich data for Commitment, Activity, Fact.
    */
-  private extractTargetData(approval: PendingApproval): Record<string, unknown> | undefined {
-    // For now, return basic info - full target loading would require
-    // querying EntityFact/Activity/Commitment tables
-    if (approval.sourceQuote) {
-      return {
-        preview: approval.sourceQuote.substring(0, 200),
-      };
+  private async loadTargetData(
+    approval: PendingApproval,
+  ): Promise<Record<string, unknown> | undefined> {
+    try {
+      if (approval.itemType === PendingApprovalItemType.COMMITMENT) {
+        const commitment = await this.commitmentService.findOne(approval.targetId);
+        return {
+          title: commitment.title,
+          description: commitment.description,
+          type: commitment.type,
+          typeName: this.getCommitmentTypeName(commitment.type),
+          dueDate: commitment.dueDate?.toISOString(),
+          priority: commitment.priority,
+          fromEntity: commitment.fromEntity
+            ? {
+                id: commitment.fromEntity.id,
+                name: commitment.fromEntity.name,
+              }
+            : null,
+          toEntity: commitment.toEntity
+            ? {
+                id: commitment.toEntity.id,
+                name: commitment.toEntity.name,
+              }
+            : null,
+          preview: approval.sourceQuote?.substring(0, 200),
+        };
+      }
+
+      // Fallback for other types - return basic preview
+      if (approval.sourceQuote) {
+        return {
+          preview: approval.sourceQuote.substring(0, 200),
+        };
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to load target data for ${approval.itemType}/${approval.targetId}: ${error}`,
+      );
+      // Return basic fallback on error
+      if (approval.sourceQuote) {
+        return { preview: approval.sourceQuote.substring(0, 200) };
+      }
     }
+
     return undefined;
+  }
+
+  /**
+   * Get human-readable commitment type name.
+   */
+  private getCommitmentTypeName(type: CommitmentType): string {
+    const names: Record<CommitmentType, string> = {
+      [CommitmentType.PROMISE]: 'Обещание',
+      [CommitmentType.REQUEST]: 'Запрос',
+      [CommitmentType.AGREEMENT]: 'Договорённость',
+      [CommitmentType.DEADLINE]: 'Дедлайн',
+      [CommitmentType.REMINDER]: 'Напоминание',
+      [CommitmentType.RECURRING]: 'Периодическое',
+    };
+    return names[type] || type;
   }
 
   // ─────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { EntityModule } from '../entity/entity.module';
 import { ExtractionModule } from '../extraction/extraction.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
+import { ActivityModule } from '../activity/activity.module';
 
 /**
  * Module for Telegram Mini App API.
@@ -19,6 +20,7 @@ import { PendingApprovalModule } from '../pending-approval/pending-approval.modu
  * - ExtractionModule for carousel state
  * - ClaudeAgentModule for recall sessions
  * - PendingApprovalModule for pending approvals on dashboard
+ * - ActivityModule for commitment details
  */
 @Module({
   imports: [
@@ -27,6 +29,7 @@ import { PendingApprovalModule } from '../pending-approval/pending-approval.modu
     ExtractionModule,
     ClaudeAgentModule,
     PendingApprovalModule,
+    ActivityModule,
   ],
   controllers: [TelegramMiniAppController],
   providers: [TelegramAuthGuard],
