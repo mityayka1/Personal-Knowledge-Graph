@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import {
   Activity,
@@ -92,14 +92,18 @@ export class DraftExtractionService {
     private readonly approvalRepo: Repository<PendingApproval>,
     @InjectRepository(EntityRecord)
     private readonly entityRepo: Repository<EntityRecord>,
-    private readonly dataSource: DataSource,
   ) {}
 
   /**
    * Create draft entities from extracted items.
    *
-   * All operations are wrapped in a single transaction to ensure
-   * atomicity - either all drafts + approvals are created, or none.
+   * NOTE: We intentionally don't use transactions here due to TypeORM 0.3.x bug
+   * with closure-table entities inside transactions (getEntityValue undefined).
+   * Orphaned drafts (Activity without PendingApproval) are cleaned up by
+   * PendingApprovalCleanupService which runs daily.
+   *
+   * @see https://github.com/typeorm/typeorm/issues/9658
+   * @see https://github.com/typeorm/typeorm/issues/11302
    */
   async createDrafts(input: DraftExtractionInput): Promise<DraftExtractionResult> {
     const batchId = randomUUID();
@@ -113,79 +117,74 @@ export class DraftExtractionService {
     // Build project name → Activity ID map for task parent resolution
     const projectMap = new Map<string, string>();
 
-    await this.dataSource.transaction(async (manager) => {
-      // 1. Create draft projects first (tasks may reference them)
-      for (const project of input.projects) {
-        try {
-          // Skip if already matched to existing activity
-          if (project.existingActivityId) {
-            this.logger.debug(`Skipping existing project: ${project.existingActivityId}`);
-            continue;
-          }
-
-          const { activity, approval } = await this.createDraftProject(
-            manager,
-            project,
-            input,
-            batchId,
-          );
-
-          projectMap.set(project.name.toLowerCase(), activity.id);
-          result.approvals.push(approval);
-          result.counts.projects++;
-          this.logger.debug(`Created draft project: ${activity.name} (${activity.id})`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          result.errors.push({ item: `project:${project.name}`, error: message });
-          this.logger.error(`Failed to create draft project "${project.name}": ${message}`);
+    // 1. Create draft projects first (tasks may reference them)
+    for (const project of input.projects) {
+      try {
+        // Skip if already matched to existing activity
+        if (project.existingActivityId) {
+          this.logger.debug(`Skipping existing project: ${project.existingActivityId}`);
+          continue;
         }
+
+        const { activity, approval } = await this.createDraftProject(
+          project,
+          input,
+          batchId,
+        );
+
+        projectMap.set(project.name.toLowerCase(), activity.id);
+        result.approvals.push(approval);
+        result.counts.projects++;
+        this.logger.debug(`Created draft project: ${activity.name} (${activity.id})`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push({ item: `project:${project.name}`, error: message });
+        this.logger.error(`Failed to create draft project "${project.name}": ${message}`);
       }
+    }
 
-      // 2. Create draft tasks (may link to projects)
-      for (const task of input.tasks) {
-        try {
-          const parentId = task.projectName
-            ? projectMap.get(task.projectName.toLowerCase())
-            : undefined;
+    // 2. Create draft tasks (may link to projects)
+    for (const task of input.tasks) {
+      try {
+        const parentId = task.projectName
+          ? projectMap.get(task.projectName.toLowerCase())
+          : undefined;
 
-          const { activity, approval } = await this.createDraftTask(
-            manager,
-            task,
-            input,
-            batchId,
-            parentId,
-          );
+        const { activity, approval } = await this.createDraftTask(
+          task,
+          input,
+          batchId,
+          parentId,
+        );
 
-          result.approvals.push(approval);
-          result.counts.tasks++;
-          this.logger.debug(`Created draft task: ${activity.name} (${activity.id})`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          result.errors.push({ item: `task:${task.title}`, error: message });
-          this.logger.error(`Failed to create draft task "${task.title}": ${message}`);
-        }
+        result.approvals.push(approval);
+        result.counts.tasks++;
+        this.logger.debug(`Created draft task: ${activity.name} (${activity.id})`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push({ item: `task:${task.title}`, error: message });
+        this.logger.error(`Failed to create draft task "${task.title}": ${message}`);
       }
+    }
 
-      // 3. Create draft commitments
-      for (const commitment of input.commitments) {
-        try {
-          const { entity, approval } = await this.createDraftCommitment(
-            manager,
-            commitment,
-            input,
-            batchId,
-          );
+    // 3. Create draft commitments
+    for (const commitment of input.commitments) {
+      try {
+        const { entity, approval } = await this.createDraftCommitment(
+          commitment,
+          input,
+          batchId,
+        );
 
-          result.approvals.push(approval);
-          result.counts.commitments++;
-          this.logger.debug(`Created draft commitment: ${entity.title} (${entity.id})`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          result.errors.push({ item: `commitment:${commitment.what}`, error: message });
-          this.logger.error(`Failed to create draft commitment "${commitment.what}": ${message}`);
-        }
+        result.approvals.push(approval);
+        result.counts.commitments++;
+        this.logger.debug(`Created draft commitment: ${entity.title} (${entity.id})`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push({ item: `commitment:${commitment.what}`, error: message });
+        this.logger.error(`Failed to create draft commitment "${commitment.what}": ${message}`);
       }
-    });
+    }
 
     this.logger.log(
       `Draft extraction complete (batch=${batchId}): ` +
@@ -203,12 +202,10 @@ export class DraftExtractionService {
   /**
    * Create draft Activity (PROJECT) + PendingApproval.
    *
-   * Note: Activity uses @Tree('closure-table') decorator which requires
-   * TreeRepository for proper save operation. Using manager.save() directly
-   * causes "getEntityValue is undefined" error in TypeORM 0.3.x.
+   * Uses injected repository instead of transactional manager to avoid
+   * TypeORM 0.3.x closure-table bug.
    */
   private async createDraftProject(
-    manager: import('typeorm').EntityManager,
     project: ExtractedProject,
     input: DraftExtractionInput,
     batchId: string,
@@ -220,17 +217,14 @@ export class DraftExtractionService {
       clientEntityId = client?.id ?? null;
     }
 
-    // Get TreeRepository for Activity (required for closure-table entities)
-    const treeRepo = manager.getTreeRepository(Activity);
-
-    // Create draft Activity
-    const activity = treeRepo.create({
+    // Create draft Activity using injected repository
+    const activity = this.activityRepo.create({
       name: project.name,
       activityType: ActivityType.PROJECT,
-      status: ActivityStatus.DRAFT, // DRAFT status for approval workflow
+      status: ActivityStatus.DRAFT,
       ownerEntityId: input.ownerEntityId,
       clientEntityId,
-      depth: 0, // Root level for new projects
+      depth: 0,
       materializedPath: null,
       metadata: {
         extractedFrom: 'daily_synthesis',
@@ -243,10 +237,10 @@ export class DraftExtractionService {
       },
     });
 
-    const savedActivity = await treeRepo.save(activity);
+    const savedActivity = await this.activityRepo.save(activity);
 
     // Create PendingApproval linking to the draft
-    const approval = manager.create(PendingApproval, {
+    const approval = this.approvalRepo.create({
       itemType: PendingApprovalItemType.PROJECT,
       targetId: savedActivity.id,
       batchId,
@@ -257,7 +251,7 @@ export class DraftExtractionService {
       status: PendingApprovalStatus.PENDING,
     });
 
-    const savedApproval = await manager.save(PendingApproval, approval);
+    const savedApproval = await this.approvalRepo.save(approval);
 
     return { activity: savedActivity, approval: savedApproval };
   }
@@ -265,25 +259,21 @@ export class DraftExtractionService {
   /**
    * Create draft Activity (TASK) + PendingApproval.
    *
-   * Note: Activity uses @Tree('closure-table') decorator which requires
-   * TreeRepository for proper save operation.
+   * Uses injected repository instead of transactional manager to avoid
+   * TypeORM 0.3.x closure-table bug.
    */
   private async createDraftTask(
-    manager: import('typeorm').EntityManager,
     task: ExtractedTask,
     input: DraftExtractionInput,
     batchId: string,
     parentId?: string,
   ): Promise<{ activity: Activity; approval: PendingApproval }> {
-    // Get TreeRepository for Activity (required for closure-table entities)
-    const treeRepo = manager.getTreeRepository(Activity);
-
     // Compute depth and materializedPath if parent exists
     let depth = 0;
     let materializedPath: string | null = null;
 
     if (parentId) {
-      const parent = await treeRepo.findOne({ where: { id: parentId } });
+      const parent = await this.activityRepo.findOne({ where: { id: parentId } });
       if (parent) {
         depth = parent.depth + 1;
         materializedPath = parent.materializedPath
@@ -292,11 +282,11 @@ export class DraftExtractionService {
       }
     }
 
-    // Create draft Activity
-    const activity = treeRepo.create({
+    // Create draft Activity using injected repository
+    const activity = this.activityRepo.create({
       name: task.title,
       activityType: ActivityType.TASK,
-      status: ActivityStatus.DRAFT, // DRAFT status for approval workflow
+      status: ActivityStatus.DRAFT,
       priority: this.mapPriority(task.priority),
       parentId: parentId ?? null,
       depth,
@@ -314,10 +304,10 @@ export class DraftExtractionService {
       },
     });
 
-    const savedActivity = await treeRepo.save(activity);
+    const savedActivity = await this.activityRepo.save(activity);
 
     // Create PendingApproval linking to the draft
-    const approval = manager.create(PendingApproval, {
+    const approval = this.approvalRepo.create({
       itemType: PendingApprovalItemType.TASK,
       targetId: savedActivity.id,
       batchId,
@@ -328,16 +318,17 @@ export class DraftExtractionService {
       status: PendingApprovalStatus.PENDING,
     });
 
-    const savedApproval = await manager.save(PendingApproval, approval);
+    const savedApproval = await this.approvalRepo.save(approval);
 
     return { activity: savedActivity, approval: savedApproval };
   }
 
   /**
    * Create draft Commitment + PendingApproval.
+   *
+   * Uses injected repository for consistency with other methods.
    */
   private async createDraftCommitment(
-    manager: import('typeorm').EntityManager,
     commitment: ExtractedCommitment,
     input: DraftExtractionInput,
     batchId: string,
@@ -360,13 +351,13 @@ export class DraftExtractionService {
       }
     }
 
-    // Create draft Commitment
-    const entity = manager.create(Commitment, {
+    // Create draft Commitment using injected repository
+    const entity = this.commitmentRepo.create({
       type: this.mapCommitmentType(commitment.type),
       title: commitment.what,
       fromEntityId,
       toEntityId,
-      status: CommitmentStatus.DRAFT, // DRAFT status for approval workflow
+      status: CommitmentStatus.DRAFT,
       priority: this.mapCommitmentPriority(commitment.priority),
       dueDate: commitment.deadline ? new Date(commitment.deadline) : null,
       confidence: commitment.confidence,
@@ -379,10 +370,10 @@ export class DraftExtractionService {
       },
     });
 
-    const savedEntity = await manager.save(Commitment, entity);
+    const savedEntity = await this.commitmentRepo.save(entity);
 
     // Create PendingApproval linking to the draft
-    const approval = manager.create(PendingApproval, {
+    const approval = this.approvalRepo.create({
       itemType: PendingApprovalItemType.COMMITMENT,
       targetId: savedEntity.id,
       batchId,
@@ -393,7 +384,7 @@ export class DraftExtractionService {
       status: PendingApprovalStatus.PENDING,
     });
 
-    const savedApproval = await manager.save(PendingApproval, approval);
+    const savedApproval = await this.approvalRepo.save(approval);
 
     return { entity: savedEntity, approval: savedApproval };
   }
