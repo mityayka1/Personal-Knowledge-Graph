@@ -94,79 +94,30 @@ export class TelegramMiniAppController {
   async getDashboard(@TgUser() user: TelegramUser) {
     this.logger.debug(`getDashboard for user ${user?.id}`);
 
-    // Fetch pending approvals grouped by batch
-    const { items: pendingApprovals } = await this.pendingApprovalService.list({
+    // Get total count of all pending approvals
+    const { total } = await this.pendingApprovalService.list({
       status: PendingApprovalStatus.PENDING,
-      limit: 100, // Reasonable limit for dashboard
+      limit: 1, // We only need the count
     });
 
-    // Group by batchId and create pending actions
-    const batchMap = new Map<
-      string,
-      { items: PendingApproval[]; types: Set<string> }
-    >();
-
-    for (const approval of pendingApprovals) {
-      if (!batchMap.has(approval.batchId)) {
-        batchMap.set(approval.batchId, { items: [], types: new Set() });
-      }
-      const batch = batchMap.get(approval.batchId)!;
-      batch.items.push(approval);
-      batch.types.add(approval.itemType);
-    }
-
-    const pendingActions = Array.from(batchMap.entries()).map(
-      ([batchId, { items, types }]) => {
-        // Determine primary type for display
-        const typeArray = Array.from(types);
-        const primaryType =
-          typeArray.length === 1 ? typeArray[0] : 'extraction';
-
-        // Generate title based on content
-        const title = this.generateBatchTitle(items, typeArray);
-
-        return {
-          type: 'approval' as const,
-          id: batchId,
-          title,
-          count: items.length,
-        };
-      },
-    );
+    // Create single unified pending action if there are any pending items
+    const pendingActions =
+      total > 0
+        ? [
+            {
+              type: 'approval' as const,
+              id: 'all', // Special ID meaning "show all pending"
+              title: `${total} ${this.pluralize(total, 'элемент', 'элемента', 'элементов')} на подтверждение`,
+              count: total,
+            },
+          ]
+        : [];
 
     return {
       pendingActions,
       todayBrief: null, // TODO: Implement brief fetching
       recentActivity: [], // TODO: Implement recent activity
     };
-  }
-
-  /**
-   * Generate a human-readable title for a batch of pending approvals.
-   */
-  private generateBatchTitle(
-    items: PendingApproval[],
-    types: string[],
-  ): string {
-    if (types.length === 1) {
-      const type = types[0];
-      const count = items.length;
-      switch (type) {
-        case PendingApprovalItemType.FACT:
-          return `${count} ${this.pluralize(count, 'факт', 'факта', 'фактов')}`;
-        case PendingApprovalItemType.PROJECT:
-          return `${count} ${this.pluralize(count, 'проект', 'проекта', 'проектов')}`;
-        case PendingApprovalItemType.TASK:
-          return `${count} ${this.pluralize(count, 'задача', 'задачи', 'задач')}`;
-        case PendingApprovalItemType.COMMITMENT:
-          return `${count} ${this.pluralize(count, 'обязательство', 'обязательства', 'обязательств')}`;
-        default:
-          return `${count} элементов`;
-      }
-    }
-
-    // Mixed types
-    return `${items.length} извлечённых элементов`;
   }
 
   /**
@@ -409,6 +360,21 @@ export class TelegramMiniAppController {
       limit,
       offset,
     };
+  }
+
+  /**
+   * GET /api/mini-app/pending-approval/stats
+   *
+   * Get global pending approval statistics (across all batches).
+   * Note: This route must come before :id route to avoid conflict.
+   */
+  @Get('pending-approval/stats')
+  async getPendingApprovalGlobalStats(@TgUser() user?: TelegramUser) {
+    this.logger.debug(`getPendingApprovalGlobalStats for user ${user?.id}`);
+
+    const stats = await this.pendingApprovalService.getGlobalStats();
+
+    return stats;
   }
 
   /**

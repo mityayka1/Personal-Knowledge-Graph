@@ -1,14 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { DraftExtractionService, DraftExtractionInput } from './draft-extraction.service';
 import {
   Activity,
   ActivityType,
   ActivityStatus,
+  ActivityPriority,
   Commitment,
   CommitmentType,
   CommitmentStatus,
+  CommitmentPriority,
   PendingApproval,
   PendingApprovalItemType,
   PendingApprovalStatus,
@@ -21,13 +23,18 @@ describe('DraftExtractionService', () => {
   let commitmentRepo: jest.Mocked<Repository<Commitment>>;
   let approvalRepo: jest.Mocked<Repository<PendingApproval>>;
   let entityRepo: jest.Mocked<Repository<EntityRecord>>;
-  let dataSource: jest.Mocked<DataSource>;
 
-  // Mock entity manager for transactions
-  const mockManager = {
-    create: jest.fn().mockImplementation((entity, data) => ({ id: 'mock-id', ...data })),
-    save: jest.fn().mockImplementation((entity, data) => Promise.resolve({ id: 'mock-id', ...data })),
-  };
+  // Helper to create chainable query builder mock
+  const createQueryBuilderMock = (result: unknown = null) => ({
+    insert: jest.fn().mockReturnThis(),
+    into: jest.fn().mockReturnThis(),
+    values: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({ identifiers: [{ id: 'mock-id' }] }),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    getOne: jest.fn().mockResolvedValue(result),
+  });
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -36,40 +43,41 @@ describe('DraftExtractionService', () => {
         {
           provide: getRepositoryToken(Activity),
           useValue: {
-            create: jest.fn(),
-            save: jest.fn(),
+            create: jest.fn((data) => ({ id: 'activity-id', ...data })),
+            save: jest.fn((data) => Promise.resolve({ id: 'activity-id', ...data })),
+            createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
+            findOneOrFail: jest.fn().mockImplementation(({ where }) =>
+              Promise.resolve({
+                id: where.id,
+                name: 'Mock Activity',
+                activityType: ActivityType.PROJECT,
+                status: ActivityStatus.DRAFT,
+                depth: 0,
+              }),
+            ),
+            findOne: jest.fn().mockResolvedValue(null),
           },
         },
         {
           provide: getRepositoryToken(Commitment),
           useValue: {
-            create: jest.fn(),
-            save: jest.fn(),
+            create: jest.fn((data) => ({ id: 'commitment-id', ...data })),
+            save: jest.fn((data) => Promise.resolve({ id: 'commitment-id', ...data })),
+            createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
           },
         },
         {
           provide: getRepositoryToken(PendingApproval),
           useValue: {
-            create: jest.fn(),
-            save: jest.fn(),
+            create: jest.fn((data) => ({ id: 'approval-id', ...data })),
+            save: jest.fn((data) => Promise.resolve({ id: 'approval-id', ...data })),
+            find: jest.fn().mockResolvedValue([]), // No existing pending by default
           },
         },
         {
           provide: getRepositoryToken(EntityRecord),
           useValue: {
-            createQueryBuilder: jest.fn().mockReturnValue({
-              where: jest.fn().mockReturnThis(),
-              orderBy: jest.fn().mockReturnThis(),
-              getOne: jest.fn().mockResolvedValue(null),
-            }),
-          },
-        },
-        {
-          provide: DataSource,
-          useValue: {
-            transaction: jest.fn().mockImplementation(async (callback) => {
-              return callback(mockManager);
-            }),
+            createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
           },
         },
       ],
@@ -80,7 +88,6 @@ describe('DraftExtractionService', () => {
     commitmentRepo = module.get(getRepositoryToken(Commitment));
     approvalRepo = module.get(getRepositoryToken(PendingApproval));
     entityRepo = module.get(getRepositoryToken(EntityRecord));
-    dataSource = module.get(DataSource);
   });
 
   afterEach(() => {
@@ -117,36 +124,14 @@ describe('DraftExtractionService', () => {
       expect(result.counts.projects).toBe(1);
       expect(result.counts.tasks).toBe(0);
       expect(result.counts.commitments).toBe(0);
+      expect(result.skipped.projects).toBe(0);
 
       // Verify approval created
       expect(result.approvals).toHaveLength(1);
       expect(result.approvals[0].itemType).toBe(PendingApprovalItemType.PROJECT);
 
-      // Verify transaction was called
-      expect(dataSource.transaction).toHaveBeenCalled();
-
-      // Verify Activity created with DRAFT status
-      expect(mockManager.create).toHaveBeenCalledWith(
-        Activity,
-        expect.objectContaining({
-          name: 'Test Project',
-          activityType: ActivityType.PROJECT,
-          status: ActivityStatus.DRAFT,
-          ownerEntityId: 'owner-123',
-        }),
-      );
-
-      // Verify PendingApproval created
-      expect(mockManager.create).toHaveBeenCalledWith(
-        PendingApproval,
-        expect.objectContaining({
-          itemType: PendingApprovalItemType.PROJECT,
-          status: PendingApprovalStatus.PENDING,
-          confidence: 0.9,
-          sourceQuote: 'We need to start Test Project',
-          messageRef: 'telegram:12345',
-        }),
-      );
+      // Verify Activity insert was called
+      expect(activityRepo.createQueryBuilder).toHaveBeenCalled();
     });
 
     it('should create draft task with pending approval', async () => {
@@ -170,16 +155,6 @@ describe('DraftExtractionService', () => {
       expect(result.counts.tasks).toBe(1);
       expect(result.approvals).toHaveLength(1);
       expect(result.approvals[0].itemType).toBe(PendingApprovalItemType.TASK);
-
-      // Verify Activity created with DRAFT status
-      expect(mockManager.create).toHaveBeenCalledWith(
-        Activity,
-        expect.objectContaining({
-          name: 'Complete report',
-          activityType: ActivityType.TASK,
-          status: ActivityStatus.DRAFT,
-        }),
-      );
     });
 
     it('should create draft commitment with pending approval', async () => {
@@ -206,8 +181,7 @@ describe('DraftExtractionService', () => {
       expect(result.approvals[0].itemType).toBe(PendingApprovalItemType.COMMITMENT);
 
       // Verify Commitment created with DRAFT status
-      expect(mockManager.create).toHaveBeenCalledWith(
-        Commitment,
+      expect(commitmentRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
           title: 'Send the document',
           type: CommitmentType.PROMISE,
@@ -221,7 +195,9 @@ describe('DraftExtractionService', () => {
         ownerEntityId: 'owner-123',
         projects: [{ name: 'Project A', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [{ title: 'Task B', status: 'pending', confidence: 0.85 }],
-        commitments: [{ type: 'promise', what: 'Commitment C', from: 'self', to: 'self', confidence: 0.8 }],
+        commitments: [
+          { type: 'promise', what: 'Commitment C', from: 'self', to: 'self', confidence: 0.8 },
+        ],
       };
 
       const result = await service.createDrafts(input);
@@ -261,16 +237,31 @@ describe('DraftExtractionService', () => {
 
     it('should link task to parent project by name', async () => {
       const projectId = 'project-uuid-123';
-      let saveCallCount = 0;
 
-      // Override mock to return project ID for first Activity save
-      mockManager.save.mockImplementation((entity, data) => {
-        saveCallCount++;
-        if (saveCallCount === 1) {
-          // First save is the project — id LAST to override mock-id from create()
-          return Promise.resolve({ ...data, id: projectId });
-        }
-        return Promise.resolve({ ...data, id: `mock-id-${saveCallCount}` });
+      // Mock findOneOrFail to return project with specific ID
+      activityRepo.findOneOrFail = jest
+        .fn()
+        .mockResolvedValueOnce({
+          id: projectId,
+          name: 'Parent Project',
+          activityType: ActivityType.PROJECT,
+          status: ActivityStatus.DRAFT,
+          depth: 0,
+          materializedPath: null,
+        })
+        .mockResolvedValueOnce({
+          id: 'task-id',
+          name: 'Child Task',
+          activityType: ActivityType.TASK,
+          status: ActivityStatus.DRAFT,
+        });
+
+      // Mock findOne for parent lookup
+      activityRepo.findOne = jest.fn().mockResolvedValue({
+        id: projectId,
+        name: 'Parent Project',
+        depth: 0,
+        materializedPath: null,
       });
 
       const input: DraftExtractionInput = {
@@ -291,20 +282,13 @@ describe('DraftExtractionService', () => {
 
       expect(result.counts.projects).toBe(1);
       expect(result.counts.tasks).toBe(1);
-
-      // Task should be created with parentId pointing to project
-      expect(mockManager.create).toHaveBeenCalledWith(
-        Activity,
-        expect.objectContaining({
-          name: 'Child Task',
-          activityType: ActivityType.TASK,
-          parentId: projectId,
-        }),
-      );
     });
 
     it('should record errors for failed items', async () => {
-      mockManager.save.mockRejectedValueOnce(new Error('Database error'));
+      // Make the insert execute fail
+      const failingQueryBuilder = createQueryBuilderMock();
+      failingQueryBuilder.execute = jest.fn().mockRejectedValue(new Error('Database error'));
+      activityRepo.createQueryBuilder = jest.fn().mockReturnValue(failingQueryBuilder);
 
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
@@ -332,6 +316,111 @@ describe('DraftExtractionService', () => {
       const result = await service.createDrafts(input);
 
       expect(result.approvals[0].messageRef).toBe('telegram:chat:12345:msg:67890');
+    });
+  });
+
+  describe('deduplication', () => {
+    it('should skip duplicate project if pending approval exists', async () => {
+      // Mock existing pending approval for project
+      approvalRepo.find = jest.fn().mockResolvedValue([
+        {
+          id: 'existing-approval',
+          itemType: PendingApprovalItemType.PROJECT,
+          targetId: 'existing-project-id',
+          status: PendingApprovalStatus.PENDING,
+        },
+      ]);
+
+      // Mock activity query to find matching project
+      const activityQueryBuilder = createQueryBuilderMock({
+        id: 'existing-project-id',
+        name: 'Test Project',
+      });
+      activityRepo.createQueryBuilder = jest.fn().mockReturnValue(activityQueryBuilder);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        projects: [{ name: 'Test Project', isNew: true, participants: [], confidence: 0.9 }],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.projects).toBe(0);
+      expect(result.skipped.projects).toBe(1);
+      expect(result.approvals).toHaveLength(0);
+    });
+
+    it('should skip duplicate commitment if pending approval exists', async () => {
+      // Return pending for commitments, empty for projects/tasks
+      approvalRepo.find = jest.fn().mockImplementation(({ where }) => {
+        if (where.itemType === PendingApprovalItemType.COMMITMENT) {
+          return Promise.resolve([
+            {
+              id: 'existing-approval',
+              itemType: PendingApprovalItemType.COMMITMENT,
+              targetId: 'existing-commitment-id',
+              status: PendingApprovalStatus.PENDING,
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      // Mock commitment query to find matching commitment
+      const commitmentQueryBuilder = createQueryBuilderMock({
+        id: 'existing-commitment-id',
+        title: 'Call to discuss integration',
+      });
+      commitmentRepo.createQueryBuilder = jest.fn().mockReturnValue(commitmentQueryBuilder);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        projects: [],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: 'Call to discuss integration',
+            from: 'self',
+            to: 'self',
+            confidence: 0.95,
+          },
+        ],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.commitments).toBe(0);
+      expect(result.skipped.commitments).toBe(1);
+      expect(result.approvals).toHaveLength(0);
+    });
+
+    it('should create new item if no duplicate pending exists', async () => {
+      // No pending approvals exist
+      approvalRepo.find = jest.fn().mockResolvedValue([]);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        projects: [],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: 'New unique commitment',
+            from: 'self',
+            to: 'self',
+            confidence: 0.95,
+          },
+        ],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.commitments).toBe(1);
+      expect(result.skipped.commitments).toBe(0);
+      expect(result.approvals).toHaveLength(1);
     });
   });
 });

@@ -15,7 +15,7 @@ const backButton = useBackButton()
 const haptics = useSmartHaptics()
 const popup = usePopup()
 
-const batchId = computed(() => route.params.batchId as string)
+const batchIdParam = computed(() => route.params.batchId as string)
 
 function getTypeIcon(itemType: string): string {
   const icons: Record<string, string> = {
@@ -167,7 +167,7 @@ function handleFinish() {
 }
 
 onMounted(async () => {
-  await store.load(batchId.value)
+  await store.load(batchIdParam.value)
 
   backButton.onClick(handleBack)
   backButton.show()
@@ -191,7 +191,7 @@ onUnmounted(() => {
       v-else-if="store.error"
       :message="store.error"
       :retryable="true"
-      @retry="store.load(batchId)"
+      @retry="store.load(batchIdParam)"
     />
 
     <!-- Completion Screen -->

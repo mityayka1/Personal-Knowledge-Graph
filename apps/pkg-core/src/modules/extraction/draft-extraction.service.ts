@@ -60,6 +60,12 @@ export interface DraftExtractionResult {
     tasks: number;
     commitments: number;
   };
+  /** Count of items skipped due to deduplication */
+  skipped: {
+    projects: number;
+    tasks: number;
+    commitments: number;
+  };
   /** Items that failed to create */
   errors: Array<{ item: string; error: string }>;
 }
@@ -102,6 +108,9 @@ export class DraftExtractionService {
    * Orphaned drafts (Activity without PendingApproval) are cleaned up by
    * PendingApprovalCleanupService which runs daily.
    *
+   * DEDUPLICATION: Before creating each draft, we check for existing pending
+   * approvals with similar content. If found, we skip creating a duplicate.
+   *
    * @see https://github.com/typeorm/typeorm/issues/9658
    * @see https://github.com/typeorm/typeorm/issues/11302
    */
@@ -111,6 +120,7 @@ export class DraftExtractionService {
       batchId,
       approvals: [],
       counts: { projects: 0, tasks: 0, commitments: 0 },
+      skipped: { projects: 0, tasks: 0, commitments: 0 },
       errors: [],
     };
 
@@ -123,6 +133,19 @@ export class DraftExtractionService {
         // Skip if already matched to existing activity
         if (project.existingActivityId) {
           this.logger.debug(`Skipping existing project: ${project.existingActivityId}`);
+          continue;
+        }
+
+        // DEDUPLICATION: Check for existing pending project with similar name
+        const existingProject = await this.findExistingPendingProject(project.name);
+        if (existingProject) {
+          this.logger.debug(
+            `Skipping duplicate project "${project.name}" - ` +
+              `already pending as ${existingProject.targetId}`,
+          );
+          // Add to projectMap so tasks can still reference it
+          projectMap.set(project.name.toLowerCase(), existingProject.targetId);
+          result.skipped.projects++;
           continue;
         }
 
@@ -146,6 +169,17 @@ export class DraftExtractionService {
     // 2. Create draft tasks (may link to projects)
     for (const task of input.tasks) {
       try {
+        // DEDUPLICATION: Check for existing pending task with similar title
+        const existingTask = await this.findExistingPendingTask(task.title);
+        if (existingTask) {
+          this.logger.debug(
+            `Skipping duplicate task "${task.title}" - ` +
+              `already pending as ${existingTask.targetId}`,
+          );
+          result.skipped.tasks++;
+          continue;
+        }
+
         const parentId = task.projectName
           ? projectMap.get(task.projectName.toLowerCase())
           : undefined;
@@ -170,6 +204,17 @@ export class DraftExtractionService {
     // 3. Create draft commitments
     for (const commitment of input.commitments) {
       try {
+        // DEDUPLICATION: Check for existing pending commitment with similar title
+        const existingCommitment = await this.findExistingPendingCommitment(commitment.what);
+        if (existingCommitment) {
+          this.logger.debug(
+            `Skipping duplicate commitment "${commitment.what}" - ` +
+              `already pending as ${existingCommitment.targetId}`,
+          );
+          result.skipped.commitments++;
+          continue;
+        }
+
         const { entity, approval } = await this.createDraftCommitment(
           commitment,
           input,
@@ -186,10 +231,13 @@ export class DraftExtractionService {
       }
     }
 
+    const totalSkipped =
+      result.skipped.projects + result.skipped.tasks + result.skipped.commitments;
     this.logger.log(
       `Draft extraction complete (batch=${batchId}): ` +
         `${result.counts.projects} projects, ${result.counts.tasks} tasks, ` +
-        `${result.counts.commitments} commitments (${result.errors.length} errors)`,
+        `${result.counts.commitments} commitments ` +
+        `(${totalSkipped} skipped as duplicates, ${result.errors.length} errors)`,
     );
 
     return result;
@@ -417,6 +465,94 @@ export class DraftExtractionService {
     const savedApproval = await this.approvalRepo.save(approval);
 
     return { entity: savedEntity, approval: savedApproval };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: Deduplication Helpers
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Find existing pending project with similar name.
+   * Returns the PendingApproval if found, null otherwise.
+   */
+  private async findExistingPendingProject(name: string): Promise<PendingApproval | null> {
+    // First find pending approval for PROJECT type
+    const pendingApprovals = await this.approvalRepo.find({
+      where: {
+        itemType: PendingApprovalItemType.PROJECT,
+        status: PendingApprovalStatus.PENDING,
+      },
+    });
+
+    if (pendingApprovals.length === 0) return null;
+
+    // Check each pending approval's target Activity for name match
+    const targetIds = pendingApprovals.map((p) => p.targetId);
+    const matchingActivity = await this.activityRepo
+      .createQueryBuilder('a')
+      .where('a.id IN (:...ids)', { ids: targetIds })
+      .andWhere('a.name ILIKE :pattern', { pattern: name })
+      .getOne();
+
+    if (!matchingActivity) return null;
+
+    return pendingApprovals.find((p) => p.targetId === matchingActivity.id) ?? null;
+  }
+
+  /**
+   * Find existing pending task with similar title.
+   * Returns the PendingApproval if found, null otherwise.
+   */
+  private async findExistingPendingTask(title: string): Promise<PendingApproval | null> {
+    // First find pending approval for TASK type
+    const pendingApprovals = await this.approvalRepo.find({
+      where: {
+        itemType: PendingApprovalItemType.TASK,
+        status: PendingApprovalStatus.PENDING,
+      },
+    });
+
+    if (pendingApprovals.length === 0) return null;
+
+    // Check each pending approval's target Activity for name match
+    const targetIds = pendingApprovals.map((p) => p.targetId);
+    const matchingActivity = await this.activityRepo
+      .createQueryBuilder('a')
+      .where('a.id IN (:...ids)', { ids: targetIds })
+      .andWhere('a.name ILIKE :pattern', { pattern: title })
+      .getOne();
+
+    if (!matchingActivity) return null;
+
+    return pendingApprovals.find((p) => p.targetId === matchingActivity.id) ?? null;
+  }
+
+  /**
+   * Find existing pending commitment with similar title.
+   * Returns the PendingApproval if found, null otherwise.
+   */
+  private async findExistingPendingCommitment(what: string): Promise<PendingApproval | null> {
+    // First find pending approval for COMMITMENT type
+    const pendingApprovals = await this.approvalRepo.find({
+      where: {
+        itemType: PendingApprovalItemType.COMMITMENT,
+        status: PendingApprovalStatus.PENDING,
+      },
+    });
+
+    if (pendingApprovals.length === 0) return null;
+
+    // Check each pending approval's target Commitment for title match
+    const targetIds = pendingApprovals.map((p) => p.targetId);
+    const matchingCommitment = await this.commitmentRepo
+      .createQueryBuilder('c')
+      .where('c.id IN (:...ids)', { ids: targetIds })
+      .andWhere('c.title ILIKE :pattern', { pattern: what })
+      .getOne();
+
+    if (!matchingCommitment) return null;
+
+    return pendingApprovals.find((p) => p.targetId === matchingCommitment.id) ?? null;
   }
 
   // ─────────────────────────────────────────────────────────────

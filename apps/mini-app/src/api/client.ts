@@ -257,6 +257,15 @@ class ApiClient {
     }>(`/pending-approval/batch/${batchId}/stats`)
   }
 
+  async getPendingApprovalGlobalStats() {
+    return this.request<{
+      total: number
+      pending: number
+      approved: number
+      rejected: number
+    }>(`/pending-approval/stats`)
+  }
+
   async approvePendingBatch(batchId: string) {
     return this.request<{ approved: number; errors: string[] }>(`/pending-approval/batch/${batchId}/approve`, {
       method: 'POST',

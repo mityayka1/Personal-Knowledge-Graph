@@ -564,6 +564,131 @@ describe('Draft Extraction Flow (e2e)', () => {
   });
 
   // ─────────────────────────────────────────────────────────────
+  // Test: Deduplication
+  // ─────────────────────────────────────────────────────────────
+
+  describe('Deduplication', () => {
+    it('should skip creating duplicate commitment if pending approval exists', async () => {
+      const commitmentTitle = `${testPrefix}_Duplicate Commitment`;
+
+      // First extraction - creates the commitment
+      const input1: DraftExtractionInput = {
+        ownerEntityId: testOwnerEntityId,
+        projects: [],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: commitmentTitle,
+            from: 'self',
+            to: 'self',
+            confidence: 0.9,
+          },
+        ],
+      };
+
+      const result1 = await draftService.createDrafts(input1);
+      expect(result1.counts.commitments).toBe(1);
+      expect(result1.skipped.commitments).toBe(0);
+
+      // Second extraction - should skip the same commitment
+      const input2: DraftExtractionInput = {
+        ownerEntityId: testOwnerEntityId,
+        projects: [],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: commitmentTitle, // Same title
+            from: 'self',
+            to: 'self',
+            confidence: 0.95, // Different confidence
+          },
+        ],
+      };
+
+      const result2 = await draftService.createDrafts(input2);
+      expect(result2.counts.commitments).toBe(0); // Not created
+      expect(result2.skipped.commitments).toBe(1); // Skipped as duplicate
+
+      // Verify only one commitment in DB
+      const commitments = await commitmentRepo.find({
+        where: { title: commitmentTitle },
+      });
+      expect(commitments).toHaveLength(1);
+    });
+
+    it('should skip creating duplicate project if pending approval exists', async () => {
+      const projectName = `${testPrefix}_Duplicate Project`;
+
+      // First extraction
+      const input1: DraftExtractionInput = {
+        ownerEntityId: testOwnerEntityId,
+        projects: [{ name: projectName, isNew: true, participants: [], confidence: 0.9 }],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result1 = await draftService.createDrafts(input1);
+      expect(result1.counts.projects).toBe(1);
+      expect(result1.skipped.projects).toBe(0);
+
+      // Second extraction - should skip
+      const input2: DraftExtractionInput = {
+        ownerEntityId: testOwnerEntityId,
+        projects: [{ name: projectName, isNew: true, participants: [], confidence: 0.85 }],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result2 = await draftService.createDrafts(input2);
+      expect(result2.counts.projects).toBe(0);
+      expect(result2.skipped.projects).toBe(1);
+
+      // Verify only one activity in DB
+      const activities = await activityRepo.find({
+        where: { name: projectName },
+      });
+      expect(activities).toHaveLength(1);
+    });
+
+    it('should create new item after approving the pending one', async () => {
+      const commitmentTitle = `${testPrefix}_Approve Then Create`;
+
+      // Create and approve first commitment
+      const input1: DraftExtractionInput = {
+        ownerEntityId: testOwnerEntityId,
+        projects: [],
+        tasks: [],
+        commitments: [
+          { type: 'promise', what: commitmentTitle, from: 'self', to: 'self', confidence: 0.9 },
+        ],
+      };
+
+      const result1 = await draftService.createDrafts(input1);
+      expect(result1.counts.commitments).toBe(1);
+
+      // Approve the pending approval
+      await approvalService.approve(result1.approvals[0].id);
+
+      // Now create another with same title - should NOT be skipped
+      // because the first one is no longer PENDING
+      const input2: DraftExtractionInput = {
+        ownerEntityId: testOwnerEntityId,
+        projects: [],
+        tasks: [],
+        commitments: [
+          { type: 'promise', what: commitmentTitle, from: 'self', to: 'self', confidence: 0.85 },
+        ],
+      };
+
+      const result2 = await draftService.createDrafts(input2);
+      expect(result2.counts.commitments).toBe(1); // Created (not skipped)
+      expect(result2.skipped.commitments).toBe(0);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
   // Test: Batch Stats
   // ─────────────────────────────────────────────────────────────
 

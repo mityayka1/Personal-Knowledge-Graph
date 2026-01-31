@@ -394,6 +394,38 @@ export class PendingApprovalService {
     return result;
   }
 
+  /**
+   * Get global statistics across all batches.
+   */
+  async getGlobalStats(): Promise<{
+    total: number;
+    pending: number;
+    approved: number;
+    rejected: number;
+  }> {
+    const stats = await this.approvalRepo
+      .createQueryBuilder('pa')
+      .select('pa.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('pa.status')
+      .getRawMany<{ status: string; count: string }>();
+
+    const result = {
+      total: 0,
+      pending: 0,
+      approved: 0,
+      rejected: 0,
+    };
+
+    for (const row of stats) {
+      const count = parseInt(row.count, 10);
+      result.total += count;
+      result[row.status as 'pending' | 'approved' | 'rejected'] = count;
+    }
+
+    return result;
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────

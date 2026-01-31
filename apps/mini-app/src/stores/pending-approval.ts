@@ -72,21 +72,31 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
   const pendingItems = computed(() => items.value.filter((i) => i.status === 'pending'))
 
   // Actions
+  /**
+   * Load pending approvals.
+   * @param id - batchId or 'all' to load all pending items
+   */
   async function load(id: string) {
     if (loading.value) return
 
     loading.value = true
     error.value = null
-    batchId.value = id
+    batchId.value = id === 'all' ? null : id
 
     try {
-      const [approvals, batchStats] = await Promise.all([
-        api.getPendingApprovals({ batchId: id, status: 'pending', limit: 100 }),
-        api.getPendingApprovalBatchStats(id),
+      // If 'all', load without batchId filter
+      const params =
+        id === 'all'
+          ? { status: 'pending' as const, limit: 100 }
+          : { batchId: id, status: 'pending' as const, limit: 100 }
+
+      const [approvals, approvalStats] = await Promise.all([
+        api.getPendingApprovals(params),
+        id === 'all' ? api.getPendingApprovalGlobalStats() : api.getPendingApprovalBatchStats(id),
       ])
 
       items.value = approvals.items
-      stats.value = batchStats
+      stats.value = approvalStats
       currentIndex.value = 0
     } catch (e) {
       error.value = 'Не удалось загрузить данные'
@@ -149,12 +159,26 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
   }
 
   async function approveAll() {
-    if (!batchId.value || isProcessing.value) return
+    if (isProcessing.value) return
 
     isProcessing.value = true
 
     try {
-      const result = await api.approvePendingBatch(batchId.value)
+      let approvedCount = 0
+
+      if (batchId.value) {
+        // Batch mode - use batch endpoint
+        const result = await api.approvePendingBatch(batchId.value)
+        approvedCount = result.approved
+      } else {
+        // All mode - approve one by one
+        const pendingToApprove = items.value.filter((i) => i.status === 'pending')
+        for (const item of pendingToApprove) {
+          await api.approvePendingApproval(item.id)
+          item.status = 'approved'
+          approvedCount++
+        }
+      }
 
       // Update local state
       items.value.forEach((item) => {
@@ -164,7 +188,7 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
       })
 
       if (stats.value) {
-        stats.value.approved += result.approved
+        stats.value.approved += approvedCount
         stats.value.pending = 0
       }
 
@@ -179,12 +203,26 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
   }
 
   async function rejectAll() {
-    if (!batchId.value || isProcessing.value) return
+    if (isProcessing.value) return
 
     isProcessing.value = true
 
     try {
-      const result = await api.rejectPendingBatch(batchId.value)
+      let rejectedCount = 0
+
+      if (batchId.value) {
+        // Batch mode - use batch endpoint
+        const result = await api.rejectPendingBatch(batchId.value)
+        rejectedCount = result.rejected
+      } else {
+        // All mode - reject one by one
+        const pendingToReject = items.value.filter((i) => i.status === 'pending')
+        for (const item of pendingToReject) {
+          await api.rejectPendingApproval(item.id)
+          item.status = 'rejected'
+          rejectedCount++
+        }
+      }
 
       // Update local state
       items.value.forEach((item) => {
@@ -194,7 +232,7 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
       })
 
       if (stats.value) {
-        stats.value.rejected += result.rejected
+        stats.value.rejected += rejectedCount
         stats.value.pending = 0
       }
 
