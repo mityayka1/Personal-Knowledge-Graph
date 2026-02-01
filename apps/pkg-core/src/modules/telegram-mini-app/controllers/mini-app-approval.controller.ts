@@ -6,6 +6,7 @@ import {
   Query,
   UseGuards,
   NotFoundException,
+  BadRequestException,
   Logger,
   HttpCode,
   HttpStatus,
@@ -17,6 +18,11 @@ import { Public } from '../../../common/decorators/public.decorator';
 import { PendingApprovalService } from '../../pending-approval/pending-approval.service';
 import { PendingApprovalStatus } from '@pkg/entities';
 import { MiniAppMapperService } from '../services/mini-app-mapper.service';
+
+/**
+ * Valid status values for filtering pending approvals.
+ */
+const VALID_STATUSES = Object.values(PendingApprovalStatus);
 
 /**
  * Mini App Pending Approval Controller.
@@ -53,9 +59,20 @@ export class MiniAppApprovalController {
     // 'all' is a special value meaning no filter
     const effectiveBatchId = batchId && batchId !== 'all' ? batchId : undefined;
 
+    // Validate status enum if provided
+    let validatedStatus: PendingApprovalStatus | undefined;
+    if (status) {
+      if (!VALID_STATUSES.includes(status as PendingApprovalStatus)) {
+        throw new BadRequestException(
+          `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`,
+        );
+      }
+      validatedStatus = status as PendingApprovalStatus;
+    }
+
     const { items, total } = await this.pendingApprovalService.list({
       batchId: effectiveBatchId,
-      status: status as PendingApprovalStatus,
+      status: validatedStatus,
       limit,
       offset,
     });
