@@ -5,7 +5,6 @@ import { Message } from 'telegraf/typings/core/types/typegram';
 import {
   PkgCoreApiService,
   RecallSource,
-  ExtractionCarouselNavResponse,
   PendingApprovalItem,
 } from '../../api/pkg-core-api.service';
 import { DailyContextCacheService } from '../../common/cache';
@@ -13,10 +12,7 @@ import { DailyContextCacheService } from '../../common/cache';
 /** Callback prefix for daily summary actions */
 const DAILY_CALLBACK_PREFIX = 'ds_';
 
-/** Callback prefix for extraction carousel actions (legacy Redis-based) */
-const EXTRACTION_CAROUSEL_PREFIX = 'exc_';
-
-/** Callback prefix for pending approval actions (new DB-based flow) */
+/** Callback prefix for pending approval actions */
 const PENDING_APPROVAL_PREFIX = 'pa_';
 
 /** Valid model values */
@@ -73,7 +69,6 @@ export class DailySummaryHandler {
   canHandle(callbackData: string): boolean {
     return (
       callbackData.startsWith(DAILY_CALLBACK_PREFIX) ||
-      callbackData.startsWith(EXTRACTION_CAROUSEL_PREFIX) ||
       callbackData.startsWith(PENDING_APPROVAL_PREFIX)
     );
   }
@@ -94,8 +89,6 @@ export class DailySummaryHandler {
       await this.handleSaveCallback(ctx, callbackData);
     } else if (callbackData.startsWith('ds_extract:')) {
       await this.handleExtractCallback(ctx, callbackData);
-    } else if (callbackData.startsWith('exc_')) {
-      await this.handleCarouselCallback(ctx, callbackData);
     } else if (callbackData.startsWith('pa_')) {
       await this.handlePendingApprovalCallback(ctx, callbackData);
     } else if (callbackData === 'ds_noop') {
@@ -543,223 +536,6 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Handle carousel navigation callbacks (prev/next/confirm/skip)
-   */
-  private async handleCarouselCallback(ctx: Context, callbackData: string): Promise<void> {
-    // Parse: exc_action:carouselId
-    const match = callbackData.match(/^exc_(prev|next|confirm|skip):(.+)$/);
-    if (!match) {
-      await ctx.answerCbQuery('Неверный формат');
-      return;
-    }
-
-    const [, action, carouselId] = match;
-    const chatId = ctx.chat?.id;
-    const messageId = ctx.callbackQuery && 'message' in ctx.callbackQuery
-      ? ctx.callbackQuery.message?.message_id
-      : undefined;
-
-    if (!chatId || !messageId) {
-      await ctx.answerCbQuery('Ошибка контекста');
-      return;
-    }
-
-    await ctx.answerCbQuery();
-
-    try {
-      let result: ExtractionCarouselNavResponse;
-
-      switch (action) {
-        case 'prev':
-          result = await this.pkgCoreApi.extractionCarouselPrev(carouselId);
-          break;
-        case 'next':
-          result = await this.pkgCoreApi.extractionCarouselNext(carouselId);
-          break;
-        case 'confirm':
-          result = await this.pkgCoreApi.extractionCarouselConfirm(carouselId);
-          break;
-        case 'skip':
-          result = await this.pkgCoreApi.extractionCarouselSkip(carouselId);
-          break;
-        default:
-          return;
-      }
-
-      if (!result.success) {
-        await ctx.telegram.editMessageText(
-          chatId,
-          messageId,
-          undefined,
-          `❌ Ошибка: ${result.error || 'Unknown error'}`,
-        );
-        return;
-      }
-
-      await this.updateCarouselMessage(ctx, chatId, messageId, result);
-
-      // If complete, show final summary and persist confirmed items
-      if (result.complete) {
-        await this.handleCarouselComplete(ctx, carouselId);
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Carousel ${action} error: ${errorMessage}`);
-      await ctx.reply('❌ Ошибка при обработке');
-    }
-  }
-
-  /**
-   * Update carousel message with new content and buttons
-   */
-  private async updateCarouselMessage(
-    ctx: Context,
-    chatId: number,
-    messageId: number,
-    result: ExtractionCarouselNavResponse,
-  ): Promise<void> {
-    const text = result.message || (result.complete ? '✅ Обработка завершена' : '⏳ Загрузка...');
-
-    // If complete, remove buttons
-    const replyMarkup = result.complete
-      ? undefined
-      : result.buttons
-        ? { inline_keyboard: result.buttons }
-        : undefined;
-
-    try {
-      await ctx.telegram.editMessageText(chatId, messageId, undefined, text, {
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup,
-      });
-    } catch (error) {
-      // Ignore "message is not modified" error
-      if (!(error instanceof Error) || !error.message.includes('not modified')) {
-        this.logger.debug(`Could not update carousel message: ${(error as Error).message}`);
-      }
-    }
-  }
-
-  /**
-   * Handle carousel completion - persist confirmed items
-   */
-  private async handleCarouselComplete(ctx: Context, carouselId: string): Promise<void> {
-    try {
-      const statsResult = await this.pkgCoreApi.getExtractionCarouselStats(carouselId);
-
-      if (!statsResult.success || !statsResult.stats) {
-        return;
-      }
-
-      const { confirmed, skipped, confirmedByType } = statsResult.stats;
-
-      if (confirmed === 0) {
-        if (skipped > 0) {
-          await ctx.reply(`⏭️ Все ${skipped} элементов пропущены.`);
-        }
-        return;
-      }
-
-      // Get owner entity for persistence
-      const owner = await this.pkgCoreApi.getOwnerEntity();
-      if (!owner) {
-        this.logger.warn('Owner entity not found, cannot persist extraction results');
-        await ctx.reply(
-          `⚠️ Подтверждено ${confirmed} элементов, но не найден владелец для сохранения.\n` +
-            'Используйте /settings для настройки.',
-          { parse_mode: 'HTML' },
-        );
-        return;
-      }
-
-      // Persist confirmed items as Activity/Commitment entities
-      const persistResult = await this.pkgCoreApi.persistExtractionCarousel(
-        carouselId,
-        owner.id,
-      );
-
-      if (!persistResult.success) {
-        this.logger.error(`Failed to persist carousel: ${persistResult.error}`);
-        await ctx.reply(`❌ Ошибка сохранения: ${persistResult.error}`);
-        return;
-      }
-
-      // Format success message
-      const result = persistResult.result!;
-      const lines: string[] = ['✅ <b>Сохранено в базу:</b>'];
-
-      if (result.projectsCreated > 0) {
-        lines.push(`  🏗 Проектов: ${result.projectsCreated}`);
-      }
-      if (result.tasksCreated > 0) {
-        lines.push(`  📋 Задач: ${result.tasksCreated}`);
-      }
-      if (result.commitmentsCreated > 0) {
-        lines.push(`  🤝 Обязательств: ${result.commitmentsCreated}`);
-      }
-
-      if (skipped > 0) {
-        lines.push(`\n⏭️ Пропущено: ${skipped}`);
-      }
-
-      if (result.errors.length > 0) {
-        lines.push(`\n⚠️ Ошибки (${result.errors.length}):`);
-        for (const err of result.errors.slice(0, 3)) {
-          lines.push(`  • ${err.item}: ${err.error}`);
-        }
-        if (result.errors.length > 3) {
-          lines.push(`  • ...и ещё ${result.errors.length - 3}`);
-        }
-      }
-
-      await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
-
-      this.logger.log(
-        `Carousel ${carouselId} persisted: ${result.projectsCreated} projects, ` +
-          `${result.tasksCreated} tasks, ${result.commitmentsCreated} commitments ` +
-          `(${result.errors.length} errors)`,
-      );
-    } catch (error) {
-      this.logger.error(`Failed to complete carousel: ${(error as Error).message}`);
-      await ctx.reply('❌ Ошибка при завершении карусели');
-    }
-  }
-
-  /**
-   * Format extraction summary (brief overview before carousel)
-   */
-  private formatExtractionSummary(data: {
-    projects: Array<{ name: string }>;
-    tasks: Array<{ title: string }>;
-    commitments: Array<{ what: string }>;
-    extractionSummary: string;
-    tokensUsed: number;
-    durationMs: number;
-  }): string {
-    const lines: string[] = [];
-
-    lines.push('📈 <b>Извлечённая структура</b>\n');
-
-    if (data.projects.length > 0) {
-      lines.push(`🏗 Проекты: ${data.projects.length}`);
-    }
-    if (data.tasks.length > 0) {
-      lines.push(`📋 Задачи: ${data.tasks.length}`);
-    }
-    if (data.commitments.length > 0) {
-      lines.push(`🤝 Обязательства: ${data.commitments.length}`);
-    }
-
-    lines.push('');
-    lines.push(`<i>${data.extractionSummary}</i>`);
-    lines.push(`<i>⚡ ${data.durationMs}ms • ${data.tokensUsed} tokens</i>`);
-    lines.push('');
-    lines.push('👇 <b>Подтвердите каждый элемент в карусели ниже</b>');
-
-    return lines.join('\n');
-  }
-
-  /**
    * Update message button status after action
    */
   private async updateButtonStatus(
@@ -786,111 +562,6 @@ export class DailySummaryHandler {
     } catch (error) {
       this.logger.debug(`Could not update button: ${(error as Error).message}`);
     }
-  }
-
-  /**
-   * Format extraction result for Telegram message
-   */
-  private formatExtractionResult(data: {
-    projects: Array<{
-      name: string;
-      isNew: boolean;
-      participants: string[];
-      client?: string;
-      confidence: number;
-    }>;
-    tasks: Array<{
-      title: string;
-      projectName?: string;
-      status: string;
-      priority?: string;
-      confidence: number;
-    }>;
-    commitments: Array<{
-      what: string;
-      from: string;
-      to: string;
-      type: string;
-      deadline?: string;
-      confidence: number;
-    }>;
-    inferredRelations: Array<{
-      type: string;
-      entities: string[];
-      activityName?: string;
-      confidence: number;
-    }>;
-    extractionSummary: string;
-    tokensUsed: number;
-    durationMs: number;
-  }): string {
-    const lines: string[] = [];
-
-    lines.push('📈 <b>Извлечённая структура</b>\n');
-
-    // Projects
-    if (data.projects.length > 0) {
-      lines.push('<b>🏗 Проекты:</b>');
-      for (const p of data.projects) {
-        const status = p.isNew ? '🆕' : '📁';
-        const participants = p.participants.length > 0 ? ` (${p.participants.join(', ')})` : '';
-        const client = p.client ? ` • ${p.client}` : '';
-        lines.push(`${status} ${p.name}${participants}${client}`);
-      }
-      lines.push('');
-    }
-
-    // Tasks
-    if (data.tasks.length > 0) {
-      lines.push('<b>📋 Задачи:</b>');
-      for (const t of data.tasks) {
-        const statusIcon =
-          t.status === 'done' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳';
-        const priority =
-          t.priority === 'high' ? '🔴' : t.priority === 'medium' ? '🟡' : '';
-        const project = t.projectName ? ` → ${t.projectName}` : '';
-        lines.push(`${statusIcon}${priority} ${t.title}${project}`);
-      }
-      lines.push('');
-    }
-
-    // Commitments
-    if (data.commitments.length > 0) {
-      lines.push('<b>🤝 Обязательства:</b>');
-      for (const c of data.commitments) {
-        const typeIcon =
-          c.type === 'promise'
-            ? '🎯'
-            : c.type === 'request'
-              ? '📨'
-              : c.type === 'agreement'
-                ? '🤝'
-                : c.type === 'deadline'
-                  ? '⏰'
-                  : '💭';
-        const deadline = c.deadline ? ` (до ${c.deadline})` : '';
-        const direction = c.from === 'self' ? `→ ${c.to}` : `${c.from} →`;
-        lines.push(`${typeIcon} ${direction}: ${c.what}${deadline}`);
-      }
-      lines.push('');
-    }
-
-    // Relations (brief)
-    if (data.inferredRelations.length > 0) {
-      lines.push('<b>🔗 Связи:</b>');
-      for (const r of data.inferredRelations) {
-        const activity = r.activityName ? ` (${r.activityName})` : '';
-        lines.push(`• ${r.entities.join(' ↔ ')}${activity}`);
-      }
-      lines.push('');
-    }
-
-    // Summary
-    lines.push('━━━━━━━━━━━━━━━━━━━━━━');
-    lines.push(`<i>${data.extractionSummary}</i>`);
-    lines.push(`<i>⚡ ${data.durationMs}ms • ${data.tokensUsed} tokens</i>`);
-
-    return lines.join('\n');
   }
 
   /**

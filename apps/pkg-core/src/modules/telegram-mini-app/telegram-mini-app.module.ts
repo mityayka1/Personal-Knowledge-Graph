@@ -4,7 +4,6 @@ import { TelegramAuthGuard } from './guards/telegram-auth.guard';
 import { MiniAppMapperService } from './services/mini-app-mapper.service';
 import { MiniAppUserController } from './controllers/mini-app-user.controller';
 import { MiniAppBriefController } from './controllers/mini-app-brief.controller';
-import { MiniAppExtractionController } from './controllers/mini-app-extraction.controller';
 import { MiniAppRecallController } from './controllers/mini-app-recall.controller';
 import { MiniAppEntityController } from './controllers/mini-app-entity.controller';
 import { MiniAppApprovalController } from './controllers/mini-app-approval.controller';
@@ -24,14 +23,13 @@ import { ActivityModule } from '../activity/activity.module';
  * Controllers:
  * - MiniAppUserController: /me, /dashboard
  * - MiniAppBriefController: /brief/*
- * - MiniAppExtractionController: /extraction/*
  * - MiniAppRecallController: /recall/*
  * - MiniAppEntityController: /entity/*
  * - MiniAppApprovalController: /pending-approval/*
  *
  * Dependencies:
  * - EntityModule for entity profiles
- * - ExtractionModule for carousel state
+ * - ExtractionModule for extraction services
  * - ClaudeAgentModule for recall sessions
  * - PendingApprovalModule for pending approvals
  * - ActivityModule for commitment details
@@ -48,7 +46,6 @@ import { ActivityModule } from '../activity/activity.module';
   controllers: [
     MiniAppUserController,
     MiniAppBriefController,
-    MiniAppExtractionController,
     MiniAppRecallController,
     MiniAppEntityController,
     MiniAppApprovalController,

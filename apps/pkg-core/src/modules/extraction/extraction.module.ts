@@ -15,7 +15,6 @@ import {
 import { FactExtractionService } from './fact-extraction.service';
 import { RelevanceFilterService } from './relevance-filter.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
-import { EventExtractionService } from './event-extraction.service';
 import { SecondBrainExtractionService } from './second-brain-extraction.service';
 import { ContextEnrichmentService } from './context-enrichment.service';
 import { PromiseRecipientService } from './promise-recipient.service';
@@ -27,11 +26,9 @@ import { SubjectResolverService } from './subject-resolver.service';
 import { RelationInferenceService } from './relation-inference.service';
 import { ExtractionController } from './extraction.controller';
 import { ExtractedEventController } from './extracted-event.controller';
-import { ExtractionCarouselController } from './extraction-carousel.controller';
 import { ExtractionToolsProvider } from './tools/extraction-tools.provider';
 import { UnifiedExtractionService } from './unified-extraction.service';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
-import { ExtractionCarouselStateService } from './extraction-carousel-state.service';
 import { ExtractionPersistenceService } from './extraction-persistence.service';
 import { DraftExtractionService } from './draft-extraction.service';
 import { ResolutionModule } from '../resolution/resolution.module';
@@ -80,12 +77,11 @@ import { ActivityModule } from '../activity/activity.module';
     ActivityModule,
     PendingApprovalModule,
   ],
-  controllers: [ExtractionController, ExtractedEventController, ExtractionCarouselController],
+  controllers: [ExtractionController, ExtractedEventController],
   providers: [
     FactExtractionService,
     RelevanceFilterService,
     FactDeduplicationService,
-    EventExtractionService,
     SecondBrainExtractionService,
     ContextEnrichmentService,
     PromiseRecipientService,
@@ -98,7 +94,6 @@ import { ActivityModule } from '../activity/activity.module';
     ExtractionToolsProvider,
     UnifiedExtractionService,
     DailySynthesisExtractionService,
-    ExtractionCarouselStateService,
     ExtractionPersistenceService,
     DraftExtractionService,
   ],
@@ -106,7 +101,6 @@ import { ActivityModule } from '../activity/activity.module';
     FactExtractionService,
     RelevanceFilterService,
     FactDeduplicationService,
-    EventExtractionService,
     SecondBrainExtractionService,
     ContextEnrichmentService,
     PromiseRecipientService,
@@ -118,7 +112,6 @@ import { ActivityModule } from '../activity/activity.module';
     ExtractionToolsProvider,
     UnifiedExtractionService,
     DailySynthesisExtractionService,
-    ExtractionCarouselStateService,
     ExtractionPersistenceService,
     DraftExtractionService,
   ],

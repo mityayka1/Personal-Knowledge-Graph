@@ -91,13 +91,6 @@ describe('DailySummaryHandler', () => {
       expect(handler.canHandle('ds_noop')).toBe(true);
     });
 
-    it('should return true for extraction carousel callbacks', () => {
-      expect(handler.canHandle('exc_prev:carousel123')).toBe(true);
-      expect(handler.canHandle('exc_next:carousel123')).toBe(true);
-      expect(handler.canHandle('exc_confirm:carousel123')).toBe(true);
-      expect(handler.canHandle('exc_skip:carousel123')).toBe(true);
-    });
-
     it('should return true for pending approval callbacks', () => {
       expect(handler.canHandle('pa_approve_all:batch123')).toBe(true);
       expect(handler.canHandle('pa_reject_all:batch123')).toBe(true);
@@ -323,115 +316,6 @@ describe('DailySummaryHandler', () => {
       await handler.handleCallback(ctx);
 
       expect(ctx.answerCbQuery).toHaveBeenCalledWith('Саммари не найден (возможно, устарел)');
-    });
-  });
-
-  describe('handleCallback - carousel navigation', () => {
-    it('should handle prev navigation', async () => {
-      const ctx = mockCtx();
-      (ctx.callbackQuery as any).data = 'exc_prev:carousel-123';
-
-      pkgCoreApi.extractionCarouselPrev.mockResolvedValue({
-        success: true,
-        complete: false,
-        message: 'Previous item',
-        buttons: [[{ text: '✅', callback_data: 'exc_confirm:carousel-123' }]],
-        chatId: '123456',
-        messageId: 100,
-      });
-
-      await handler.handleCallback(ctx);
-
-      expect(pkgCoreApi.extractionCarouselPrev).toHaveBeenCalledWith('carousel-123');
-    });
-
-    it('should handle next navigation', async () => {
-      const ctx = mockCtx();
-      (ctx.callbackQuery as any).data = 'exc_next:carousel-123';
-
-      pkgCoreApi.extractionCarouselNext.mockResolvedValue({
-        success: true,
-        complete: false,
-        message: 'Next item',
-        buttons: [[{ text: '✅', callback_data: 'exc_confirm:carousel-123' }]],
-        chatId: '123456',
-        messageId: 100,
-      });
-
-      await handler.handleCallback(ctx);
-
-      expect(pkgCoreApi.extractionCarouselNext).toHaveBeenCalledWith('carousel-123');
-    });
-
-    it('should handle confirm action', async () => {
-      const ctx = mockCtx();
-      (ctx.callbackQuery as any).data = 'exc_confirm:carousel-123';
-
-      pkgCoreApi.extractionCarouselConfirm.mockResolvedValue({
-        success: true,
-        complete: false,
-        message: 'Confirmed, next item',
-        buttons: [[{ text: '✅', callback_data: 'exc_confirm:carousel-123' }]],
-        chatId: '123456',
-        messageId: 100,
-      });
-
-      await handler.handleCallback(ctx);
-
-      expect(pkgCoreApi.extractionCarouselConfirm).toHaveBeenCalledWith('carousel-123');
-    });
-
-    it('should handle skip action', async () => {
-      const ctx = mockCtx();
-      (ctx.callbackQuery as any).data = 'exc_skip:carousel-123';
-
-      pkgCoreApi.extractionCarouselSkip.mockResolvedValue({
-        success: true,
-        complete: false,
-        message: 'Skipped, next item',
-        buttons: [[{ text: '✅', callback_data: 'exc_confirm:carousel-123' }]],
-        chatId: '123456',
-        messageId: 100,
-      });
-
-      await handler.handleCallback(ctx);
-
-      expect(pkgCoreApi.extractionCarouselSkip).toHaveBeenCalledWith('carousel-123');
-    });
-
-    it('should handle carousel complete', async () => {
-      const ctx = mockCtx();
-      (ctx.callbackQuery as any).data = 'exc_confirm:carousel-123';
-
-      pkgCoreApi.extractionCarouselConfirm.mockResolvedValue({
-        success: true,
-        complete: true,
-        message: 'All done',
-        chatId: '123456',
-        messageId: 100,
-      });
-      pkgCoreApi.getExtractionCarouselStats.mockResolvedValue({
-        success: true,
-        stats: { confirmed: 2, skipped: 1, total: 3, processed: 3, confirmedByType: { projects: 1, tasks: 1, commitments: 0 } },
-      });
-      pkgCoreApi.getOwnerEntity.mockResolvedValue({ id: 'owner-uuid', name: 'Test Owner' });
-      pkgCoreApi.persistExtractionCarousel.mockResolvedValue({
-        success: true,
-        result: { projectsCreated: 1, tasksCreated: 1, commitmentsCreated: 0, activityIds: ['act-1'], commitmentIds: [], errors: [] },
-      });
-
-      await handler.handleCallback(ctx);
-
-      expect(pkgCoreApi.persistExtractionCarousel).toHaveBeenCalledWith('carousel-123', 'owner-uuid');
-    });
-
-    it('should handle invalid carousel callback format', async () => {
-      const ctx = mockCtx();
-      (ctx.callbackQuery as any).data = 'exc_invalid:carousel-123';
-
-      await handler.handleCallback(ctx);
-
-      expect(ctx.answerCbQuery).toHaveBeenCalledWith('Неверный формат');
     });
   });
 

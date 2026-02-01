@@ -1,8 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import {
-  ExtractionCarouselState,
-  ExtractionCarouselItem,
-} from '../../extraction/extraction-carousel-state.service';
 import { PendingApproval, CommitmentType } from '@pkg/entities';
 import { CommitmentService } from '../../activity/commitment.service';
 import { PendingApprovalItemType } from '@pkg/entities';
@@ -84,77 +80,6 @@ export class MiniAppMapperService {
    */
   getCommitmentTypeName(type: CommitmentType): string {
     return type.toLowerCase();
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Extraction Carousel Mapping
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Map internal carousel state to API response format.
-   */
-  mapCarouselStateToResponse(state: ExtractionCarouselState, carouselId: string) {
-    return {
-      id: carouselId,
-      items: state.items.map((item) => ({
-        id: item.id,
-        type: item.type,
-        title: this.getItemTitle(item),
-        description: this.getItemDescription(item),
-        confidence: this.getItemConfidence(item),
-        fields: this.getItemFields(item),
-        status: state.confirmedIds.includes(item.id)
-          ? 'confirmed'
-          : state.processedIds.includes(item.id)
-            ? 'skipped'
-            : 'pending',
-      })),
-      currentIndex: state.currentIndex,
-      totalCount: state.items.length,
-      confirmedCount: state.confirmedIds.length,
-      skippedCount: state.processedIds.length - state.confirmedIds.length,
-    };
-  }
-
-  private getItemTitle(item: ExtractionCarouselItem): string {
-    const data = item.data;
-    return ('name' in data && data.name) || ('title' in data && data.title) || 'Untitled';
-  }
-
-  private getItemDescription(item: ExtractionCarouselItem): string | undefined {
-    const data = item.data;
-    if ('description' in data && typeof data.description === 'string') {
-      return data.description;
-    }
-    if ('context' in data && typeof data.context === 'string') {
-      return data.context;
-    }
-    return undefined;
-  }
-
-  private getItemConfidence(item: ExtractionCarouselItem): number {
-    const data = item.data;
-    return 'confidence' in data && typeof data.confidence === 'number' ? data.confidence : 0.5;
-  }
-
-  private getItemFields(item: ExtractionCarouselItem): Record<string, unknown> {
-    const data = item.data;
-    const fields: Record<string, unknown> = {};
-
-    if (item.type === 'project') {
-      if ('status' in data && data.status) fields.status = data.status;
-      if ('deadline' in data && data.deadline) fields.deadline = data.deadline;
-    } else if (item.type === 'task') {
-      if ('priority' in data && data.priority) fields.priority = data.priority;
-      if ('dueDate' in data && data.dueDate) fields.dueDate = data.dueDate;
-      if ('assignee' in data && data.assignee) fields.assignee = data.assignee;
-    } else if (item.type === 'commitment') {
-      if ('type' in data && data.type) fields.type = data.type;
-      if ('direction' in data && data.direction) fields.direction = data.direction;
-      if ('deadline' in data && data.deadline) fields.deadline = data.deadline;
-    }
-
-    return fields;
   }
 
   // ─────────────────────────────────────────────────────────────

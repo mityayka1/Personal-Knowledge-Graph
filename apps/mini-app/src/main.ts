@@ -25,11 +25,6 @@ const router = createRouter({
       component: () => import('./pages/brief/[briefId].vue'),
     },
     {
-      path: '/extraction/:carouselId',
-      name: 'extraction',
-      component: () => import('./pages/extraction/[carouselId].vue'),
-    },
-    {
       path: '/recall/:sessionId',
       name: 'recall',
       component: () => import('./pages/recall/[sessionId].vue'),
@@ -57,7 +52,6 @@ router.beforeEach((to, _from, next) => {
     if (type && id) {
       const routeMap: Record<string, string> = {
         brief: `/brief/${id}`,
-        extraction: `/extraction/${id}`,
         recall: `/recall/${id}`,
         entity: `/entity/${id}`,
         approval: `/pending-approval/${id}`,

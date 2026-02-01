@@ -112,40 +112,6 @@ class ApiClient {
     })
   }
 
-  // Extraction Carousel
-  async getExtraction(carouselId: string) {
-    return this.request<{
-      id: string
-      items: Array<{
-        id: string
-        type: 'project' | 'commitment' | 'action_item' | 'deadline' | 'contact'
-        title: string
-        description?: string
-        confidence: number
-        fields: Record<string, unknown>
-        status: 'pending' | 'confirmed' | 'skipped'
-      }>
-      currentIndex: number
-      totalCount: number
-      confirmedCount: number
-      skippedCount: number
-    }>(`/extraction/${carouselId}`)
-  }
-
-  async confirmExtraction(carouselId: string, itemId: string, edits?: Record<string, unknown>) {
-    return this.request<{ success: boolean; nextIndex?: number }>(`/extraction/${carouselId}/confirm/${itemId}`, {
-      method: 'POST',
-      body: edits ? { edits } : undefined,
-    })
-  }
-
-  async skipExtraction(carouselId: string, itemId: string, reason?: string) {
-    return this.request<{ success: boolean; nextIndex?: number }>(`/extraction/${carouselId}/skip/${itemId}`, {
-      method: 'POST',
-      body: reason ? { reason } : undefined,
-    })
-  }
-
   // Recall Session
   async getRecall(sessionId: string) {
     return this.request<{
