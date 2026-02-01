@@ -145,7 +145,22 @@ cd /opt/apps/pkg/docker
 docker compose build
 ```
 
-### 5. Запуск сервисов
+### 5. Сборка Mini App
+
+Mini App — это Vue.js приложение, которое раздаётся как статика через Nginx.
+
+```bash
+cd /opt/apps/pkg/apps/mini-app
+pnpm build
+```
+
+**Важно:** При обновлении кода Mini App всегда пересобирайте его:
+```bash
+git pull origin <branch>
+cd apps/mini-app && pnpm build
+```
+
+### 6. Запуск сервисов
 
 ```bash
 # Запуск всех сервисов
@@ -158,7 +173,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-### 6. Проверка работоспособности
+### 7. Проверка работоспособности
 
 ```bash
 # Health check PKG Core
@@ -177,7 +192,7 @@ curl http://localhost:3004/health
 curl http://localhost:5678/healthz
 ```
 
-### 7. Первоначальная настройка n8n
+### 8. Первоначальная настройка n8n
 
 n8n 2.0+ использует User Management вместо Basic Auth. При первом запуске:
 
@@ -198,7 +213,7 @@ n8n 2.0+ использует User Management вместо Basic Auth. При п
 > docker compose restart n8n
 > ```
 
-### 8. Настройка Telegram Mini App
+### 9. Настройка Telegram Mini App
 
 Telegram Mini App используется для управления pending approvals (извлечённые проекты, задачи, обязательства).
 
