@@ -1,19 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cron } from '@nestjs/schedule';
-import { DataSource, Repository, In, IsNull, Not, LessThan } from 'typeorm';
+import { DataSource, Repository, In, LessThan } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import {
   PendingApproval,
   PendingApprovalItemType,
   PendingApprovalStatus,
-  EntityFact,
-  EntityFactStatus,
-  Activity,
-  ActivityStatus,
-  Commitment,
-  CommitmentStatus,
 } from '@pkg/entities';
+import {
+  hardDeleteTargets,
+  getUniqueTableConfigs,
+} from './item-type-registry';
 
 /**
  * Service for periodic cleanup of rejected pending approvals and orphaned drafts.
@@ -31,12 +29,6 @@ export class PendingApprovalCleanupService {
   constructor(
     @InjectRepository(PendingApproval)
     private readonly approvalRepo: Repository<PendingApproval>,
-    @InjectRepository(EntityFact)
-    private readonly factRepo: Repository<EntityFact>,
-    @InjectRepository(Activity)
-    private readonly activityRepo: Repository<Activity>,
-    @InjectRepository(Commitment)
-    private readonly commitmentRepo: Repository<Commitment>,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
@@ -108,7 +100,7 @@ export class PendingApprovalCleanupService {
         const byType = this.groupByItemType(approvals);
 
         for (const [itemType, ids] of Object.entries(byType)) {
-          const deletedCount = await this.hardDeleteTargets(
+          const deletedCount = await hardDeleteTargets(
             manager,
             itemType as PendingApprovalItemType,
             ids,
@@ -150,34 +142,36 @@ export class PendingApprovalCleanupService {
       `Cleaning orphaned drafts older than ${this.retentionDays} days`,
     );
 
+    // Map table names to result property names
+    const tableToProperty: Record<string, keyof typeof stats> = {
+      entity_facts: 'facts',
+      activities: 'activities',
+      commitments: 'commitments',
+    };
+
     const stats = {
       facts: 0,
       activities: 0,
       commitments: 0,
     };
 
-    stats.facts = await this.cleanupOrphanedEntityType(
-      'fact',
-      EntityFact,
-      EntityFactStatus.DRAFT,
-      cutoffDate,
-    );
+    const tableConfigs = getUniqueTableConfigs();
 
-    stats.activities = await this.cleanupOrphanedEntityType(
-      'activity',
-      Activity,
-      ActivityStatus.DRAFT,
-      cutoffDate,
-    );
+    for (const config of tableConfigs) {
+      const deletedCount = await this.cleanupOrphanedEntityType(
+        config.tableName,
+        config.draftStatus,
+        config.itemTypes,
+        cutoffDate,
+      );
+      const propName = tableToProperty[config.tableName];
+      if (propName) {
+        stats[propName] = deletedCount;
+      }
+    }
 
-    stats.commitments = await this.cleanupOrphanedEntityType(
-      'commitment',
-      Commitment,
-      CommitmentStatus.DRAFT,
-      cutoffDate,
-    );
-
-    if (stats.facts + stats.activities + stats.commitments > 0) {
+    const totalDeleted = stats.facts + stats.activities + stats.commitments;
+    if (totalDeleted > 0) {
       this.logger.log(
         `Cleaned up orphaned drafts: ${stats.facts} facts, ` +
           `${stats.activities} activities, ${stats.commitments} commitments`,
@@ -202,60 +196,14 @@ export class PendingApprovalCleanupService {
     return result;
   }
 
-  private async hardDeleteTargets(
-    manager: import('typeorm').EntityManager,
-    itemType: PendingApprovalItemType,
-    targetIds: string[],
-  ): Promise<number> {
-    if (targetIds.length === 0) return 0;
-
-    let tableName: string;
-
-    switch (itemType) {
-      case PendingApprovalItemType.FACT:
-        tableName = 'entity_facts';
-        break;
-      case PendingApprovalItemType.PROJECT:
-      case PendingApprovalItemType.TASK:
-        tableName = 'activities';
-        break;
-      case PendingApprovalItemType.COMMITMENT:
-        tableName = 'commitments';
-        break;
-      default:
-        this.logger.warn(`Unknown item type: ${itemType}`);
-        return 0;
-    }
-
-    // TypeORM raw query for PostgreSQL DELETE returns result with rowCount property
-    const result = await manager.query(
-      `DELETE FROM ${tableName} WHERE id = ANY($1::uuid[])`,
-      [targetIds],
-    );
-
-    // PostgreSQL pg driver: result is array with rowCount as property on the array itself
-    // Or for some versions, it's directly an object with rowCount
-    const rowCount =
-      (result as unknown as { rowCount?: number })?.rowCount ??
-      (Array.isArray(result) ? (result as unknown as { rowCount?: number }).rowCount : undefined) ??
-      0;
-
-    return rowCount;
-  }
-
   private async cleanupOrphanedEntityType(
-    typeName: string,
-    _EntityClass: unknown,
+    tableName: string,
     draftStatus: string,
+    itemTypes: PendingApprovalItemType[],
     cutoffDate: Date,
   ): Promise<number> {
     let totalDeleted = 0;
     let hasMore = true;
-
-    const tableName = this.getTableName(typeName);
-    const itemTypes = this.getItemTypesForEntity(typeName);
-
-    if (!tableName) return 0;
 
     while (hasMore) {
       // Use raw query to avoid TypeORM typing issues with dynamic entity
@@ -291,7 +239,7 @@ export class PendingApprovalCleanupService {
 
       if (orphanedIds.length > 0) {
         await this.dataSource.manager.query(
-          `DELETE FROM ${this.getTableName(typeName)} WHERE id = ANY($1::uuid[])`,
+          `DELETE FROM ${tableName} WHERE id = ANY($1::uuid[])`,
           [orphanedIds],
         );
         totalDeleted += orphanedIds.length;
@@ -303,31 +251,5 @@ export class PendingApprovalCleanupService {
     }
 
     return totalDeleted;
-  }
-
-  private getItemTypesForEntity(typeName: string): PendingApprovalItemType[] {
-    switch (typeName) {
-      case 'fact':
-        return [PendingApprovalItemType.FACT];
-      case 'activity':
-        return [PendingApprovalItemType.PROJECT, PendingApprovalItemType.TASK];
-      case 'commitment':
-        return [PendingApprovalItemType.COMMITMENT];
-      default:
-        return [];
-    }
-  }
-
-  private getTableName(typeName: string): string {
-    switch (typeName) {
-      case 'fact':
-        return 'entity_facts';
-      case 'activity':
-        return 'activities';
-      case 'commitment':
-        return 'commitments';
-      default:
-        return '';
-    }
   }
 }

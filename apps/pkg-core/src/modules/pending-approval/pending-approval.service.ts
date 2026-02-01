@@ -11,13 +11,12 @@ import {
   PendingApproval,
   PendingApprovalItemType,
   PendingApprovalStatus,
-  EntityFact,
-  EntityFactStatus,
-  Activity,
-  ActivityStatus,
-  Commitment,
-  CommitmentStatus,
 } from '@pkg/entities';
+import {
+  activateTarget,
+  softDeleteTarget,
+  hardDeleteTarget,
+} from './item-type-registry';
 
 /**
  * Input for creating a new pending approval.
@@ -70,12 +69,6 @@ export class PendingApprovalService {
   constructor(
     @InjectRepository(PendingApproval)
     private readonly approvalRepo: Repository<PendingApproval>,
-    @InjectRepository(EntityFact)
-    private readonly factRepo: Repository<EntityFact>,
-    @InjectRepository(Activity)
-    private readonly activityRepo: Repository<Activity>,
-    @InjectRepository(Commitment)
-    private readonly commitmentRepo: Repository<Commitment>,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
@@ -168,7 +161,7 @@ export class PendingApprovalService {
       }
 
       // Activate target entity
-      const activated = await this.activateTarget(
+      const activated = await activateTarget(
         manager,
         approval.itemType,
         approval.targetId,
@@ -216,7 +209,7 @@ export class PendingApprovalService {
 
       if (this.retentionDays === 0) {
         // Immediate hard delete
-        await this.hardDeleteTarget(
+        await hardDeleteTarget(
           manager,
           approval.itemType,
           approval.targetId,
@@ -227,7 +220,7 @@ export class PendingApprovalService {
         );
       } else {
         // Soft delete with retention
-        await this.softDeleteTarget(
+        await softDeleteTarget(
           manager,
           approval.itemType,
           approval.targetId,
@@ -263,7 +256,7 @@ export class PendingApprovalService {
 
       for (const approval of approvals) {
         try {
-          const activated = await this.activateTarget(
+          const activated = await activateTarget(
             manager,
             approval.itemType,
             approval.targetId,
@@ -315,7 +308,7 @@ export class PendingApprovalService {
         // Hard delete all targets
         for (const approval of approvals) {
           try {
-            await this.hardDeleteTarget(
+            await hardDeleteTarget(
               manager,
               approval.itemType,
               approval.targetId,
@@ -335,7 +328,7 @@ export class PendingApprovalService {
         // Soft delete all targets
         for (const approval of approvals) {
           try {
-            await this.softDeleteTarget(
+            await softDeleteTarget(
               manager,
               approval.itemType,
               approval.targetId,
@@ -426,107 +419,4 @@ export class PendingApprovalService {
     return result;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Private helpers
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Activate target entity (set status to 'active').
-   * Returns true if entity was found and updated.
-   */
-  private async activateTarget(
-    manager: import('typeorm').EntityManager,
-    itemType: PendingApprovalItemType,
-    targetId: string,
-  ): Promise<boolean> {
-    switch (itemType) {
-      case PendingApprovalItemType.FACT: {
-        const result = await manager.update(
-          EntityFact,
-          { id: targetId },
-          { status: EntityFactStatus.ACTIVE },
-        );
-        return (result.affected ?? 0) > 0;
-      }
-
-      case PendingApprovalItemType.PROJECT:
-      case PendingApprovalItemType.TASK: {
-        // Activity entity handles both projects and tasks
-        const activityResult = await manager.update(
-          Activity,
-          { id: targetId },
-          { status: ActivityStatus.ACTIVE },
-        );
-        return (activityResult.affected ?? 0) > 0;
-      }
-
-      case PendingApprovalItemType.COMMITMENT: {
-        // Commitment: draft → pending (the natural initial state)
-        const commitmentResult = await manager.update(
-          Commitment,
-          { id: targetId },
-          { status: CommitmentStatus.PENDING },
-        );
-        return (commitmentResult.affected ?? 0) > 0;
-      }
-
-      default:
-        this.logger.error(`Unknown item type: ${itemType}`);
-        return false;
-    }
-  }
-
-  /**
-   * Soft delete target entity (set deletedAt = now()).
-   */
-  private async softDeleteTarget(
-    manager: import('typeorm').EntityManager,
-    itemType: PendingApprovalItemType,
-    targetId: string,
-  ): Promise<void> {
-    switch (itemType) {
-      case PendingApprovalItemType.FACT:
-        await manager.softDelete(EntityFact, { id: targetId });
-        break;
-
-      case PendingApprovalItemType.PROJECT:
-      case PendingApprovalItemType.TASK:
-        await manager.softDelete(Activity, { id: targetId });
-        break;
-
-      case PendingApprovalItemType.COMMITMENT:
-        await manager.softDelete(Commitment, { id: targetId });
-        break;
-
-      default:
-        this.logger.error(`Unknown item type: ${itemType}`);
-    }
-  }
-
-  /**
-   * Hard delete target entity.
-   */
-  private async hardDeleteTarget(
-    manager: import('typeorm').EntityManager,
-    itemType: PendingApprovalItemType,
-    targetId: string,
-  ): Promise<void> {
-    switch (itemType) {
-      case PendingApprovalItemType.FACT:
-        await manager.delete(EntityFact, { id: targetId });
-        break;
-
-      case PendingApprovalItemType.PROJECT:
-      case PendingApprovalItemType.TASK:
-        await manager.delete(Activity, { id: targetId });
-        break;
-
-      case PendingApprovalItemType.COMMITMENT:
-        await manager.delete(Commitment, { id: targetId });
-        break;
-
-      default:
-        this.logger.error(`Unknown item type: ${itemType}`);
-    }
-  }
 }
