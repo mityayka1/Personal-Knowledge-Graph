@@ -212,9 +212,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col overflow-hidden" style="padding-top: var(--tg-content-safe-area-inset-top, 0px); padding-bottom: var(--tg-content-safe-area-inset-bottom, 0px);">
+  <div class="min-h-screen bg-tg-bg" :style="{ paddingTop: 'var(--tg-content-safe-area-inset-top, 0px)' }">
     <!-- Loading -->
-    <div v-if="store.loading" class="flex-1 flex items-center justify-center">
+    <div v-if="store.loading" class="min-h-screen flex items-center justify-center">
       <LoadingSpinner size="lg" />
     </div>
 
@@ -227,7 +227,7 @@ onUnmounted(() => {
     />
 
     <!-- Completion Screen -->
-    <div v-else-if="store.isComplete" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+    <div v-else-if="store.isComplete" class="min-h-screen flex flex-col items-center justify-center p-6 text-center">
       <div class="text-6xl mb-4">
         {{ store.progress.approved > 0 ? '' : '' }}
       </div>
@@ -258,135 +258,141 @@ onUnmounted(() => {
 
     <!-- Carousel Content -->
     <template v-else-if="store.currentItem">
-      <!-- Progress Header -->
-      <div class="shrink-0 p-4 border-b border-tg-secondary-bg">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-sm text-tg-hint">
-            {{ store.progress.current }} из {{ store.progress.total }}
-          </span>
-          <span class="text-sm text-tg-hint">
-            {{ store.progress.percent }}%
-          </span>
+      <!-- Scrollable content area with bottom padding for fixed footer -->
+      <div class="pb-56">
+        <!-- Progress Header -->
+        <div class="p-4 border-b border-tg-secondary-bg bg-tg-bg sticky top-0 z-10">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-tg-hint">
+              {{ store.progress.current }} из {{ store.progress.total }}
+            </span>
+            <span class="text-sm text-tg-hint">
+              {{ store.progress.percent }}%
+            </span>
+          </div>
+          <div class="h-1 bg-tg-secondary-bg rounded-full overflow-hidden">
+            <div
+              class="h-full bg-tg-button rounded-full transition-all duration-300"
+              :style="{ width: `${store.progress.percent}%` }"
+            />
+          </div>
+          <!-- Stats row -->
+          <div class="flex items-center justify-center gap-4 mt-2 text-xs">
+            <span class="text-tg-hint">
+              <span class="text-green-500">{{ store.progress.approved }}</span> подтв.
+            </span>
+            <span class="text-tg-hint">
+              <span class="text-red-500">{{ store.progress.rejected }}</span> откл.
+            </span>
+            <span class="text-tg-hint">
+              <span class="text-yellow-500">{{ store.progress.pending }}</span> ожид.
+            </span>
+          </div>
         </div>
-        <div class="h-1 bg-tg-secondary-bg rounded-full overflow-hidden">
-          <div
-            class="h-full bg-tg-button rounded-full transition-all duration-300"
-            :style="{ width: `${store.progress.percent}%` }"
-          />
-        </div>
-        <!-- Stats row -->
-        <div class="flex items-center justify-center gap-4 mt-2 text-xs">
-          <span class="text-tg-hint">
-            <span class="text-green-500">{{ store.progress.approved }}</span> подтв.
-          </span>
-          <span class="text-tg-hint">
-            <span class="text-red-500">{{ store.progress.rejected }}</span> откл.
-          </span>
-          <span class="text-tg-hint">
-            <span class="text-yellow-500">{{ store.progress.pending }}</span> ожид.
-          </span>
+
+        <!-- Card -->
+        <div class="p-4">
+          <div class="card">
+            <!-- Type Badge + Confidence -->
+            <div class="flex items-center gap-2 mb-3">
+              <span class="w-6 h-6 flex items-center justify-center rounded-full bg-tg-secondary-bg text-xs font-medium text-tg-accent">
+                {{ getTypeIcon(store.currentItem.itemType) }}
+              </span>
+              <span class="text-sm font-medium text-tg-accent">
+                {{ getTypeName(store.currentItem.itemType) }}
+              </span>
+              <span v-if="getCommitmentTypeName()" class="text-xs text-tg-hint">
+                · {{ getCommitmentTypeName() }}
+              </span>
+              <span v-else-if="getDisplaySubtitle()" class="text-xs text-tg-hint">
+                · {{ getDisplaySubtitle() }}
+              </span>
+              <span class="ml-auto text-sm text-tg-hint">
+                {{ formatConfidence(store.currentItem.confidence) }}
+              </span>
+            </div>
+
+            <!-- Parent Activity/Project Badge -->
+            <div v-if="getParentActivity()" class="mb-2">
+              <span class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs text-tg-hint">
+                📁 {{ getParentActivity() }}
+              </span>
+            </div>
+
+            <!-- Title -->
+            <h2 class="text-lg font-bold text-tg-text mb-2">
+              {{ getDisplayTitle() }}
+            </h2>
+
+            <!-- Description if available -->
+            <p v-if="store.currentItem.target?.description" class="text-sm text-tg-text mb-3">
+              {{ store.currentItem.target.description }}
+            </p>
+
+            <!-- Metadata badges row -->
+            <div v-if="getCounterparty() || getDueDate() || getPriority()" class="flex flex-wrap gap-2 mb-3">
+              <span v-if="getCounterparty()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
+                👤 {{ getCounterparty() }}
+              </span>
+              <span v-if="getDueDate()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
+                📅 {{ getDueDate() }}
+              </span>
+              <span v-if="getPriority()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
+                {{ getPriority() }}
+              </span>
+            </div>
+
+            <!-- Source Quote (reasoning/context) -->
+            <div v-if="store.currentItem.sourceQuote" class="mt-3 pt-3 border-t border-tg-secondary-bg">
+              <p class="text-xs text-tg-hint mb-1">Источник:</p>
+              <blockquote class="border-l-2 border-tg-accent pl-3 py-1 text-sm text-tg-hint italic">
+                "{{ store.currentItem.sourceQuote }}"
+              </blockquote>
+            </div>
+
+            <!-- Status indicator for current item -->
+            <div
+              v-if="store.currentItem.status !== 'pending'"
+              class="mt-4 px-3 py-2 rounded-lg text-sm text-center"
+              :class="{
+                'bg-green-500/10 text-green-500': store.currentItem.status === 'approved',
+                'bg-red-500/10 text-red-500': store.currentItem.status === 'rejected',
+              }"
+            >
+              {{ store.currentItem.status === 'approved' ? 'Подтверждено' : 'Отклонено' }}
+            </div>
+          </div>
+
+          <!-- Batch Actions -->
+          <div v-if="store.progress.pending > 1" class="mt-4 p-4 bg-tg-secondary-bg rounded-xl">
+            <p class="text-sm text-tg-hint mb-3 text-center">
+              Быстрые действия для всех {{ store.progress.pending }} ожидающих
+            </p>
+            <div class="flex gap-2">
+              <button
+                class="btn btn-secondary flex-1 text-green-500"
+                :disabled="store.isProcessing"
+                @click="handleApproveAll"
+              >
+                Все подтвердить
+              </button>
+              <button
+                class="btn btn-secondary flex-1 text-red-500"
+                :disabled="store.isProcessing"
+                @click="handleRejectAll"
+              >
+                Все отклонить
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Card -->
-      <div class="flex-1 p-4 overflow-y-auto">
-        <div class="card">
-          <!-- Type Badge + Confidence -->
-          <div class="flex items-center gap-2 mb-3">
-            <span class="w-6 h-6 flex items-center justify-center rounded-full bg-tg-secondary-bg text-xs font-medium text-tg-accent">
-              {{ getTypeIcon(store.currentItem.itemType) }}
-            </span>
-            <span class="text-sm font-medium text-tg-accent">
-              {{ getTypeName(store.currentItem.itemType) }}
-            </span>
-            <span v-if="getCommitmentTypeName()" class="text-xs text-tg-hint">
-              · {{ getCommitmentTypeName() }}
-            </span>
-            <span v-else-if="getDisplaySubtitle()" class="text-xs text-tg-hint">
-              · {{ getDisplaySubtitle() }}
-            </span>
-            <span class="ml-auto text-sm text-tg-hint">
-              {{ formatConfidence(store.currentItem.confidence) }}
-            </span>
-          </div>
-
-          <!-- Parent Activity/Project Badge -->
-          <div v-if="getParentActivity()" class="mb-2">
-            <span class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs text-tg-hint">
-              📁 {{ getParentActivity() }}
-            </span>
-          </div>
-
-          <!-- Title -->
-          <h2 class="text-lg font-bold text-tg-text mb-2">
-            {{ getDisplayTitle() }}
-          </h2>
-
-          <!-- Description if available -->
-          <p v-if="store.currentItem.target?.description" class="text-sm text-tg-text mb-3">
-            {{ store.currentItem.target.description }}
-          </p>
-
-          <!-- Metadata badges row -->
-          <div v-if="getCounterparty() || getDueDate() || getPriority()" class="flex flex-wrap gap-2 mb-3">
-            <span v-if="getCounterparty()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
-              👤 {{ getCounterparty() }}
-            </span>
-            <span v-if="getDueDate()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
-              📅 {{ getDueDate() }}
-            </span>
-            <span v-if="getPriority()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
-              {{ getPriority() }}
-            </span>
-          </div>
-
-          <!-- Source Quote (reasoning/context) -->
-          <div v-if="store.currentItem.sourceQuote" class="mt-3 pt-3 border-t border-tg-secondary-bg">
-            <p class="text-xs text-tg-hint mb-1">Источник:</p>
-            <blockquote class="border-l-2 border-tg-accent pl-3 py-1 text-sm text-tg-hint italic">
-              "{{ store.currentItem.sourceQuote }}"
-            </blockquote>
-          </div>
-
-          <!-- Status indicator for current item -->
-          <div
-            v-if="store.currentItem.status !== 'pending'"
-            class="mt-4 px-3 py-2 rounded-lg text-sm text-center"
-            :class="{
-              'bg-green-500/10 text-green-500': store.currentItem.status === 'approved',
-              'bg-red-500/10 text-red-500': store.currentItem.status === 'rejected',
-            }"
-          >
-            {{ store.currentItem.status === 'approved' ? 'Подтверждено' : 'Отклонено' }}
-          </div>
-        </div>
-
-        <!-- Batch Actions -->
-        <div v-if="store.progress.pending > 1" class="mt-4 p-4 bg-tg-secondary-bg rounded-xl">
-          <p class="text-sm text-tg-hint mb-3 text-center">
-            Быстрые действия для всех {{ store.progress.pending }} ожидающих
-          </p>
-          <div class="flex gap-2">
-            <button
-              class="btn btn-secondary flex-1 text-green-500"
-              :disabled="store.isProcessing"
-              @click="handleApproveAll"
-            >
-              Все подтвердить
-            </button>
-            <button
-              class="btn btn-secondary flex-1 text-red-500"
-              :disabled="store.isProcessing"
-              @click="handleRejectAll"
-            >
-              Все отклонить
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Navigation & Actions -->
-      <div class="shrink-0 p-4 border-t border-tg-secondary-bg">
+      <!-- Fixed Navigation & Actions Footer -->
+      <div
+        class="fixed bottom-0 left-0 right-0 p-4 border-t border-tg-secondary-bg bg-tg-bg z-20"
+        :style="{ paddingBottom: 'calc(var(--tg-content-safe-area-inset-bottom, 0px) + 1rem)' }"
+      >
         <!-- Primary action -->
         <button
           class="btn btn-primary w-full mb-3"
@@ -438,7 +444,7 @@ onUnmounted(() => {
     </template>
 
     <!-- Empty state -->
-    <div v-else class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+    <div v-else class="min-h-screen flex flex-col items-center justify-center p-6 text-center">
       <div class="text-6xl mb-4">
 
       </div>
