@@ -174,8 +174,18 @@ class ApiClient {
         target?: {
           name?: string
           title?: string
+          description?: string
           value?: string
           factType?: string
+          typeName?: string
+          dueDate?: string
+          priority?: number
+          fromEntity?: { id: string; name: string } | null
+          toEntity?: { id: string; name: string } | null
+          parentActivity?: { id: string; name: string } | null
+          ownerEntity?: { id: string; name: string } | null
+          clientEntity?: { id: string; name: string } | null
+          preview?: string
         }
       }>
       total: number
@@ -196,8 +206,18 @@ class ApiClient {
       target?: {
         name?: string
         title?: string
+        description?: string
         value?: string
         factType?: string
+        typeName?: string
+        dueDate?: string
+        priority?: number
+        fromEntity?: { id: string; name: string } | null
+        toEntity?: { id: string; name: string } | null
+        parentActivity?: { id: string; name: string } | null
+        ownerEntity?: { id: string; name: string } | null
+        clientEntity?: { id: string; name: string } | null
+        preview?: string
       }
     }>(`/pending-approval/${id}`)
   }

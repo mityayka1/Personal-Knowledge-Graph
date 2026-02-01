@@ -16,22 +16,20 @@ export interface PendingApprovalItem {
     title?: string
     value?: string
     preview?: string
+    description?: string
+    dueDate?: string
+    priority?: number
     // Fact fields
     factType?: string
     // Commitment fields
-    description?: string
     type?: string
     typeName?: string
-    dueDate?: string
-    priority?: string
-    fromEntity?: {
-      id: string
-      name: string
-    }
-    toEntity?: {
-      id: string
-      name: string
-    }
+    fromEntity?: { id: string; name: string } | null
+    toEntity?: { id: string; name: string } | null
+    // Activity fields (task/project)
+    parentActivity?: { id: string; name: string } | null
+    ownerEntity?: { id: string; name: string } | null
+    clientEntity?: { id: string; name: string } | null
   }
 }
 

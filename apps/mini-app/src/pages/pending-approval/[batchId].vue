@@ -99,6 +99,38 @@ function getDueDate(): string | null {
   })
 }
 
+function getParentActivity(): string | null {
+  const item = store.currentItem
+  return item?.target?.parentActivity?.name || null
+}
+
+function getPriority(): string | null {
+  const item = store.currentItem
+  if (!item?.target?.priority) return null
+
+  const priorities: Record<number, string> = {
+    1: '🔴 Высокий',
+    2: '🟡 Средний',
+    3: '🟢 Низкий',
+  }
+  return priorities[item.target.priority] || null
+}
+
+function getCommitmentTypeName(): string | null {
+  const item = store.currentItem
+  if (item?.itemType !== 'commitment' || !item.target?.typeName) return null
+
+  const typeNames: Record<string, string> = {
+    promise: 'Обещание',
+    request: 'Просьба',
+    offer: 'Предложение',
+    agreement: 'Договорённость',
+    deadline: 'Дедлайн',
+    task: 'Задача',
+  }
+  return typeNames[item.target.typeName] || item.target.typeName
+}
+
 async function handleApprove() {
   haptics.confirm()
   await store.approve()
@@ -180,7 +212,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col overflow-hidden">
+  <div class="min-h-screen flex flex-col" style="padding-top: var(--tg-content-safe-area-inset-top, 0px); padding-bottom: var(--tg-content-safe-area-inset-bottom, 0px);">
     <!-- Loading -->
     <div v-if="store.loading" class="flex-1 flex items-center justify-center">
       <LoadingSpinner size="lg" />
@@ -267,11 +299,21 @@ onUnmounted(() => {
             <span class="text-sm font-medium text-tg-accent">
               {{ getTypeName(store.currentItem.itemType) }}
             </span>
-            <span v-if="getDisplaySubtitle()" class="text-xs text-tg-hint">
+            <span v-if="getCommitmentTypeName()" class="text-xs text-tg-hint">
+              · {{ getCommitmentTypeName() }}
+            </span>
+            <span v-else-if="getDisplaySubtitle()" class="text-xs text-tg-hint">
               · {{ getDisplaySubtitle() }}
             </span>
             <span class="ml-auto text-sm text-tg-hint">
               {{ formatConfidence(store.currentItem.confidence) }}
+            </span>
+          </div>
+
+          <!-- Parent Activity/Project Badge -->
+          <div v-if="getParentActivity()" class="mb-2">
+            <span class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs text-tg-hint">
+              📁 {{ getParentActivity() }}
             </span>
           </div>
 
@@ -285,21 +327,22 @@ onUnmounted(() => {
             {{ store.currentItem.target.description }}
           </p>
 
-          <!-- Counterparty & Due Date row -->
-          <div v-if="getCounterparty() || getDueDate()" class="flex flex-wrap gap-3 mb-3">
-            <div v-if="getCounterparty()" class="flex items-center gap-1 text-sm">
-              <span class="text-tg-hint">👤</span>
-              <span class="text-tg-text">{{ getCounterparty() }}</span>
-            </div>
-            <div v-if="getDueDate()" class="flex items-center gap-1 text-sm">
-              <span class="text-tg-hint">📅</span>
-              <span class="text-tg-text">{{ getDueDate() }}</span>
-            </div>
+          <!-- Metadata badges row -->
+          <div v-if="getCounterparty() || getDueDate() || getPriority()" class="flex flex-wrap gap-2 mb-3">
+            <span v-if="getCounterparty()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
+              👤 {{ getCounterparty() }}
+            </span>
+            <span v-if="getDueDate()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
+              📅 {{ getDueDate() }}
+            </span>
+            <span v-if="getPriority()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
+              {{ getPriority() }}
+            </span>
           </div>
 
-          <!-- Source Quote -->
-          <div v-if="store.currentItem.sourceQuote && store.currentItem.target?.title" class="mt-3 pt-3 border-t border-tg-secondary-bg">
-            <p class="text-xs text-tg-hint mb-1">Из переписки:</p>
+          <!-- Source Quote (reasoning/context) -->
+          <div v-if="store.currentItem.sourceQuote" class="mt-3 pt-3 border-t border-tg-secondary-bg">
+            <p class="text-xs text-tg-hint mb-1">Источник:</p>
             <blockquote class="border-l-2 border-tg-accent pl-3 py-1 text-sm text-tg-hint italic">
               "{{ store.currentItem.sourceQuote }}"
             </blockquote>

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PendingApproval, CommitmentType } from '@pkg/entities';
 import { CommitmentService } from '../../activity/commitment.service';
+import { ActivityService } from '../../activity/activity.service';
 import { PendingApprovalItemType } from '@pkg/entities';
 
 /**
@@ -11,7 +12,10 @@ import { PendingApprovalItemType } from '@pkg/entities';
 export class MiniAppMapperService {
   private readonly logger = new Logger(MiniAppMapperService.name);
 
-  constructor(private readonly commitmentService: CommitmentService) {}
+  constructor(
+    private readonly commitmentService: CommitmentService,
+    private readonly activityService: ActivityService,
+  ) {}
 
   // ─────────────────────────────────────────────────────────────
   // Pending Approval Mapping
@@ -54,6 +58,30 @@ export class MiniAppMapperService {
             : null,
           toEntity: commitment.toEntity
             ? { id: commitment.toEntity.id, name: commitment.toEntity.name }
+            : null,
+          preview: approval.sourceQuote?.substring(0, 200),
+        };
+      }
+
+      // TASK and PROJECT are Activity entities
+      if (
+        approval.itemType === PendingApprovalItemType.TASK ||
+        approval.itemType === PendingApprovalItemType.PROJECT
+      ) {
+        const activity = await this.activityService.findOne(approval.targetId);
+        return {
+          title: activity.name,
+          description: activity.description,
+          dueDate: activity.deadline?.toISOString(),
+          priority: activity.priority,
+          parentActivity: activity.parent
+            ? { id: activity.parent.id, name: activity.parent.name }
+            : null,
+          ownerEntity: activity.ownerEntity
+            ? { id: activity.ownerEntity.id, name: activity.ownerEntity.name }
+            : null,
+          clientEntity: activity.clientEntity
+            ? { id: activity.clientEntity.id, name: activity.clientEntity.name }
             : null,
           preview: approval.sourceQuote?.substring(0, 200),
         };
