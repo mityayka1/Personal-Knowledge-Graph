@@ -80,9 +80,22 @@ export class TelegramAuthGuard implements CanActivate {
     );
 
     // Auth bypass for debugging (DANGER: only use in development!)
-    this.bypassAuth = this.configService.get<string>('MINI_APP_AUTH_BYPASS', 'false') === 'true';
-    if (this.bypassAuth) {
-      this.logger.warn('⚠️ MINI_APP_AUTH_BYPASS=true - TelegramAuthGuard is DISABLED! DO NOT USE IN PRODUCTION!');
+    const bypassRequested = this.configService.get<string>('MINI_APP_AUTH_BYPASS', 'false') === 'true';
+    if (bypassRequested) {
+      if (process.env.NODE_ENV === 'production') {
+        this.logger.error(
+          'CRITICAL: MINI_APP_AUTH_BYPASS=true in PRODUCTION environment! ' +
+            'Ignoring bypass for security. Remove this env var immediately.',
+        );
+        this.bypassAuth = false;
+      } else {
+        this.logger.warn(
+          '⚠️ MINI_APP_AUTH_BYPASS=true - TelegramAuthGuard is DISABLED! DO NOT USE IN PRODUCTION!',
+        );
+        this.bypassAuth = true;
+      }
+    } else {
+      this.bypassAuth = false;
     }
 
     // Parse whitelist of allowed Telegram user IDs
@@ -100,6 +113,12 @@ export class TelegramAuthGuard implements CanActivate {
         `Mini App access whitelist enabled: ${this.allowedUserIds.size} user(s)`,
       );
     } else {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(
+          'CRITICAL: ALLOWED_TELEGRAM_IDS must be configured in production! ' +
+            'Mini App cannot start without a user whitelist for security reasons.',
+        );
+      }
       this.logger.warn(
         'ALLOWED_TELEGRAM_IDS not configured - Mini App is open to all bot users!',
       );
@@ -206,6 +225,10 @@ export class TelegramAuthGuard implements CanActivate {
 
     const now = Math.floor(Date.now() / 1000);
     if (now - authDate > this.maxAgeSeconds) {
+      // Don't leak timing details in production
+      if (process.env.NODE_ENV === 'production') {
+        throw new UnauthorizedException('initData expired');
+      }
       throw new UnauthorizedException(
         `initData expired (age: ${now - authDate}s, max: ${this.maxAgeSeconds}s)`,
       );

@@ -271,6 +271,18 @@ export class TelegramMiniAppController {
       throw new NotFoundException('Recall session not found or expired');
     }
 
+    // Verify user has access to this session (IDOR prevention)
+    const hasAccess = await this.recallSessionService.verifyUser(
+      sessionId,
+      String(user.id),
+    );
+    if (!hasAccess) {
+      this.logger.warn(
+        `User ${user.id} attempted to access session ${sessionId} owned by ${session.userId}`,
+      );
+      throw new NotFoundException('Recall session not found or expired');
+    }
+
     return {
       id: session.id,
       query: session.query,
