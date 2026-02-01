@@ -79,7 +79,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn('Owner chat ID not configured. Notifications will not be sent.');
     }
 
-    this.bot = new Telegraf(botToken);
+    this.bot = new Telegraf(botToken, {
+      handlerTimeout: 300_000, // 5 minutes - for long-running commands like /daily
+    });
 
     // Security middleware: check if user is allowed
     this.bot.use(async (ctx, next) => {

@@ -55,6 +55,14 @@ N8N_PASSWORD=generate-secure-password-here
 
 # CLAUDE CLI (path to credentials after `claude login`)
 CLAUDE_CREDENTIALS_PATH=~/.claude
+
+# TELEGRAM MINI APP (optional)
+# Bot token for Mini App auth validation
+TELEGRAM_BOT_TOKEN=your-bot-token
+# Comma-separated list of allowed Telegram user IDs (whitelist)
+ALLOWED_TELEGRAM_IDS=123456789,987654321
+# DANGEROUS: Set to true ONLY for local development without Telegram auth
+MINI_APP_AUTH_BYPASS=false
 ```
 
 **Генерация безопасных ключей:**
@@ -137,7 +145,22 @@ cd /opt/apps/pkg/docker
 docker compose build
 ```
 
-### 5. Запуск сервисов
+### 5. Сборка Mini App
+
+Mini App — это Vue.js приложение, которое раздаётся как статика через Nginx.
+
+```bash
+cd /opt/apps/pkg/apps/mini-app
+pnpm build
+```
+
+**Важно:** При обновлении кода Mini App всегда пересобирайте его:
+```bash
+git pull origin <branch>
+cd apps/mini-app && pnpm build
+```
+
+### 6. Запуск сервисов
 
 ```bash
 # Запуск всех сервисов
@@ -150,7 +173,7 @@ docker compose ps
 docker compose logs -f
 ```
 
-### 6. Проверка работоспособности
+### 7. Проверка работоспособности
 
 ```bash
 # Health check PKG Core
@@ -169,7 +192,7 @@ curl http://localhost:3004/health
 curl http://localhost:5678/healthz
 ```
 
-### 7. Первоначальная настройка n8n
+### 8. Первоначальная настройка n8n
 
 n8n 2.0+ использует User Management вместо Basic Auth. При первом запуске:
 
@@ -189,6 +212,42 @@ n8n 2.0+ использует User Management вместо Basic Auth. При п
 > ```bash
 > docker compose restart n8n
 > ```
+
+### 9. Настройка Telegram Mini App
+
+Telegram Mini App используется для управления pending approvals (извлечённые проекты, задачи, обязательства).
+
+**Переменные окружения:**
+
+| Переменная | Описание | Обязательно |
+|------------|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Token бота для валидации initData | Да |
+| `ALLOWED_TELEGRAM_IDS` | Whitelist user IDs (через запятую) | Да |
+| `MINI_APP_AUTH_BYPASS` | **⚠️ ОПАСНО:** отключает auth | Нет (default: false) |
+
+**⚠️ КРИТИЧЕСКИ ВАЖНО:**
+
+- `MINI_APP_AUTH_BYPASS=true` полностью **отключает авторизацию** Mini App API!
+- Использовать **ТОЛЬКО** для локальной разработки
+- В production **ВСЕГДА** `MINI_APP_AUTH_BYPASS=false` или не указывать
+
+**Проверка настройки:**
+
+```bash
+# Проверить что auth включён
+docker compose logs pkg-core | grep "Mini App"
+# Должно быть: "Mini App access whitelist enabled: N user(s)"
+# НЕ должно быть: "⚠️ MINI_APP_AUTH_BYPASS=true"
+```
+
+**Telegram Adapter переменные для deep-links:**
+
+| Переменная | Описание | Пример |
+|------------|----------|--------|
+| `MINI_APP_URL` | URL Mini App | `https://tlg-mini-app.example.com` |
+| `TELEGRAM_MINI_APP_URL` | Алиас для совместимости | то же самое |
+
+Обе переменные поддерживаются для backward compatibility. Telegram Adapter проверяет сначала `MINI_APP_URL`, затем `TELEGRAM_MINI_APP_URL`.
 
 ---
 

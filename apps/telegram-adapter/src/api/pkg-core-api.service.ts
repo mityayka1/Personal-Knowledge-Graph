@@ -169,11 +169,16 @@ export interface RescheduleResponse {
 // Carousel API Types
 // ============================================
 
+// Telegram inline keyboard button types
+export type TelegramCallbackButton = { text: string; callback_data: string };
+export type TelegramWebAppButton = { text: string; web_app: { url: string } };
+export type TelegramInlineButton = TelegramCallbackButton | TelegramWebAppButton;
+
 export interface CarouselNavResponse {
   success: boolean;
   complete: boolean;
   message?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramInlineButton>>;
   chatId?: string;
   messageId?: number;
   processedCount?: number;
@@ -306,85 +311,86 @@ export interface DailyExtractResponse {
 }
 
 // ============================================
-// Extraction Carousel API Types (Phase 2.5: Jarvis)
+// PendingApproval API Types
 // ============================================
 
-export interface ExtractionCarouselItem {
+export type PendingApprovalItemType = 'project' | 'task' | 'commitment';
+export type PendingApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export interface PendingApprovalItem {
   id: string;
-  type: 'project' | 'task' | 'commitment';
-  data: ExtractedProject | ExtractedTask | ExtractedCommitment;
+  itemType: PendingApprovalItemType;
+  targetId: string;
+  batchId: string;
+  status: PendingApprovalStatus;
+  confidence: number;
+  sourceQuote?: string;
+  sourceInteractionId?: string;
+  messageRef?: string;
+  createdAt: string;
+  reviewedAt?: string;
 }
 
-export interface CreateExtractionCarouselDto {
-  chatId: string;
-  messageId: number;
-  projects: ExtractedProject[];
-  tasks: ExtractedTask[];
-  commitments: ExtractedCommitment[];
-  synthesisDate?: string;
-  focusTopic?: string;
+export interface PendingApprovalListResponse {
+  items: PendingApprovalItem[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
-export interface CreateExtractionCarouselResponse {
+export interface PendingApprovalBatchStats {
+  batchId: string;
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface PendingApprovalActionResponse {
   success: boolean;
-  carouselId?: string;
-  total?: number;
-  message?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
-  error?: string;
+  id: string;
 }
 
-export interface ExtractionCarouselNavResponse {
-  success: boolean;
-  complete: boolean;
-  item?: ExtractionCarouselItem;
-  message?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
-  chatId?: string;
-  messageId?: number;
-  index?: number;
-  total?: number;
-  remaining?: number;
-  error?: string;
+export interface PendingApprovalBatchActionResponse {
+  batchId: string;
+  processed: number;
+  failed: number;
+  errors?: string[];
 }
 
-export interface ExtractionCarouselStatsResponse {
-  success: boolean;
-  stats?: {
-    total: number;
-    processed: number;
-    confirmed: number;
-    skipped: number;
-    confirmedByType: { projects: number; tasks: number; commitments: number };
-  };
-  error?: string;
-}
-
-export interface ExtractionCarouselConfirmedResponse {
-  success: boolean;
-  projects?: ExtractedProject[];
-  tasks?: ExtractedTask[];
-  commitments?: ExtractedCommitment[];
-  error?: string;
-}
-
-export interface PersistExtractionDto {
+export interface ExtractAndSaveDto {
+  synthesisText: string;
   ownerEntityId: string;
+  date?: string;
+  focusTopic?: string;
+  messageRef?: string;
+  sourceInteractionId?: string;
 }
 
-export interface PersistExtractionResult {
-  activityIds: string[];
-  commitmentIds: string[];
-  projectsCreated: number;
-  tasksCreated: number;
-  commitmentsCreated: number;
-  errors: Array<{ item: string; error: string }>;
-}
-
-export interface PersistExtractionResponse {
-  success: boolean;
-  result?: PersistExtractionResult;
-  error?: string;
+export interface ExtractAndSaveResponse {
+  batchId: string;
+  counts: {
+    projects: number;
+    tasks: number;
+    commitments: number;
+  };
+  approvals: Array<{
+    id: string;
+    itemType: PendingApprovalItemType;
+    targetId: string;
+    confidence: number;
+    sourceQuote?: string;
+  }>;
+  extraction: {
+    projectsExtracted: number;
+    tasksExtracted: number;
+    commitmentsExtracted: number;
+    relationsInferred: number;
+    summary: string;
+    tokensUsed: number;
+    durationMs: number;
+  };
+  errors?: string[];
 }
 
 @Injectable()
@@ -1135,124 +1141,127 @@ export class PkgCoreApiService {
   }
 
   // ============================================
-  // Extraction Carousel API Methods (Phase 2.5: Jarvis)
+  // PendingApproval API Methods
   // ============================================
 
   /**
-   * Create extraction carousel from extraction results.
-   * Returns the carousel ID and first item for display.
-   */
-  async createExtractionCarousel(
-    dto: CreateExtractionCarouselDto,
-  ): Promise<CreateExtractionCarouselResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.post<CreateExtractionCarouselResponse>(
-        '/extraction-carousel',
-        dto,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Navigate to next item in extraction carousel
-   */
-  async extractionCarouselNext(
-    carouselId: string,
-  ): Promise<ExtractionCarouselNavResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.post<ExtractionCarouselNavResponse>(
-        `/extraction-carousel/${carouselId}/next`,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Navigate to previous item in extraction carousel
-   */
-  async extractionCarouselPrev(
-    carouselId: string,
-  ): Promise<ExtractionCarouselNavResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.post<ExtractionCarouselNavResponse>(
-        `/extraction-carousel/${carouselId}/prev`,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Confirm current item and navigate to next
-   */
-  async extractionCarouselConfirm(
-    carouselId: string,
-  ): Promise<ExtractionCarouselNavResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.post<ExtractionCarouselNavResponse>(
-        `/extraction-carousel/${carouselId}/confirm`,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Skip current item and navigate to next
-   */
-  async extractionCarouselSkip(
-    carouselId: string,
-  ): Promise<ExtractionCarouselNavResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.post<ExtractionCarouselNavResponse>(
-        `/extraction-carousel/${carouselId}/skip`,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Get extraction carousel statistics
-   */
-  async getExtractionCarouselStats(
-    carouselId: string,
-  ): Promise<ExtractionCarouselStatsResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.get<ExtractionCarouselStatsResponse>(
-        `/extraction-carousel/${carouselId}/stats`,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Get confirmed items from extraction carousel for persistence
-   */
-  async getExtractionCarouselConfirmed(
-    carouselId: string,
-  ): Promise<ExtractionCarouselConfirmedResponse> {
-    return this.withRetry(async () => {
-      const response = await this.client.get<ExtractionCarouselConfirmedResponse>(
-        `/extraction-carousel/${carouselId}/confirmed`,
-      );
-      return response.data;
-    });
-  }
-
-  /**
-   * Persist confirmed extraction items as Activity/Commitment entities
-   * Call this when carousel is complete to save confirmed items to database.
+   * Extract data from synthesis and save as draft entities with PendingApproval.
    *
-   * @param carouselId Carousel ID
-   * @param ownerEntityId Owner entity ID (user's entity)
+   * @param dto Extraction parameters
+   * @param timeout Optional timeout in ms (default: 120000 for LLM operations)
    */
-  async persistExtractionCarousel(
-    carouselId: string,
-    ownerEntityId: string,
-  ): Promise<PersistExtractionResponse> {
+  async extractAndSave(
+    dto: ExtractAndSaveDto,
+    timeout = 120000,
+  ): Promise<ExtractAndSaveResponse> {
     return this.withRetry(async () => {
-      const response = await this.client.post<PersistExtractionResponse>(
-        `/extraction-carousel/${carouselId}/persist`,
-        { ownerEntityId } as PersistExtractionDto,
+      const response = await this.client.post<ExtractAndSaveResponse>(
+        '/extraction/daily/extract-and-save',
+        dto,
+        { timeout },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * List pending approvals with optional filters.
+   */
+  async listPendingApprovals(options?: {
+    batchId?: string;
+    status?: PendingApprovalStatus;
+    limit?: number;
+    offset?: number;
+  }): Promise<PendingApprovalListResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<PendingApprovalListResponse>(
+        '/pending-approval',
+        { params: options },
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Get a single pending approval by ID.
+   */
+  async getPendingApproval(id: string): Promise<PendingApprovalItem | null> {
+    try {
+      const response = await this.client.get<PendingApprovalItem>(
+        `/pending-approval/${id}`,
+      );
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get batch statistics for pending approvals.
+   */
+  async getPendingApprovalBatchStats(
+    batchId: string,
+  ): Promise<PendingApprovalBatchStats> {
+    return this.withRetry(async () => {
+      const response = await this.client.get<PendingApprovalBatchStats>(
+        `/pending-approval/batch/${batchId}/stats`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Approve a single pending item.
+   * Transitions draft entity to active status.
+   */
+  async approvePendingItem(id: string): Promise<PendingApprovalActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalActionResponse>(
+        `/pending-approval/${id}/approve`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject a single pending item.
+   * Soft-deletes the draft entity.
+   */
+  async rejectPendingItem(id: string): Promise<PendingApprovalActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalActionResponse>(
+        `/pending-approval/${id}/reject`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Approve all pending items in a batch.
+   */
+  async approvePendingBatch(
+    batchId: string,
+  ): Promise<PendingApprovalBatchActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalBatchActionResponse>(
+        `/pending-approval/batch/${batchId}/approve`,
+      );
+      return response.data;
+    });
+  }
+
+  /**
+   * Reject all pending items in a batch.
+   */
+  async rejectPendingBatch(
+    batchId: string,
+  ): Promise<PendingApprovalBatchActionResponse> {
+    return this.withRetry(async () => {
+      const response = await this.client.post<PendingApprovalBatchActionResponse>(
+        `/pending-approval/batch/${batchId}/reject`,
       );
       return response.data;
     });

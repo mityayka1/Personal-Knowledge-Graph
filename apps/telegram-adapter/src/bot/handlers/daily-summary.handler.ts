@@ -1,18 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Context } from 'telegraf';
 import { Message } from 'telegraf/typings/core/types/typegram';
 import {
   PkgCoreApiService,
   RecallSource,
-  ExtractionCarouselNavResponse,
+  PendingApprovalItem,
 } from '../../api/pkg-core-api.service';
 import { DailyContextCacheService } from '../../common/cache';
 
 /** Callback prefix for daily summary actions */
 const DAILY_CALLBACK_PREFIX = 'ds_';
 
-/** Callback prefix for extraction carousel actions */
-const EXTRACTION_CAROUSEL_PREFIX = 'exc_';
+/** Callback prefix for pending approval actions */
+const PENDING_APPROVAL_PREFIX = 'pa_';
 
 /** Valid model values */
 type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
@@ -29,11 +30,38 @@ type ClaudeModel = 'haiku' | 'sonnet' | 'opus';
 @Injectable()
 export class DailySummaryHandler {
   private readonly logger = new Logger(DailySummaryHandler.name);
+  private readonly miniAppUrl: string | undefined;
 
   constructor(
     private readonly pkgCoreApi: PkgCoreApiService,
     private readonly dailyContextCache: DailyContextCacheService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    // Support both MINI_APP_URL and TELEGRAM_MINI_APP_URL for backward compatibility
+    this.miniAppUrl =
+      this.configService.get<string>('MINI_APP_URL') ||
+      this.configService.get<string>('TELEGRAM_MINI_APP_URL');
+  }
+
+  /**
+   * Generate Mini App URL for deep linking.
+   * Format: https://t.me/BotUsername/app?startapp=<type>_<id>
+   */
+  private getMiniAppButton(
+    type: 'extraction' | 'brief' | 'recall' | 'entity' | 'approval',
+    id: string,
+    text = '📱 Открыть в приложении',
+  ): { text: string; web_app: { url: string } } | null {
+    if (!this.miniAppUrl) {
+      return null;
+    }
+
+    const startParam = `${type}_${id}`;
+    return {
+      text,
+      web_app: { url: `${this.miniAppUrl}?startapp=${startParam}` },
+    };
+  }
 
   /**
    * Check if this handler can process the callback
@@ -41,7 +69,7 @@ export class DailySummaryHandler {
   canHandle(callbackData: string): boolean {
     return (
       callbackData.startsWith(DAILY_CALLBACK_PREFIX) ||
-      callbackData.startsWith(EXTRACTION_CAROUSEL_PREFIX)
+      callbackData.startsWith(PENDING_APPROVAL_PREFIX)
     );
   }
 
@@ -61,8 +89,8 @@ export class DailySummaryHandler {
       await this.handleSaveCallback(ctx, callbackData);
     } else if (callbackData.startsWith('ds_extract:')) {
       await this.handleExtractCallback(ctx, callbackData);
-    } else if (callbackData.startsWith('exc_')) {
-      await this.handleCarouselCallback(ctx, callbackData);
+    } else if (callbackData.startsWith('pa_')) {
+      await this.handlePendingApprovalCallback(ctx, callbackData);
     } else if (callbackData === 'ds_noop') {
       await ctx.answerCbQuery();
     } else {
@@ -122,7 +150,8 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Handle extract callback — extract structured data from synthesis and show carousel
+   * Handle extract callback — extract structured data and create draft entities.
+   * Uses new PendingApproval-based flow (DB instead of Redis carousel).
    */
   private async handleExtractCallback(ctx: Context, callbackData: string): Promise<void> {
     const match = callbackData.match(/^ds_extract:(\d+)$/);
@@ -154,24 +183,27 @@ export class DailySummaryHandler {
 
     const session = sessionResponse.data;
 
+    // Get owner entity for extraction
+    const owner = await this.pkgCoreApi.getOwnerEntity();
+    if (!owner) {
+      await ctx.answerCbQuery('Владелец не найден');
+      await ctx.reply('⚠️ Не найден владелец (entity "me"). Используйте /settings для настройки.');
+      return;
+    }
+
     await ctx.answerCbQuery('📈 Извлекаю структуру...');
 
     try {
-      // Step 1: Extract structured data from session (via sessionId)
-      const extractResult = await this.pkgCoreApi.extractFromSession(
-        sessionId,
-        undefined, // focusTopic
-        session.model, // use same model as recall
-      );
+      // Use new extractAndSave flow — creates draft entities + pending approvals in DB
+      const result = await this.pkgCoreApi.extractAndSave({
+        synthesisText: session.answer,
+        ownerEntityId: owner.id,
+        date: session.dateStr,
+        messageRef: `telegram:chat:${chatId}:msg:${messageId}`,
+        sourceInteractionId: undefined, // No specific interaction
+      });
 
-      if (!extractResult.success) {
-        await ctx.reply('❌ Ошибка извлечения структуры');
-        this.logger.error('Failed to extract daily synthesis');
-        return;
-      }
-
-      const { projects, tasks, commitments } = extractResult.data;
-      const totalItems = projects.length + tasks.length + commitments.length;
+      const totalItems = result.counts.projects + result.counts.tasks + result.counts.commitments;
 
       if (totalItems === 0) {
         await this.updateButtonStatus(ctx, messageId, 'extracted');
@@ -180,49 +212,33 @@ export class DailySummaryHandler {
       }
 
       this.logger.log(
-        `Daily extraction completed: ${projects.length} projects, ` +
-          `${tasks.length} tasks, ${commitments.length} commitments`,
+        `Daily extraction completed (new flow): batchId=${result.batchId}, ` +
+          `${result.counts.projects} projects, ${result.counts.tasks} tasks, ` +
+          `${result.counts.commitments} commitments`,
       );
 
-      // Step 2: Show summary first
-      const summaryText = this.formatExtractionSummary(extractResult.data);
-      await ctx.reply(summaryText, { parse_mode: 'HTML' });
-
-      // Step 3: Create carousel with extracted items
-      // Send placeholder message first to get message ID
-      const carouselMessage = await ctx.reply('⏳ Создаю карусель для подтверждения...') as Message.TextMessage;
-
-      const carouselResult = await this.pkgCoreApi.createExtractionCarousel({
-        chatId: String(chatId),
-        messageId: carouselMessage.message_id,
-        projects,
-        tasks,
-        commitments,
-        synthesisDate: session.dateStr,
-      });
-
-      if (!carouselResult.success) {
-        await ctx.telegram.editMessageText(
-          chatId,
-          carouselMessage.message_id,
-          undefined,
-          `❌ Ошибка создания карусели: ${carouselResult.error}`,
-        );
-        return;
-      }
-
-      // Step 4: Update message with first carousel item
+      // Show summary with approve/reject buttons
+      const summaryText = this.formatNewExtractionSummary(result);
       await this.updateButtonStatus(ctx, messageId, 'extracted');
-      await this.updateCarouselMessage(ctx, chatId, carouselMessage.message_id, {
-        success: true,
-        complete: false,
-        message: carouselResult.message,
-        buttons: carouselResult.buttons,
-        chatId: String(chatId),
-        messageId: carouselMessage.message_id,
-      });
 
-      this.logger.log(`Created extraction carousel ${carouselResult.carouselId} with ${totalItems} items`);
+      await ctx.reply(summaryText, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Подтвердить все', callback_data: `pa_approve_all:${result.batchId}` },
+              { text: '❌ Отклонить все', callback_data: `pa_reject_all:${result.batchId}` },
+            ],
+            [
+              { text: '📋 Просмотреть по одному', callback_data: `pa_list:${result.batchId}:0` },
+            ],
+            // Mini App button if available (use 'approval' type for DB-based pending approval flow)
+            ...(this.miniAppUrl
+              ? [[this.getMiniAppButton('approval', result.batchId, '📱 Открыть в приложении')!]]
+              : []),
+          ],
+        },
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Extract daily synthesis error: ${errorMessage}`);
@@ -231,17 +247,9 @@ export class DailySummaryHandler {
   }
 
   /**
-   * Handle carousel navigation callbacks (prev/next/confirm/skip)
+   * Handle pending approval callbacks (new DB-based flow)
    */
-  private async handleCarouselCallback(ctx: Context, callbackData: string): Promise<void> {
-    // Parse: exc_action:carouselId
-    const match = callbackData.match(/^exc_(prev|next|confirm|skip):(.+)$/);
-    if (!match) {
-      await ctx.answerCbQuery('Неверный формат');
-      return;
-    }
-
-    const [, action, carouselId] = match;
+  private async handlePendingApprovalCallback(ctx: Context, callbackData: string): Promise<void> {
     const chatId = ctx.chat?.id;
     const messageId = ctx.callbackQuery && 'message' in ctx.callbackQuery
       ? ctx.callbackQuery.message?.message_id
@@ -252,197 +260,277 @@ export class DailySummaryHandler {
       return;
     }
 
-    await ctx.answerCbQuery();
-
     try {
-      let result: ExtractionCarouselNavResponse;
-
-      switch (action) {
-        case 'prev':
-          result = await this.pkgCoreApi.extractionCarouselPrev(carouselId);
-          break;
-        case 'next':
-          result = await this.pkgCoreApi.extractionCarouselNext(carouselId);
-          break;
-        case 'confirm':
-          result = await this.pkgCoreApi.extractionCarouselConfirm(carouselId);
-          break;
-        case 'skip':
-          result = await this.pkgCoreApi.extractionCarouselSkip(carouselId);
-          break;
-        default:
-          return;
-      }
-
-      if (!result.success) {
-        await ctx.telegram.editMessageText(
-          chatId,
-          messageId,
-          undefined,
-          `❌ Ошибка: ${result.error || 'Unknown error'}`,
-        );
-        return;
-      }
-
-      await this.updateCarouselMessage(ctx, chatId, messageId, result);
-
-      // If complete, show final summary and persist confirmed items
-      if (result.complete) {
-        await this.handleCarouselComplete(ctx, carouselId);
+      // Parse callback: pa_action:params
+      if (callbackData.startsWith('pa_approve_all:')) {
+        const batchId = callbackData.replace('pa_approve_all:', '');
+        await this.handleApproveAllBatch(ctx, batchId, messageId);
+      } else if (callbackData.startsWith('pa_reject_all:')) {
+        const batchId = callbackData.replace('pa_reject_all:', '');
+        await this.handleRejectAllBatch(ctx, batchId, messageId);
+      } else if (callbackData.startsWith('pa_list:')) {
+        const [, batchId, offsetStr] = callbackData.split(':');
+        const offset = parseInt(offsetStr, 10);
+        await this.handleListPendingItems(ctx, batchId, offset, messageId);
+      } else if (callbackData.startsWith('pa_approve:')) {
+        const itemId = callbackData.replace('pa_approve:', '');
+        await this.handleApproveItem(ctx, itemId, messageId);
+      } else if (callbackData.startsWith('pa_reject:')) {
+        const itemId = callbackData.replace('pa_reject:', '');
+        await this.handleRejectItem(ctx, itemId, messageId);
+      } else if (callbackData.startsWith('pa_next:')) {
+        const [, batchId, offsetStr] = callbackData.split(':');
+        const offset = parseInt(offsetStr, 10);
+        await this.handleListPendingItems(ctx, batchId, offset, messageId);
+      } else {
+        await ctx.answerCbQuery('Неизвестное действие');
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Carousel ${action} error: ${errorMessage}`);
-      await ctx.reply('❌ Ошибка при обработке');
+      this.logger.error(`Pending approval callback error: ${errorMessage}`);
+      await ctx.answerCbQuery('Ошибка');
     }
   }
 
   /**
-   * Update carousel message with new content and buttons
+   * Approve all pending items in a batch
    */
-  private async updateCarouselMessage(
+  private async handleApproveAllBatch(
     ctx: Context,
-    chatId: number,
+    batchId: string,
     messageId: number,
-    result: ExtractionCarouselNavResponse,
   ): Promise<void> {
-    const text = result.message || (result.complete ? '✅ Обработка завершена' : '⏳ Загрузка...');
+    await ctx.answerCbQuery('✅ Подтверждаю все...');
 
-    // If complete, remove buttons
-    const replyMarkup = result.complete
-      ? undefined
-      : result.buttons
-        ? { inline_keyboard: result.buttons }
-        : undefined;
+    const result = await this.pkgCoreApi.approvePendingBatch(batchId);
 
-    try {
-      await ctx.telegram.editMessageText(chatId, messageId, undefined, text, {
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup,
-      });
-    } catch (error) {
-      // Ignore "message is not modified" error
-      if (!(error instanceof Error) || !error.message.includes('not modified')) {
-        this.logger.debug(`Could not update carousel message: ${(error as Error).message}`);
-      }
-    }
-  }
-
-  /**
-   * Handle carousel completion - persist confirmed items
-   */
-  private async handleCarouselComplete(ctx: Context, carouselId: string): Promise<void> {
-    try {
-      const statsResult = await this.pkgCoreApi.getExtractionCarouselStats(carouselId);
-
-      if (!statsResult.success || !statsResult.stats) {
-        return;
-      }
-
-      const { confirmed, skipped, confirmedByType } = statsResult.stats;
-
-      if (confirmed === 0) {
-        if (skipped > 0) {
-          await ctx.reply(`⏭️ Все ${skipped} элементов пропущены.`);
-        }
-        return;
-      }
-
-      // Get owner entity for persistence
-      const owner = await this.pkgCoreApi.getOwnerEntity();
-      if (!owner) {
-        this.logger.warn('Owner entity not found, cannot persist extraction results');
-        await ctx.reply(
-          `⚠️ Подтверждено ${confirmed} элементов, но не найден владелец для сохранения.\n` +
-            'Используйте /settings для настройки.',
-          { parse_mode: 'HTML' },
-        );
-        return;
-      }
-
-      // Persist confirmed items as Activity/Commitment entities
-      const persistResult = await this.pkgCoreApi.persistExtractionCarousel(
-        carouselId,
-        owner.id,
-      );
-
-      if (!persistResult.success) {
-        this.logger.error(`Failed to persist carousel: ${persistResult.error}`);
-        await ctx.reply(`❌ Ошибка сохранения: ${persistResult.error}`);
-        return;
-      }
-
-      // Format success message
-      const result = persistResult.result!;
-      const lines: string[] = ['✅ <b>Сохранено в базу:</b>'];
-
-      if (result.projectsCreated > 0) {
-        lines.push(`  🏗 Проектов: ${result.projectsCreated}`);
-      }
-      if (result.tasksCreated > 0) {
-        lines.push(`  📋 Задач: ${result.tasksCreated}`);
-      }
-      if (result.commitmentsCreated > 0) {
-        lines.push(`  🤝 Обязательств: ${result.commitmentsCreated}`);
-      }
-
-      if (skipped > 0) {
-        lines.push(`\n⏭️ Пропущено: ${skipped}`);
-      }
-
-      if (result.errors.length > 0) {
-        lines.push(`\n⚠️ Ошибки (${result.errors.length}):`);
+    const lines: string[] = ['✅ <b>Все элементы подтверждены</b>\n'];
+    lines.push(`Обработано: ${result.processed}`);
+    if (result.failed > 0) {
+      lines.push(`Ошибок: ${result.failed}`);
+      if (result.errors?.length) {
         for (const err of result.errors.slice(0, 3)) {
-          lines.push(`  • ${err.item}: ${err.error}`);
-        }
-        if (result.errors.length > 3) {
-          lines.push(`  • ...и ещё ${result.errors.length - 3}`);
+          lines.push(`  • ${err}`);
         }
       }
+    }
 
-      await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+    await ctx.telegram.editMessageText(
+      ctx.chat?.id,
+      messageId,
+      undefined,
+      lines.join('\n'),
+      { parse_mode: 'HTML' },
+    );
 
-      this.logger.log(
-        `Carousel ${carouselId} persisted: ${result.projectsCreated} projects, ` +
-          `${result.tasksCreated} tasks, ${result.commitmentsCreated} commitments ` +
-          `(${result.errors.length} errors)`,
+    this.logger.log(`Batch ${batchId} approved: ${result.processed} items, ${result.failed} failed`);
+  }
+
+  /**
+   * Reject all pending items in a batch
+   */
+  private async handleRejectAllBatch(
+    ctx: Context,
+    batchId: string,
+    messageId: number,
+  ): Promise<void> {
+    await ctx.answerCbQuery('❌ Отклоняю все...');
+
+    const result = await this.pkgCoreApi.rejectPendingBatch(batchId);
+
+    const lines: string[] = ['❌ <b>Все элементы отклонены</b>\n'];
+    lines.push(`Обработано: ${result.processed}`);
+    if (result.failed > 0) {
+      lines.push(`Ошибок: ${result.failed}`);
+    }
+
+    await ctx.telegram.editMessageText(
+      ctx.chat?.id,
+      messageId,
+      undefined,
+      lines.join('\n'),
+      { parse_mode: 'HTML' },
+    );
+
+    this.logger.log(`Batch ${batchId} rejected: ${result.processed} items`);
+  }
+
+  /**
+   * List pending items for review (one by one)
+   */
+  private async handleListPendingItems(
+    ctx: Context,
+    batchId: string,
+    offset: number,
+    messageId: number,
+  ): Promise<void> {
+    await ctx.answerCbQuery();
+
+    const result = await this.pkgCoreApi.listPendingApprovals({
+      batchId,
+      status: 'pending',
+      limit: 1,
+      offset,
+    });
+
+    if (result.items.length === 0) {
+      // No more pending items
+      const stats = await this.pkgCoreApi.getPendingApprovalBatchStats(batchId);
+
+      await ctx.telegram.editMessageText(
+        ctx.chat?.id,
+        messageId,
+        undefined,
+        `✅ <b>Обработка завершена</b>\n\n` +
+          `Подтверждено: ${stats.approved}\n` +
+          `Отклонено: ${stats.rejected}\n` +
+          `Ожидает: ${stats.pending}`,
+        { parse_mode: 'HTML' },
       );
-    } catch (error) {
-      this.logger.error(`Failed to complete carousel: ${(error as Error).message}`);
-      await ctx.reply('❌ Ошибка при завершении карусели');
+      return;
+    }
+
+    const item = result.items[0];
+    const itemText = this.formatPendingApprovalItem(item, offset + 1, result.total);
+
+    await ctx.telegram.editMessageText(
+      ctx.chat?.id,
+      messageId,
+      undefined,
+      itemText,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Подтвердить', callback_data: `pa_approve:${item.id}` },
+              { text: '❌ Отклонить', callback_data: `pa_reject:${item.id}` },
+            ],
+            [
+              { text: '⏭️ Пропустить', callback_data: `pa_next:${batchId}:${offset + 1}` },
+            ],
+          ],
+        },
+      },
+    );
+  }
+
+  /**
+   * Approve a single pending item
+   */
+  private async handleApproveItem(
+    ctx: Context,
+    itemId: string,
+    messageId: number,
+  ): Promise<void> {
+    await ctx.answerCbQuery('✅ Подтверждаю...');
+
+    const result = await this.pkgCoreApi.approvePendingItem(itemId);
+
+    if (result.success) {
+      // Get item to find batchId and continue to next
+      const item = await this.pkgCoreApi.getPendingApproval(itemId);
+      if (item) {
+        // Continue to next item
+        await this.handleListPendingItems(ctx, item.batchId, 0, messageId);
+      }
     }
   }
 
   /**
-   * Format extraction summary (brief overview before carousel)
+   * Reject a single pending item
    */
-  private formatExtractionSummary(data: {
-    projects: Array<{ name: string }>;
-    tasks: Array<{ title: string }>;
-    commitments: Array<{ what: string }>;
-    extractionSummary: string;
-    tokensUsed: number;
-    durationMs: number;
+  private async handleRejectItem(
+    ctx: Context,
+    itemId: string,
+    messageId: number,
+  ): Promise<void> {
+    await ctx.answerCbQuery('❌ Отклоняю...');
+
+    const result = await this.pkgCoreApi.rejectPendingItem(itemId);
+
+    if (result.success) {
+      // Get item to find batchId and continue to next
+      const item = await this.pkgCoreApi.getPendingApproval(itemId);
+      if (item) {
+        // Continue to next item
+        await this.handleListPendingItems(ctx, item.batchId, 0, messageId);
+      }
+    }
+  }
+
+  /**
+   * Format a single pending approval item for display
+   */
+  private formatPendingApprovalItem(
+    item: PendingApprovalItem,
+    current: number,
+    total: number,
+  ): string {
+    const typeIcon =
+      item.itemType === 'project' ? '🏗' :
+      item.itemType === 'task' ? '📋' : '🤝';
+
+    const typeLabel =
+      item.itemType === 'project' ? 'Проект' :
+      item.itemType === 'task' ? 'Задача' : 'Обязательство';
+
+    const lines = [
+      `<b>${typeIcon} ${typeLabel}</b> (${current}/${total})`,
+      '',
+    ];
+
+    if (item.sourceQuote) {
+      lines.push(`<i>"${item.sourceQuote}"</i>`);
+      lines.push('');
+    }
+
+    lines.push(`Уверенность: ${Math.round(item.confidence * 100)}%`);
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Format extraction summary for new flow
+   */
+  private formatNewExtractionSummary(result: {
+    batchId: string;
+    counts: { projects: number; tasks: number; commitments: number };
+    extraction: {
+      projectsExtracted: number;
+      tasksExtracted: number;
+      commitmentsExtracted: number;
+      summary: string;
+      tokensUsed: number;
+      durationMs: number;
+    };
+    errors?: string[];
   }): string {
     const lines: string[] = [];
 
     lines.push('📈 <b>Извлечённая структура</b>\n');
 
-    if (data.projects.length > 0) {
-      lines.push(`🏗 Проекты: ${data.projects.length}`);
+    if (result.counts.projects > 0) {
+      lines.push(`🏗 Проектов: ${result.counts.projects}`);
     }
-    if (data.tasks.length > 0) {
-      lines.push(`📋 Задачи: ${data.tasks.length}`);
+    if (result.counts.tasks > 0) {
+      lines.push(`📋 Задач: ${result.counts.tasks}`);
     }
-    if (data.commitments.length > 0) {
-      lines.push(`🤝 Обязательства: ${data.commitments.length}`);
+    if (result.counts.commitments > 0) {
+      lines.push(`🤝 Обязательств: ${result.counts.commitments}`);
     }
 
     lines.push('');
-    lines.push(`<i>${data.extractionSummary}</i>`);
-    lines.push(`<i>⚡ ${data.durationMs}ms • ${data.tokensUsed} tokens</i>`);
+    lines.push(`<i>${result.extraction.summary}</i>`);
+    lines.push(`<i>⚡ ${result.extraction.durationMs}ms • ${result.extraction.tokensUsed} tokens</i>`);
+
+    if (result.errors?.length) {
+      lines.push('');
+      lines.push(`⚠️ Ошибок: ${result.errors.length}`);
+    }
+
     lines.push('');
-    lines.push('👇 <b>Подтвердите каждый элемент в карусели ниже</b>');
+    lines.push('👇 <b>Выберите действие:</b>');
 
     return lines.join('\n');
   }
@@ -474,111 +562,6 @@ export class DailySummaryHandler {
     } catch (error) {
       this.logger.debug(`Could not update button: ${(error as Error).message}`);
     }
-  }
-
-  /**
-   * Format extraction result for Telegram message
-   */
-  private formatExtractionResult(data: {
-    projects: Array<{
-      name: string;
-      isNew: boolean;
-      participants: string[];
-      client?: string;
-      confidence: number;
-    }>;
-    tasks: Array<{
-      title: string;
-      projectName?: string;
-      status: string;
-      priority?: string;
-      confidence: number;
-    }>;
-    commitments: Array<{
-      what: string;
-      from: string;
-      to: string;
-      type: string;
-      deadline?: string;
-      confidence: number;
-    }>;
-    inferredRelations: Array<{
-      type: string;
-      entities: string[];
-      activityName?: string;
-      confidence: number;
-    }>;
-    extractionSummary: string;
-    tokensUsed: number;
-    durationMs: number;
-  }): string {
-    const lines: string[] = [];
-
-    lines.push('📈 <b>Извлечённая структура</b>\n');
-
-    // Projects
-    if (data.projects.length > 0) {
-      lines.push('<b>🏗 Проекты:</b>');
-      for (const p of data.projects) {
-        const status = p.isNew ? '🆕' : '📁';
-        const participants = p.participants.length > 0 ? ` (${p.participants.join(', ')})` : '';
-        const client = p.client ? ` • ${p.client}` : '';
-        lines.push(`${status} ${p.name}${participants}${client}`);
-      }
-      lines.push('');
-    }
-
-    // Tasks
-    if (data.tasks.length > 0) {
-      lines.push('<b>📋 Задачи:</b>');
-      for (const t of data.tasks) {
-        const statusIcon =
-          t.status === 'done' ? '✅' : t.status === 'in_progress' ? '🔄' : '⏳';
-        const priority =
-          t.priority === 'high' ? '🔴' : t.priority === 'medium' ? '🟡' : '';
-        const project = t.projectName ? ` → ${t.projectName}` : '';
-        lines.push(`${statusIcon}${priority} ${t.title}${project}`);
-      }
-      lines.push('');
-    }
-
-    // Commitments
-    if (data.commitments.length > 0) {
-      lines.push('<b>🤝 Обязательства:</b>');
-      for (const c of data.commitments) {
-        const typeIcon =
-          c.type === 'promise'
-            ? '🎯'
-            : c.type === 'request'
-              ? '📨'
-              : c.type === 'agreement'
-                ? '🤝'
-                : c.type === 'deadline'
-                  ? '⏰'
-                  : '💭';
-        const deadline = c.deadline ? ` (до ${c.deadline})` : '';
-        const direction = c.from === 'self' ? `→ ${c.to}` : `${c.from} →`;
-        lines.push(`${typeIcon} ${direction}: ${c.what}${deadline}`);
-      }
-      lines.push('');
-    }
-
-    // Relations (brief)
-    if (data.inferredRelations.length > 0) {
-      lines.push('<b>🔗 Связи:</b>');
-      for (const r of data.inferredRelations) {
-        const activity = r.activityName ? ` (${r.activityName})` : '';
-        lines.push(`• ${r.entities.join(' ↔ ')}${activity}`);
-      }
-      lines.push('');
-    }
-
-    // Summary
-    lines.push('━━━━━━━━━━━━━━━━━━━━━━');
-    lines.push(`<i>${data.extractionSummary}</i>`);
-    lines.push(`<i>⚡ ${data.durationMs}ms • ${data.tokensUsed} tokens</i>`);
-
-    return lines.join('\n');
   }
 
   /**

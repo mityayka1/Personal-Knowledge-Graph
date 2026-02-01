@@ -1,6 +1,7 @@
-import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger } from '@nestjs/common';
+import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelationInferenceService, InferenceResult } from './relation-inference.service';
+import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
 import { MessageService } from '../interaction/message/message.service';
 import { EntityService } from '../entity/entity.service';
 
@@ -25,6 +26,25 @@ interface ExtractFactsAgentDto {
   };
 }
 
+/**
+ * DTO for daily synthesis extract-and-save endpoint.
+ * Creates draft entities + pending approvals from synthesis text.
+ */
+interface ExtractAndSaveDto {
+  /** Synthesis text to analyze */
+  synthesisText: string;
+  /** Owner entity ID (usually user's own entity) */
+  ownerEntityId: string;
+  /** Date of synthesis (ISO 8601, e.g., "2026-01-31") */
+  date?: string;
+  /** Focus topic for extraction */
+  focusTopic?: string;
+  /** Message reference for Telegram UI updates (e.g., "telegram:chat:123:msg:456") */
+  messageRef?: string;
+  /** Source interaction ID for tracking */
+  sourceInteractionId?: string;
+}
+
 @Controller('extraction')
 export class ExtractionController {
   private readonly logger = new Logger(ExtractionController.name);
@@ -36,6 +56,9 @@ export class ExtractionController {
     private messageService: MessageService,
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
+    @Optional()
+    @Inject(forwardRef(() => DailySynthesisExtractionService))
+    private dailySynthesisService: DailySynthesisExtractionService | null,
   ) {}
 
   @Post('facts')
@@ -189,5 +212,82 @@ export class ExtractionController {
   @Get('relations/infer/stats')
   async getInferenceStats() {
     return this.relationInferenceService.getInferenceStats();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Daily Synthesis Extraction (Draft Entities + PendingApproval)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Extract structured data from daily synthesis and create draft entities.
+   * POST /extraction/daily/extract-and-save
+   *
+   * This endpoint replaces the old Redis carousel flow:
+   * - Old: extract() → Redis carousel → persist()
+   * - New: extractAndSave() → DRAFT entities + PendingApproval in DB
+   *
+   * Use /pending-approval/batch/:batchId/* endpoints for approve/reject.
+   *
+   * @see docs/plans/2026-01-31-refactor-extraction-carousel-to-pending-facts-plan.md
+   */
+  @Post('daily/extract-and-save')
+  async extractAndSave(@Body() dto: ExtractAndSaveDto) {
+    if (!this.dailySynthesisService) {
+      throw new BadRequestException('DailySynthesisExtractionService is not available');
+    }
+
+    if (!dto.synthesisText || dto.synthesisText.trim().length < 10) {
+      throw new BadRequestException('synthesisText must be at least 10 characters');
+    }
+
+    if (!dto.ownerEntityId) {
+      throw new BadRequestException('ownerEntityId is required');
+    }
+
+    this.logger.log(
+      `[extractAndSave] Starting extraction for owner=${dto.ownerEntityId}, ` +
+        `date=${dto.date || 'today'}, focus=${dto.focusTopic || 'none'}, ` +
+        `textLength=${dto.synthesisText.length}`,
+    );
+
+    const result = await this.dailySynthesisService.extractAndSave(
+      {
+        synthesisText: dto.synthesisText,
+        ownerEntityId: dto.ownerEntityId,
+        date: dto.date,
+        focusTopic: dto.focusTopic,
+      },
+      dto.messageRef,
+      dto.sourceInteractionId,
+    );
+
+    this.logger.log(
+      `[extractAndSave] Complete: batch=${result.drafts.batchId}, ` +
+        `projects=${result.drafts.counts.projects}, ` +
+        `tasks=${result.drafts.counts.tasks}, ` +
+        `commitments=${result.drafts.counts.commitments}`,
+    );
+
+    return {
+      batchId: result.drafts.batchId,
+      counts: result.drafts.counts,
+      approvals: result.drafts.approvals.map((a) => ({
+        id: a.id,
+        itemType: a.itemType,
+        targetId: a.targetId,
+        confidence: a.confidence,
+        sourceQuote: a.sourceQuote,
+      })),
+      extraction: {
+        projectsExtracted: result.extraction.projects.length,
+        tasksExtracted: result.extraction.tasks.length,
+        commitmentsExtracted: result.extraction.commitments.length,
+        relationsInferred: result.extraction.inferredRelations.length,
+        summary: result.extraction.extractionSummary,
+        tokensUsed: result.extraction.tokensUsed,
+        durationMs: result.extraction.durationMs,
+      },
+      errors: result.drafts.errors.length > 0 ? result.drafts.errors : undefined,
+    };
   }
 }

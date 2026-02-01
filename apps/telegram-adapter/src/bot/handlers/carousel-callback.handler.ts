@@ -91,16 +91,12 @@ export class CarouselCallbackHandler {
         await ctx.answerCbQuery(`Обработано ${response.processedCount} событий`);
       } else {
         // Update message with new event card
+        // Buttons can be callback_data or web_app type - pass them as-is to Telegram
         await ctx.editMessageText(response.message || '', {
           parse_mode: 'HTML',
           reply_markup: response.buttons
             ? {
-                inline_keyboard: response.buttons.map((row) =>
-                  row.map((btn) => ({
-                    text: btn.text,
-                    callback_data: btn.callback_data,
-                  })),
-                ),
+                inline_keyboard: response.buttons,
               }
             : undefined,
         });
