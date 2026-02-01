@@ -212,7 +212,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col" style="padding-top: var(--tg-content-safe-area-inset-top, 0px); padding-bottom: var(--tg-content-safe-area-inset-bottom, 0px);">
+  <div class="h-screen flex flex-col overflow-hidden" style="padding-top: var(--tg-content-safe-area-inset-top, 0px); padding-bottom: var(--tg-content-safe-area-inset-bottom, 0px);">
     <!-- Loading -->
     <div v-if="store.loading" class="flex-1 flex items-center justify-center">
       <LoadingSpinner size="lg" />
@@ -259,7 +259,7 @@ onUnmounted(() => {
     <!-- Carousel Content -->
     <template v-else-if="store.currentItem">
       <!-- Progress Header -->
-      <div class="p-4 border-b border-tg-secondary-bg">
+      <div class="shrink-0 p-4 border-b border-tg-secondary-bg">
         <div class="flex items-center justify-between mb-2">
           <span class="text-sm text-tg-hint">
             {{ store.progress.current }} из {{ store.progress.total }}
@@ -386,7 +386,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Navigation & Actions -->
-      <div class="p-4 border-t border-tg-secondary-bg">
+      <div class="shrink-0 p-4 border-t border-tg-secondary-bg">
         <!-- Primary action -->
         <button
           class="btn btn-primary w-full mb-3"
