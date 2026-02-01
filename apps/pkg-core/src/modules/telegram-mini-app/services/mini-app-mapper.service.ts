@@ -59,6 +59,9 @@ export class MiniAppMapperService {
           toEntity: commitment.toEntity
             ? { id: commitment.toEntity.id, name: commitment.toEntity.name }
             : null,
+          parentActivity: commitment.activity
+            ? { id: commitment.activity.id, name: commitment.activity.name }
+            : null,
           preview: approval.sourceQuote?.substring(0, 200),
         };
       }
