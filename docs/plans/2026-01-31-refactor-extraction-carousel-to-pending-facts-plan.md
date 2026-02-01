@@ -1,3 +1,4 @@
+
 ---
 title: "Рефакторинг Extraction Flow: Redis Carousel → Draft Entities + PendingApproval"
 type: refactor

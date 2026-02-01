@@ -345,8 +345,11 @@ export class TelegramMiniAppController {
     const limit = Math.min(Math.max(1, parseInt(limitStr || '50', 10) || 50), 100);
     const offset = Math.max(0, parseInt(offsetStr || '0', 10) || 0);
 
+    // 'all' is a special value meaning no filter
+    const effectiveBatchId = batchId && batchId !== 'all' ? batchId : undefined;
+
     const { items, total } = await this.pendingApprovalService.list({
-      batchId,
+      batchId: effectiveBatchId,
       status: status as PendingApprovalStatus,
       limit,
       offset,
