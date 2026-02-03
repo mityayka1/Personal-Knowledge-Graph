@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import {
   PendingApproval,
   PendingApprovalStatus,
@@ -327,6 +327,7 @@ export class DigestService {
 
   /**
    * Format digest message for pending approvals.
+   * Uses batch fetching to avoid N+1 query problem.
    */
   private async formatApprovalDigest(
     approvals: PendingApproval[],
@@ -336,10 +337,13 @@ export class DigestService {
       digestType === 'hourly' ? '<b>Новые события:</b>' : '<b>Дайджест за день</b>';
     const lines: string[] = [header, ''];
 
+    // Batch fetch all summaries to avoid N+1 queries
+    const summaryMap = await this.batchFetchApprovalSummaries(approvals);
+
     for (let i = 0; i < approvals.length; i++) {
       const approval = approvals[i];
       const emoji = this.getApprovalEmoji(approval.itemType);
-      const summary = await this.getApprovalSummary(approval);
+      const summary = summaryMap.get(approval.id) || this.getFallbackSummary(approval);
       lines.push(`${i + 1}. ${emoji} ${summary}`);
     }
 
@@ -349,6 +353,90 @@ export class DigestService {
     }
 
     return lines.join('\n');
+  }
+
+  /**
+   * Batch fetch summaries for all approvals (max 3 queries instead of N).
+   */
+  private async batchFetchApprovalSummaries(
+    approvals: PendingApproval[],
+  ): Promise<Map<string, string>> {
+    const summaryMap = new Map<string, string>();
+
+    // Group approvals by item type
+    const commitmentApprovals = approvals.filter(
+      (a) => a.itemType === PendingApprovalItemType.COMMITMENT,
+    );
+    const activityApprovals = approvals.filter(
+      (a) =>
+        a.itemType === PendingApprovalItemType.TASK ||
+        a.itemType === PendingApprovalItemType.PROJECT,
+    );
+    const factApprovals = approvals.filter(
+      (a) => a.itemType === PendingApprovalItemType.FACT,
+    );
+
+    // Batch fetch commitments
+    if (commitmentApprovals.length > 0) {
+      const targetIds = commitmentApprovals.map((a) => a.targetId);
+      const commitments = await this.commitmentRepo.find({
+        where: { id: In(targetIds) },
+        select: ['id', 'title'],
+      });
+      const commitmentById = new Map(commitments.map((c) => [c.id, c]));
+
+      for (const approval of commitmentApprovals) {
+        const commitment = commitmentById.get(approval.targetId);
+        if (commitment) {
+          summaryMap.set(approval.id, escapeHtml(commitment.title || 'Обязательство'));
+        }
+      }
+    }
+
+    // Batch fetch activities (tasks and projects)
+    if (activityApprovals.length > 0) {
+      const targetIds = activityApprovals.map((a) => a.targetId);
+      const activities = await this.activityRepo.find({
+        where: { id: In(targetIds) },
+        select: ['id', 'name'],
+      });
+      const activityById = new Map(activities.map((a) => [a.id, a]));
+
+      for (const approval of activityApprovals) {
+        const activity = activityById.get(approval.targetId);
+        if (activity) {
+          summaryMap.set(approval.id, escapeHtml(activity.name || 'Активность'));
+        }
+      }
+    }
+
+    // Batch fetch facts
+    if (factApprovals.length > 0) {
+      const targetIds = factApprovals.map((a) => a.targetId);
+      const facts = await this.entityFactRepo.find({
+        where: { id: In(targetIds) },
+        select: ['id', 'factType', 'value'],
+      });
+      const factById = new Map(facts.map((f) => [f.id, f]));
+
+      for (const approval of factApprovals) {
+        const fact = factById.get(approval.targetId);
+        if (fact) {
+          summaryMap.set(approval.id, escapeHtml(`${fact.factType}: ${fact.value}`));
+        }
+      }
+    }
+
+    return summaryMap;
+  }
+
+  /**
+   * Get fallback summary when entity not found.
+   */
+  private getFallbackSummary(approval: PendingApproval): string {
+    return approval.sourceQuote
+      ? escapeHtml(approval.sourceQuote.slice(0, 50))
+      : 'Событие';
   }
 
   /**
@@ -362,52 +450,6 @@ export class DigestService {
       [PendingApprovalItemType.FACT]: 'ℹ️',
     };
     return emojis[itemType] || '📌';
-  }
-
-  /**
-   * Get summary text for a pending approval.
-   */
-  private async getApprovalSummary(approval: PendingApproval): Promise<string> {
-    try {
-      switch (approval.itemType) {
-        case PendingApprovalItemType.COMMITMENT: {
-          const commitment = await this.commitmentRepo.findOne({
-            where: { id: approval.targetId },
-          });
-          if (commitment) {
-            return escapeHtml(commitment.title || 'Обязательство');
-          }
-          break;
-        }
-
-        case PendingApprovalItemType.TASK:
-        case PendingApprovalItemType.PROJECT: {
-          const activity = await this.activityRepo.findOne({
-            where: { id: approval.targetId },
-          });
-          if (activity) {
-            return escapeHtml(activity.name || 'Активность');
-          }
-          break;
-        }
-
-        case PendingApprovalItemType.FACT: {
-          const fact = await this.entityFactRepo.findOne({
-            where: { id: approval.targetId },
-          });
-          if (fact) {
-            return escapeHtml(`${fact.factType}: ${fact.value}`);
-          }
-          break;
-        }
-      }
-    } catch (error) {
-      this.logger.warn(`Failed to get summary for approval ${approval.id}: ${error}`);
-    }
-
-    return approval.sourceQuote
-      ? escapeHtml(approval.sourceQuote.slice(0, 50))
-      : 'Событие';
   }
 
   /**

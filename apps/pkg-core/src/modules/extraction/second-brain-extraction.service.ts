@@ -16,7 +16,7 @@ import {
   TaskEventData,
   FactEventData,
 } from '@pkg/entities';
-import { DraftExtractionService, DraftExtractionResult } from './draft-extraction.service';
+import { DraftExtractionService } from './draft-extraction.service';
 import {
   ExtractedFact,
   ExtractedTask,
@@ -146,12 +146,18 @@ interface ExtractionResponse {
   events: RawExtractedEvent[];
 }
 
+/**
+ * @deprecated Use ConversationExtractionResultV2 with PendingApproval system instead.
+ */
 export interface SecondBrainExtractionResult {
   sourceMessageId: string;
   extractedEvents: ExtractedEvent[];
   tokensUsed: number;
 }
 
+/**
+ * @deprecated Use ConversationExtractionResultV2 with PendingApproval system instead.
+ */
 export interface ConversationExtractionResult {
   /** IDs of all messages in the conversation */
   sourceMessageIds: string[];
