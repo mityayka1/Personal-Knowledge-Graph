@@ -1,6 +1,6 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, Logger, UseGuards } from '@nestjs/common';
 import { BriefState } from '@pkg/entities';
-import { BotService, SendNotificationOptions } from './bot.service';
+import { BotService, TelegramButton } from './bot.service';
 import { ApiKeyGuard } from '../common/guards/api-key.guard';
 import { BriefFormatterService } from './services/brief-formatter.service';
 
@@ -8,7 +8,7 @@ export class SendNotificationDto {
   chatId?: number | string;
   message: string;
   parseMode?: 'Markdown' | 'HTML';
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramButton>>;
 }
 
 export class SendBriefDto {
@@ -27,7 +27,7 @@ export class EditMessageDto {
   messageId: number;
   message: string;
   parseMode?: 'Markdown' | 'HTML';
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramButton>>;
 }
 
 @Controller('notifications')

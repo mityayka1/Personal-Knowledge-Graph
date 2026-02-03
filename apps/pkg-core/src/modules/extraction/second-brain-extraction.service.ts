@@ -599,7 +599,7 @@ export class SecondBrainExtractionService {
   /**
    * Map raw event to ExtractedFact format.
    */
-  private mapToExtractedFact(rawEvent: RawConversationEvent, entityId: string): ExtractedFact {
+  private mapToExtractedFact(rawEvent: RawExtractedEvent, entityId: string): ExtractedFact {
     const data = rawEvent.data as { factType?: string; value?: string };
     return {
       entityId,

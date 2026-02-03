@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository, In } from 'typeorm';
 import {
   PendingApproval,
@@ -11,7 +12,7 @@ import {
   EntityFact,
   escapeHtml,
 } from '@pkg/entities';
-import { TelegramNotifierService } from './telegram-notifier.service';
+import { TelegramNotifierService, TelegramButton } from './telegram-notifier.service';
 import { DigestActionStoreService } from './digest-action-store.service';
 import { BriefStateService, BriefItem } from './brief-state.service';
 import { BriefDataProvider, MorningBriefData } from './brief-data-provider.service';
@@ -19,6 +20,7 @@ import { BriefDataProvider, MorningBriefData } from './brief-data-provider.servi
 @Injectable()
 export class DigestService {
   private readonly logger = new Logger(DigestService.name);
+  private readonly miniAppUrl: string | undefined;
 
   constructor(
     @InjectRepository(PendingApproval)
@@ -29,11 +31,17 @@ export class DigestService {
     private activityRepo: Repository<Activity>,
     @InjectRepository(EntityFact)
     private entityFactRepo: Repository<EntityFact>,
+    private configService: ConfigService,
     private briefDataProvider: BriefDataProvider,
     private telegramNotifier: TelegramNotifierService,
     private digestActionStore: DigestActionStoreService,
     private briefStateService: BriefStateService,
-  ) {}
+  ) {
+    // Support both MINI_APP_URL and TELEGRAM_MINI_APP_URL for consistency with telegram-adapter
+    this.miniAppUrl =
+      this.configService.get<string>('MINI_APP_URL') ||
+      this.configService.get<string>('TELEGRAM_MINI_APP_URL');
+  }
 
   /**
    * Send morning brief with today's schedule and reminders.
@@ -455,22 +463,37 @@ export class DigestService {
   /**
    * Get buttons for pending approval digest.
    * Uses digestActionStore for short IDs.
+   * Includes Mini App button for piecemeal approval (carousel replacement).
    */
   private async getApprovalDigestButtons(
     approvals: PendingApproval[],
-  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
+  ): Promise<Array<Array<TelegramButton>>> {
     const approvalIds = approvals.map((a) => a.id);
     const shortId = await this.digestActionStore.store(approvalIds);
 
     const confirmText = approvals.length === 1 ? 'Подтвердить' : 'Подтвердить все';
     const rejectText = approvals.length === 1 ? 'Игнорировать' : 'Игнорировать все';
 
-    return [
+    const buttons: Array<Array<TelegramButton>> = [
       [
         { text: confirmText, callback_data: `pa_c:${shortId}` },
         { text: rejectText, callback_data: `pa_r:${shortId}` },
       ],
     ];
+
+    // Add Mini App button for piecemeal approval (replaces old carousel UX)
+    if (this.miniAppUrl && approvals.length > 0) {
+      // Use first approval's batchId for deep linking, or 'pending' for general view
+      const batchId = approvals[0].batchId || 'pending';
+      buttons.push([
+        {
+          text: '📱 Открыть в приложении',
+          web_app: { url: `${this.miniAppUrl}?startapp=approval_${batchId}` },
+        },
+      ]);
+    }
+
+    return buttons;
   }
 
   /**
