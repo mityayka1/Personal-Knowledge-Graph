@@ -12,18 +12,17 @@ import {
   EntityFact,
   Activity,
   Commitment,
+  PendingApproval,
 } from '@pkg/entities';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { NotificationService } from './notification.service';
 import { DigestService } from './digest.service';
 import { BriefDataProvider } from './brief-data-provider.service';
 import { DigestActionStoreService } from './digest-action-store.service';
-import { CarouselStateService } from './carousel-state.service';
 import { NotificationSchedulerService } from './notification-scheduler.service';
 import { NotificationProcessor } from './notification.processor';
 import { NotificationTriggerController } from './notification-trigger.controller';
 import { DigestActionController } from './digest-action.controller';
-import { CarouselController } from './carousel.controller';
 import { ApprovalService } from './approval.service';
 import { ApprovalController } from './approval.controller';
 import { BriefStateService } from './brief-state.service';
@@ -49,6 +48,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
       EntityFact,
       Activity,
       Commitment,
+      PendingApproval,
     ]),
     BullModule.registerQueue({
       name: 'notification',
@@ -63,14 +63,13 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => EntityModule),
     forwardRef(() => ClaudeAgentModule),
   ],
-  controllers: [NotificationTriggerController, DigestActionController, CarouselController, ApprovalController, BriefController, FactConflictController],
+  controllers: [NotificationTriggerController, DigestActionController, ApprovalController, BriefController, FactConflictController],
   providers: [
     TelegramNotifierService,
     NotificationService,
     DigestService,
     BriefDataProvider,
     DigestActionStoreService,
-    CarouselStateService,
     NotificationSchedulerService,
     NotificationProcessor,
     ApprovalService,
@@ -85,7 +84,6 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     DigestService,
     BriefDataProvider,
     DigestActionStoreService,
-    CarouselStateService,
     ApprovalService,
     TelegramSendService,
     BriefStateService,

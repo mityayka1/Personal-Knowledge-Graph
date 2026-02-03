@@ -69,10 +69,29 @@ export interface ExtractedCommitment {
   /** Due date if mentioned (ISO 8601) */
   deadline?: string;
   /** Type of commitment */
-  type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder';
+  type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder' | 'meeting';
   /** Priority if inferable */
   priority?: 'high' | 'medium' | 'low';
   /** Context snippet */
+  sourceQuote?: string;
+  /** Confidence of extraction (0-1) */
+  confidence: number;
+}
+
+/**
+ * Extracted fact from conversation/synthesis.
+ * Used by SecondBrainExtractionService for FACT type events.
+ */
+export interface ExtractedFact {
+  /** Entity ID this fact belongs to */
+  entityId: string;
+  /** Entity name for display/logging purposes */
+  entityName?: string;
+  /** Fact type (birthday, position, company, etc. or custom) */
+  factType: string;
+  /** Fact value as text */
+  value: string;
+  /** Original quote from source */
   sourceQuote?: string;
   /** Confidence of extraction (0-1) */
   confidence: number;

@@ -15,11 +15,16 @@ import {
   PendingApprovalItemType,
   PendingApprovalStatus,
   EntityRecord,
+  EntityFact,
+  EntityFactStatus,
+  FactSource,
+  FactCategory,
 } from '@pkg/entities';
 import {
   ExtractedProject,
   ExtractedTask,
   ExtractedCommitment,
+  ExtractedFact,
 } from './daily-synthesis-extraction.types';
 
 /**
@@ -28,6 +33,8 @@ import {
 export interface DraftExtractionInput {
   /** Owner entity ID (usually the user's own entity) */
   ownerEntityId: string;
+  /** Facts to create as drafts */
+  facts: ExtractedFact[];
   /** Projects to create as drafts */
   projects: ExtractedProject[];
   /** Tasks to create as drafts */
@@ -54,12 +61,14 @@ export interface DraftExtractionResult {
   approvals: PendingApproval[];
   /** Count of drafts created by type */
   counts: {
+    facts: number;
     projects: number;
     tasks: number;
     commitments: number;
   };
   /** Count of items skipped due to deduplication */
   skipped: {
+    facts: number;
     projects: number;
     tasks: number;
     commitments: number;
@@ -96,6 +105,8 @@ export class DraftExtractionService {
     private readonly approvalRepo: Repository<PendingApproval>,
     @InjectRepository(EntityRecord)
     private readonly entityRepo: Repository<EntityRecord>,
+    @InjectRepository(EntityFact)
+    private readonly factRepo: Repository<EntityFact>,
   ) {}
 
   /**
@@ -117,15 +128,49 @@ export class DraftExtractionService {
     const result: DraftExtractionResult = {
       batchId,
       approvals: [],
-      counts: { projects: 0, tasks: 0, commitments: 0 },
-      skipped: { projects: 0, tasks: 0, commitments: 0 },
+      counts: { facts: 0, projects: 0, tasks: 0, commitments: 0 },
+      skipped: { facts: 0, projects: 0, tasks: 0, commitments: 0 },
       errors: [],
     };
+
+    // 0. Create draft facts first
+    for (const fact of input.facts || []) {
+      try {
+        // DEDUPLICATION: Check for existing pending fact with same entity + factType + value
+        const existingFact = await this.findExistingPendingFact(
+          fact.entityId,
+          fact.factType,
+          fact.value,
+        );
+        if (existingFact) {
+          this.logger.debug(
+            `Skipping duplicate fact "${fact.factType}:${fact.value}" for entity ${fact.entityId} - ` +
+              `already pending as ${existingFact.targetId}`,
+          );
+          result.skipped.facts++;
+          continue;
+        }
+
+        const { entity, approval } = await this.createDraftFact(fact, input, batchId);
+
+        result.approvals.push(approval);
+        result.counts.facts++;
+        this.logger.debug(
+          `Created draft fact: ${entity.factType}="${entity.value}" (${entity.id})`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push({ item: `fact:${fact.factType}:${fact.value}`, error: message });
+        this.logger.error(
+          `Failed to create draft fact "${fact.factType}:${fact.value}": ${message}`,
+        );
+      }
+    }
 
     // Build project name → Activity ID map for task parent resolution
     const projectMap = new Map<string, string>();
 
-    // 1. Create draft projects first (tasks may reference them)
+    // 1. Create draft projects (tasks may reference them)
     for (const project of input.projects) {
       try {
         // Skip if already matched to existing activity
@@ -230,11 +275,14 @@ export class DraftExtractionService {
     }
 
     const totalSkipped =
-      result.skipped.projects + result.skipped.tasks + result.skipped.commitments;
+      result.skipped.facts +
+      result.skipped.projects +
+      result.skipped.tasks +
+      result.skipped.commitments;
     this.logger.log(
       `Draft extraction complete (batch=${batchId}): ` +
-        `${result.counts.projects} projects, ${result.counts.tasks} tasks, ` +
-        `${result.counts.commitments} commitments ` +
+        `${result.counts.facts} facts, ${result.counts.projects} projects, ` +
+        `${result.counts.tasks} tasks, ${result.counts.commitments} commitments ` +
         `(${totalSkipped} skipped as duplicates, ${result.errors.length} errors)`,
     );
 
@@ -244,6 +292,48 @@ export class DraftExtractionService {
   // ─────────────────────────────────────────────────────────────
   // Private: Draft Creation Methods
   // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Create draft EntityFact + PendingApproval.
+   */
+  private async createDraftFact(
+    fact: ExtractedFact,
+    input: DraftExtractionInput,
+    batchId: string,
+  ): Promise<{ entity: EntityFact; approval: PendingApproval }> {
+    // Determine fact category from fact type
+    const category = this.inferFactCategory(fact.factType);
+
+    // Create draft EntityFact
+    const entity = this.factRepo.create({
+      entityId: fact.entityId,
+      factType: fact.factType,
+      category,
+      value: fact.value,
+      source: FactSource.EXTRACTED,
+      confidence: fact.confidence,
+      status: EntityFactStatus.DRAFT,
+      sourceInteractionId: input.sourceInteractionId ?? null,
+    });
+
+    const savedEntity = await this.factRepo.save(entity);
+
+    // Create PendingApproval linking to the draft
+    const approval = this.approvalRepo.create({
+      itemType: PendingApprovalItemType.FACT,
+      targetId: savedEntity.id,
+      batchId,
+      confidence: fact.confidence ?? 0.8,
+      sourceQuote: fact.sourceQuote ?? null,
+      sourceInteractionId: input.sourceInteractionId ?? null,
+      messageRef: input.messageRef ?? null,
+      status: PendingApprovalStatus.PENDING,
+    });
+
+    const savedApproval = await this.approvalRepo.save(approval);
+
+    return { entity: savedEntity, approval: savedApproval };
+  }
 
   /**
    * Create draft Activity (PROJECT) + PendingApproval.
@@ -470,6 +560,40 @@ export class DraftExtractionService {
   // ─────────────────────────────────────────────────────────────
 
   /**
+   * Find existing pending fact with same entity, factType, and value.
+   * Returns the PendingApproval if found, null otherwise.
+   */
+  private async findExistingPendingFact(
+    entityId: string,
+    factType: string,
+    value: string,
+  ): Promise<PendingApproval | null> {
+    // Find pending approval for FACT type
+    const pendingApprovals = await this.approvalRepo.find({
+      where: {
+        itemType: PendingApprovalItemType.FACT,
+        status: PendingApprovalStatus.PENDING,
+      },
+    });
+
+    if (pendingApprovals.length === 0) return null;
+
+    // Check each pending approval's target EntityFact for match
+    const targetIds = pendingApprovals.map((p) => p.targetId);
+    const matchingFact = await this.factRepo
+      .createQueryBuilder('f')
+      .where('f.id IN (:...ids)', { ids: targetIds })
+      .andWhere('f.entity_id = :entityId', { entityId })
+      .andWhere('f.fact_type = :factType', { factType })
+      .andWhere('f.value ILIKE :value', { value })
+      .getOne();
+
+    if (!matchingFact) return null;
+
+    return pendingApprovals.find((p) => p.targetId === matchingFact.id) ?? null;
+  }
+
+  /**
    * Find existing pending project with similar name.
    * Returns the PendingApproval if found, null otherwise.
    */
@@ -596,9 +720,48 @@ export class DraftExtractionService {
         return CommitmentType.DEADLINE;
       case 'reminder':
         return CommitmentType.REMINDER;
+      case 'meeting':
+        return CommitmentType.MEETING;
       default:
         return CommitmentType.PROMISE;
     }
+  }
+
+  /**
+   * Infer fact category from fact type.
+   */
+  private inferFactCategory(factType: string): FactCategory {
+    const categoryMap: Record<string, FactCategory> = {
+      // Personal
+      birthday: FactCategory.PERSONAL,
+      name_full: FactCategory.PERSONAL,
+      nickname: FactCategory.PERSONAL,
+      // Contact
+      phone_work: FactCategory.CONTACT,
+      phone_personal: FactCategory.CONTACT,
+      email_work: FactCategory.CONTACT,
+      email_personal: FactCategory.CONTACT,
+      address: FactCategory.CONTACT,
+      telegram: FactCategory.CONTACT,
+      // Professional
+      position: FactCategory.PROFESSIONAL,
+      department: FactCategory.PROFESSIONAL,
+      company: FactCategory.PROFESSIONAL,
+      specialization: FactCategory.PROFESSIONAL,
+      // Business
+      inn: FactCategory.BUSINESS,
+      kpp: FactCategory.BUSINESS,
+      ogrn: FactCategory.BUSINESS,
+      legal_address: FactCategory.BUSINESS,
+      actual_address: FactCategory.BUSINESS,
+      bank_account: FactCategory.FINANCIAL,
+      // Preferences
+      communication_preference: FactCategory.PREFERENCES,
+      timezone: FactCategory.PREFERENCES,
+      language: FactCategory.PREFERENCES,
+    };
+
+    return categoryMap[factType.toLowerCase()] ?? FactCategory.PERSONAL;
   }
 
   private mapCommitmentPriority(priority?: string): CommitmentPriority {

@@ -14,7 +14,6 @@ import { NotificationService } from './notification.service';
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { SettingsService } from '../settings/settings.service';
 import { DigestActionStoreService } from './digest-action-store.service';
-import { CarouselStateService } from './carousel-state.service';
 
 describe('NotificationService', () => {
   let service: NotificationService;
@@ -126,13 +125,6 @@ describe('NotificationService', () => {
           provide: DigestActionStoreService,
           useValue: {
             store: jest.fn().mockResolvedValue('short-id-123'),
-          },
-        },
-        {
-          provide: CarouselStateService,
-          useValue: {
-            create: jest.fn(),
-            get: jest.fn(),
           },
         },
       ],
@@ -510,66 +502,4 @@ describe('NotificationService', () => {
     });
   });
 
-  describe('formatCarouselCard', () => {
-    it('should format carousel card with position indicator', async () => {
-      const event = createMockEvent({
-        eventType: ExtractedEventType.TASK,
-        extractedData: { what: 'Test task' },
-      });
-
-      const navResult = {
-        event,
-        index: 0,
-        total: 5,
-        remaining: 5,
-        carouselId: 'carousel-123',
-      };
-
-      const card = await service.formatCarouselCard(navResult);
-
-      expect(card).toContain('(1/5)');
-      expect(card).toContain('Задача');
-      expect(card).toContain('Test task');
-    });
-
-    it('should include remaining count in footer', async () => {
-      const event = createMockEvent();
-
-      const navResult = {
-        event,
-        index: 2,
-        total: 5,
-        remaining: 3,
-        carouselId: 'carousel-123',
-      };
-
-      const card = await service.formatCarouselCard(navResult);
-
-      expect(card).toContain('Осталось: 2');
-    });
-  });
-
-  describe('getCarouselButtons', () => {
-    it('should return navigation buttons with carousel ID', () => {
-      const buttons = service.getCarouselButtons('carousel-abc');
-
-      expect(buttons).toHaveLength(1);
-      expect(buttons[0]).toHaveLength(4);
-
-      const callbackData = buttons[0].map((b) => b.callback_data);
-      expect(callbackData).toContain('car_p:carousel-abc');
-      expect(callbackData).toContain('car_n:carousel-abc');
-      expect(callbackData).toContain('car_c:carousel-abc');
-      expect(callbackData).toContain('car_r:carousel-abc');
-    });
-  });
-
-  describe('formatCarouselComplete', () => {
-    it('should format completion message with count', () => {
-      const message = service.formatCarouselComplete(10);
-
-      expect(message).toContain('Все события обработаны');
-      expect(message).toContain('10');
-    });
-  });
 });

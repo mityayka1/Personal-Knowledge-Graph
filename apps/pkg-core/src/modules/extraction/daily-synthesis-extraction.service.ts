@@ -153,6 +153,7 @@ export class DailySynthesisExtractionService {
     // 2. Create drafts + pending approvals
     const drafts = await this.draftExtractionService.createDrafts({
       ownerEntityId: params.ownerEntityId,
+      facts: [],
       projects: extraction.projects,
       tasks: extraction.tasks,
       commitments: extraction.commitments,

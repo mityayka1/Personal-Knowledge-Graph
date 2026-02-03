@@ -7,10 +7,16 @@ import {
   ExtractedEventStatus,
 } from '@pkg/entities';
 import { SecondBrainExtractionService } from './second-brain-extraction.service';
+import { DraftExtractionService } from './draft-extraction.service';
 
 // Mock ClaudeAgentService to avoid ESM import issues
 const mockClaudeAgentService = {
   call: jest.fn(),
+};
+
+// Mock DraftExtractionService
+const mockDraftExtractionService = {
+  createDrafts: jest.fn(),
 };
 
 jest.mock('../claude-agent/claude-agent.service', () => ({
@@ -28,6 +34,7 @@ import { ConversationGroup, MessageData } from './extraction.types';
 describe('SecondBrainExtractionService', () => {
   let service: SecondBrainExtractionService;
   let extractedEventRepo: jest.Mocked<Repository<ExtractedEvent>>;
+  let draftExtractionService: jest.Mocked<DraftExtractionService>;
   let conversationGrouperService: jest.Mocked<ConversationGrouperService>;
   let crossChatContextService: jest.Mocked<CrossChatContextService>;
   let entityFactService: jest.Mocked<EntityFactService>;
@@ -104,11 +111,16 @@ describe('SecondBrainExtractionService', () => {
             getContextForExtraction: jest.fn().mockResolvedValue(''),
           },
         },
+        {
+          provide: DraftExtractionService,
+          useValue: mockDraftExtractionService,
+        },
       ],
     }).compile();
 
     service = module.get<SecondBrainExtractionService>(SecondBrainExtractionService);
     extractedEventRepo = module.get(getRepositoryToken(ExtractedEvent));
+    draftExtractionService = module.get(DraftExtractionService);
     conversationGrouperService = module.get(ConversationGrouperService);
     crossChatContextService = module.get(CrossChatContextService);
     entityFactService = module.get(EntityFactService);
@@ -412,26 +424,20 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-1' } as any,
       });
 
-      const meetingEvent = {
-        ...mockExtractedEvent,
-        eventType: ExtractedEventType.MEETING,
-      };
-      const promiseEvent = {
-        ...mockExtractedEvent,
-        eventType: ExtractedEventType.PROMISE_BY_ME,
-      };
-
-      extractedEventRepo.create
-        .mockReturnValueOnce(meetingEvent as ExtractedEvent)
-        .mockReturnValueOnce(promiseEvent as ExtractedEvent);
-      extractedEventRepo.save
-        .mockResolvedValueOnce(meetingEvent as ExtractedEvent)
-        .mockResolvedValueOnce(promiseEvent as ExtractedEvent);
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-123',
+        counts: { facts: 0, tasks: 0, commitments: 2, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
 
       const result = await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
       expect(conversationGrouperService.formatConversationForPrompt).toHaveBeenCalledWith(
@@ -447,7 +453,8 @@ describe('SecondBrainExtractionService', () => {
         }),
       );
       expect(result.sourceMessageIds).toEqual(['msg-1', 'msg-2']);
-      expect(result.extractedEvents).toHaveLength(2);
+      expect(result.extractedCount).toBe(2);
+      expect(result.counts.commitments).toBe(2);
       expect(result.tokensUsed).toBe(300);
     });
 
@@ -471,38 +478,47 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-2' } as any,
       });
 
-      const taskEvent = {
-        ...mockExtractedEvent,
-        eventType: ExtractedEventType.TASK,
-      };
-      extractedEventRepo.create.mockReturnValue(taskEvent as ExtractedEvent);
-      extractedEventRepo.save.mockResolvedValue(taskEvent as ExtractedEvent);
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-456',
+        counts: { facts: 0, tasks: 1, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
 
       const result = await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
-      // Only task event should be saved (confidence 0.8 >= 0.6)
-      expect(extractedEventRepo.save).toHaveBeenCalledTimes(1);
-      expect(result.extractedEvents).toHaveLength(1);
+      // Only task event should be extracted (confidence 0.8 >= 0.6)
+      // Low confidence meeting (0.3) should be filtered out before createDrafts
+      expect(mockDraftExtractionService.createDrafts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tasks: expect.arrayContaining([
+            expect.objectContaining({ title: 'Review code' }),
+          ]),
+        }),
+      );
+      expect(result.extractedCount).toBe(1);
     });
 
-    it('should handle third-party fact with subject resolution', async () => {
+    it('should handle fact extraction', async () => {
       mockClaudeAgentService.call.mockResolvedValue({
         data: {
           events: [
             {
               type: 'fact',
               confidence: 0.9,
-              sourceQuote: 'У Игоря ДР 10 августа',
+              sourceQuote: 'У меня ДР 10 августа',
               data: {
                 factType: 'birthday',
                 value: '10 августа',
-                quote: 'У Игоря ДР 10 августа',
+                quote: 'У меня ДР 10 августа',
               },
-              subjectMention: 'Игорь', // Third-party mention
             },
           ],
         },
@@ -510,37 +526,35 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-3' } as any,
       });
 
-      const factEvent = {
-        ...mockExtractedEvent,
-        eventType: ExtractedEventType.FACT,
-        entityId: null, // Should be null for third-party
-        enrichmentData: {
-          needsSubjectResolution: true,
-          subjectMention: 'Игорь',
-          conversationEntityId: 'entity-1',
-        },
-      };
-      extractedEventRepo.create.mockReturnValue(factEvent as ExtractedEvent);
-      extractedEventRepo.save.mockResolvedValue(factEvent as ExtractedEvent);
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-789',
+        counts: { facts: 1, tasks: 0, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
 
       const result = await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
-      expect(extractedEventRepo.create).toHaveBeenCalledWith(
+      // Check that createDrafts was called with facts array
+      expect(mockDraftExtractionService.createDrafts).toHaveBeenCalledWith(
         expect.objectContaining({
-          entityId: null, // null because needs resolution
-          eventType: ExtractedEventType.FACT,
-          enrichmentData: expect.objectContaining({
-            needsSubjectResolution: true,
-            subjectMention: 'Игорь',
-            conversationEntityId: 'entity-1',
-          }),
+          facts: expect.arrayContaining([
+            expect.objectContaining({
+              factType: 'birthday',
+              value: '10 августа',
+            }),
+          ]),
         }),
       );
-      expect(result.extractedEvents).toHaveLength(1);
+      expect(result.extractedCount).toBe(1);
+      expect(result.counts.facts).toBe(1);
     });
 
     it('should include entity context in prompt', async () => {
@@ -554,10 +568,20 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-4' } as any,
       });
 
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-empty',
+        counts: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
+
       await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
       expect(entityFactService.getContextForExtraction).toHaveBeenCalledWith('entity-1');
@@ -579,10 +603,20 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-5' } as any,
       });
 
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-empty',
+        counts: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
+
       await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
       expect(crossChatContextService.getContext).toHaveBeenCalledWith(
@@ -604,9 +638,10 @@ describe('SecondBrainExtractionService', () => {
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
-      expect(result.extractedEvents).toHaveLength(0);
+      expect(result.extractedCount).toBe(0);
       expect(result.tokensUsed).toBe(0);
       expect(result.sourceMessageIds).toEqual(['msg-1', 'msg-2']);
     });
@@ -622,14 +657,24 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-6' } as any,
       });
 
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-empty',
+        counts: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
+
       // Should not throw
       const result = await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
-      expect(result.extractedEvents).toHaveLength(0);
+      expect(result.extractedCount).toBe(0);
       expect(mockClaudeAgentService.call).toHaveBeenCalled();
     });
 
@@ -644,18 +689,28 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-7' } as any,
       });
 
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-empty',
+        counts: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
+
       // Should not throw
       const result = await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
-      expect(result.extractedEvents).toHaveLength(0);
+      expect(result.extractedCount).toBe(0);
       expect(mockClaudeAgentService.call).toHaveBeenCalled();
     });
 
-    it('should use first message ID as primary source', async () => {
+    it('should pass sourceInteractionId to createDrafts', async () => {
       mockClaudeAgentService.call.mockResolvedValue({
         data: {
           events: [
@@ -670,23 +725,26 @@ describe('SecondBrainExtractionService', () => {
         run: { id: 'run-conv-8' } as any,
       });
 
-      const taskEvent = {
-        ...mockExtractedEvent,
-        eventType: ExtractedEventType.TASK,
-      };
-      extractedEventRepo.create.mockReturnValue(taskEvent as ExtractedEvent);
-      extractedEventRepo.save.mockResolvedValue(taskEvent as ExtractedEvent);
+      // Mock DraftExtractionService.createDrafts
+      mockDraftExtractionService.createDrafts.mockResolvedValue({
+        batchId: 'batch-task',
+        counts: { facts: 0, tasks: 1, commitments: 0, projects: 0 },
+        skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+        approvals: [],
+        errors: [],
+      });
 
       await service.extractFromConversation(
         mockConversation,
         'entity-1',
         'interaction-1',
+        'owner-123',
       );
 
-      expect(extractedEventRepo.create).toHaveBeenCalledWith(
+      expect(mockDraftExtractionService.createDrafts).toHaveBeenCalledWith(
         expect.objectContaining({
-          sourceMessageId: 'msg-1', // First message in conversation
           sourceInteractionId: 'interaction-1',
+          ownerEntityId: 'owner-123',
         }),
       );
     });
