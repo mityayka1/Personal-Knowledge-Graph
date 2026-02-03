@@ -1,34 +1,47 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Repository, In } from 'typeorm';
 import {
-  ExtractedEvent,
-  ExtractedEventType,
+  PendingApproval,
+  PendingApprovalStatus,
+  PendingApprovalItemType,
   Commitment,
   CommitmentType,
+  Activity,
+  EntityFact,
   escapeHtml,
 } from '@pkg/entities';
-import { TelegramNotifierService } from './telegram-notifier.service';
-import { NotificationService } from './notification.service';
+import { TelegramNotifierService, TelegramButton } from './telegram-notifier.service';
 import { DigestActionStoreService } from './digest-action-store.service';
-import { CarouselStateService } from './carousel-state.service';
 import { BriefStateService, BriefItem } from './brief-state.service';
 import { BriefDataProvider, MorningBriefData } from './brief-data-provider.service';
 
 @Injectable()
 export class DigestService {
   private readonly logger = new Logger(DigestService.name);
+  private readonly miniAppUrl: string | undefined;
 
   constructor(
-    @InjectRepository(ExtractedEvent)
-    private extractedEventRepo: Repository<ExtractedEvent>,
+    @InjectRepository(PendingApproval)
+    private pendingApprovalRepo: Repository<PendingApproval>,
+    @InjectRepository(Commitment)
+    private commitmentRepo: Repository<Commitment>,
+    @InjectRepository(Activity)
+    private activityRepo: Repository<Activity>,
+    @InjectRepository(EntityFact)
+    private entityFactRepo: Repository<EntityFact>,
+    private configService: ConfigService,
     private briefDataProvider: BriefDataProvider,
     private telegramNotifier: TelegramNotifierService,
-    private notificationService: NotificationService,
     private digestActionStore: DigestActionStoreService,
-    private carouselStateService: CarouselStateService,
     private briefStateService: BriefStateService,
-  ) {}
+  ) {
+    // Support both MINI_APP_URL and TELEGRAM_MINI_APP_URL for consistency with telegram-adapter
+    this.miniAppUrl =
+      this.configService.get<string>('MINI_APP_URL') ||
+      this.configService.get<string>('TELEGRAM_MINI_APP_URL');
+  }
 
   /**
    * Send morning brief with today's schedule and reminders.
@@ -253,14 +266,13 @@ export class DigestService {
   }
 
   /**
-   * Send hourly digest with medium-priority pending events.
-   * Uses carousel mode for multiple events (> 1).
+   * Send hourly digest with pending approvals.
+   * Shows items awaiting user confirmation.
    */
   async sendHourlyDigest(): Promise<void> {
-    const events = await this.notificationService.getPendingEventsForDigest('medium', 10);
+    const approvals = await this.getPendingApprovals(10);
 
-    if (events.length === 0) {
-      // Send "no events" message (same pattern as sendDailyDigest)
+    if (approvals.length === 0) {
       await this.telegramNotifier.send({
         message: '<b>Дайджест событий</b>\n\nНет новых событий для обработки.',
         parseMode: 'HTML',
@@ -269,41 +281,25 @@ export class DigestService {
       return;
     }
 
-    // Use carousel mode for multiple events
-    if (events.length > 1) {
-      await this.sendDigestAsCarousel(events, 'hourly');
-      return;
-    }
-
-    // Single event - use enhanced format with full context
-    const event = events[0];
-    const enhancedContent = await this.notificationService.formatEnhancedEventNotification(event);
-    const message = '<b>Новые события:</b>\n\n' + enhancedContent;
-    const buttons = await this.getDigestButtons(events);
+    // Format message with pending items
+    const message = await this.formatApprovalDigest(approvals, 'hourly');
+    const buttons = await this.getApprovalDigestButtons(approvals);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
 
     if (success) {
-      await this.notificationService.markEventsAsNotified(events.map((e) => e.id));
-      this.logger.log(`Hourly digest sent with ${events.length} event`);
+      this.logger.log(`Hourly digest sent with ${approvals.length} pending approvals`);
     }
   }
 
   /**
-   * Send daily digest with all remaining pending events.
-   * Uses carousel mode for multiple events (> 1).
+   * Send daily digest with all pending approvals.
+   * Shows all items awaiting user confirmation.
    */
   async sendDailyDigest(): Promise<void> {
-    // Get both medium and low priority events
-    const [mediumEvents, lowEvents] = await Promise.all([
-      this.notificationService.getPendingEventsForDigest('medium', 10),
-      this.notificationService.getPendingEventsForDigest('low', 20),
-    ]);
+    const approvals = await this.getPendingApprovals(30);
 
-    const allEvents = [...mediumEvents, ...lowEvents];
-
-    if (allEvents.length === 0) {
-      // Send a "nothing pending" message
+    if (approvals.length === 0) {
       await this.telegramNotifier.send({
         message: '<b>Дайджест за день</b>\n\nНет новых событий для обработки.',
         parseMode: 'HTML',
@@ -311,78 +307,193 @@ export class DigestService {
       return;
     }
 
-    // Use carousel mode for multiple events
-    if (allEvents.length > 1) {
-      await this.sendDigestAsCarousel(allEvents, 'daily');
-      return;
-    }
-
-    // Single event - use enhanced format with full context
-    const event = allEvents[0];
-    const enhancedContent = await this.notificationService.formatEnhancedEventNotification(event);
-    const message = '<b>Дайджест за день</b>\n\n' + enhancedContent;
-    const buttons = await this.getBatchDigestButtons(allEvents);
+    // Format message with pending items
+    const message = await this.formatApprovalDigest(approvals, 'daily');
+    const buttons = await this.getApprovalDigestButtons(approvals);
 
     const success = await this.telegramNotifier.sendWithButtons(message, buttons);
 
     if (success) {
-      await this.notificationService.markEventsAsNotified(allEvents.map((e) => e.id));
-      this.logger.log(`Daily digest sent with ${allEvents.length} event`);
+      this.logger.log(`Daily digest sent with ${approvals.length} pending approvals`);
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // PendingApproval Methods
+  // ─────────────────────────────────────────────────────────────────
+
   /**
-   * Send digest as carousel (one event at a time with navigation).
-   * Creates carousel state in Redis and sends first event card.
+   * Get pending approvals for digest.
    */
-  private async sendDigestAsCarousel(
-    events: ExtractedEvent[],
+  private async getPendingApprovals(limit: number): Promise<PendingApproval[]> {
+    return this.pendingApprovalRepo.find({
+      where: { status: PendingApprovalStatus.PENDING },
+      order: { createdAt: 'ASC' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Format digest message for pending approvals.
+   * Uses batch fetching to avoid N+1 query problem.
+   */
+  private async formatApprovalDigest(
+    approvals: PendingApproval[],
     digestType: 'hourly' | 'daily',
-  ): Promise<void> {
-    const eventIds = events.map((e) => e.id);
+  ): Promise<string> {
+    const header =
+      digestType === 'hourly' ? '<b>Новые события:</b>' : '<b>Дайджест за день</b>';
+    const lines: string[] = [header, ''];
 
-    // Get owner chat ID for sending
-    const chatId = await this.telegramNotifier.getOwnerChatId();
-    if (!chatId) {
-      this.logger.warn('Cannot send carousel: no owner chat ID configured');
-      return;
+    // Batch fetch all summaries to avoid N+1 queries
+    const summaryMap = await this.batchFetchApprovalSummaries(approvals);
+
+    for (let i = 0; i < approvals.length; i++) {
+      const approval = approvals[i];
+      const emoji = this.getApprovalEmoji(approval.itemType);
+      const summary = summaryMap.get(approval.id) || this.getFallbackSummary(approval);
+      lines.push(`${i + 1}. ${emoji} ${summary}`);
     }
 
-    // Create carousel with placeholder messageId=0 (will be updated after send)
-    // The carouselId is generated first so buttons will have correct ID
-    const carouselId = await this.carouselStateService.create(String(chatId), 0, eventIds);
-
-    // Get first event to display
-    const navResult = await this.carouselStateService.getCurrentEvent(carouselId);
-    if (!navResult) {
-      this.logger.error('Failed to get first carousel event');
-      await this.carouselStateService.delete(carouselId);
-      return;
+    if (digestType === 'daily') {
+      lines.push('');
+      lines.push(`<i>Всего: ${approvals.length} событий</i>`);
     }
 
-    // Format carousel card and buttons (buttons use carouselId which won't change)
-    const message = await this.notificationService.formatCarouselCard(navResult);
-    const buttons = this.notificationService.getCarouselButtons(carouselId);
+    return lines.join('\n');
+  }
 
-    // Add header based on digest type
-    const header = digestType === 'hourly' ? '<b>Новые события</b>\n\n' : '<b>Дайджест за день</b>\n\n';
-    const fullMessage = header + message;
+  /**
+   * Batch fetch summaries for all approvals (max 3 queries instead of N).
+   */
+  private async batchFetchApprovalSummaries(
+    approvals: PendingApproval[],
+  ): Promise<Map<string, string>> {
+    const summaryMap = new Map<string, string>();
 
-    // Send message and get messageId
-    const messageId = await this.telegramNotifier.sendWithButtonsAndGetId(fullMessage, buttons);
+    // Group approvals by item type
+    const commitmentApprovals = approvals.filter(
+      (a) => a.itemType === PendingApprovalItemType.COMMITMENT,
+    );
+    const activityApprovals = approvals.filter(
+      (a) =>
+        a.itemType === PendingApprovalItemType.TASK ||
+        a.itemType === PendingApprovalItemType.PROJECT,
+    );
+    const factApprovals = approvals.filter(
+      (a) => a.itemType === PendingApprovalItemType.FACT,
+    );
 
-    if (messageId) {
-      // Update carousel state with actual messageId (carouselId stays the same)
-      await this.carouselStateService.updateMessageId(carouselId, messageId);
+    // Batch fetch commitments
+    if (commitmentApprovals.length > 0) {
+      const targetIds = commitmentApprovals.map((a) => a.targetId);
+      const commitments = await this.commitmentRepo.find({
+        where: { id: In(targetIds) },
+        select: ['id', 'title'],
+      });
+      const commitmentById = new Map(commitments.map((c) => [c.id, c]));
 
-      // Mark all events as notified (they are in the carousel now)
-      await this.notificationService.markEventsAsNotified(eventIds);
-      this.logger.log(`${digestType} carousel sent with ${events.length} events (id: ${carouselId})`);
-    } else {
-      // Failed to send - cleanup
-      await this.carouselStateService.delete(carouselId);
-      this.logger.error('Failed to send carousel message');
+      for (const approval of commitmentApprovals) {
+        const commitment = commitmentById.get(approval.targetId);
+        if (commitment) {
+          summaryMap.set(approval.id, escapeHtml(commitment.title || 'Обязательство'));
+        }
+      }
     }
+
+    // Batch fetch activities (tasks and projects)
+    if (activityApprovals.length > 0) {
+      const targetIds = activityApprovals.map((a) => a.targetId);
+      const activities = await this.activityRepo.find({
+        where: { id: In(targetIds) },
+        select: ['id', 'name'],
+      });
+      const activityById = new Map(activities.map((a) => [a.id, a]));
+
+      for (const approval of activityApprovals) {
+        const activity = activityById.get(approval.targetId);
+        if (activity) {
+          summaryMap.set(approval.id, escapeHtml(activity.name || 'Активность'));
+        }
+      }
+    }
+
+    // Batch fetch facts
+    if (factApprovals.length > 0) {
+      const targetIds = factApprovals.map((a) => a.targetId);
+      const facts = await this.entityFactRepo.find({
+        where: { id: In(targetIds) },
+        select: ['id', 'factType', 'value'],
+      });
+      const factById = new Map(facts.map((f) => [f.id, f]));
+
+      for (const approval of factApprovals) {
+        const fact = factById.get(approval.targetId);
+        if (fact) {
+          summaryMap.set(approval.id, escapeHtml(`${fact.factType}: ${fact.value}`));
+        }
+      }
+    }
+
+    return summaryMap;
+  }
+
+  /**
+   * Get fallback summary when entity not found.
+   */
+  private getFallbackSummary(approval: PendingApproval): string {
+    return approval.sourceQuote
+      ? escapeHtml(approval.sourceQuote.slice(0, 50))
+      : 'Событие';
+  }
+
+  /**
+   * Get emoji for approval item type.
+   */
+  private getApprovalEmoji(itemType: PendingApprovalItemType): string {
+    const emojis: Record<PendingApprovalItemType, string> = {
+      [PendingApprovalItemType.COMMITMENT]: '🤝',
+      [PendingApprovalItemType.TASK]: '📋',
+      [PendingApprovalItemType.PROJECT]: '📁',
+      [PendingApprovalItemType.FACT]: 'ℹ️',
+    };
+    return emojis[itemType] || '📌';
+  }
+
+  /**
+   * Get buttons for pending approval digest.
+   * Uses digestActionStore for short IDs.
+   * Includes Mini App button for piecemeal approval (carousel replacement).
+   */
+  private async getApprovalDigestButtons(
+    approvals: PendingApproval[],
+  ): Promise<Array<Array<TelegramButton>>> {
+    const approvalIds = approvals.map((a) => a.id);
+    const shortId = await this.digestActionStore.store(approvalIds);
+
+    const confirmText = approvals.length === 1 ? 'Подтвердить' : 'Подтвердить все';
+    const rejectText = approvals.length === 1 ? 'Игнорировать' : 'Игнорировать все';
+
+    const buttons: Array<Array<TelegramButton>> = [
+      [
+        { text: confirmText, callback_data: `pa_c:${shortId}` },
+        { text: rejectText, callback_data: `pa_r:${shortId}` },
+      ],
+    ];
+
+    // Add Mini App button for piecemeal approval (replaces old carousel UX)
+    if (this.miniAppUrl && approvals.length > 0) {
+      // Use first approval's batchId for deep linking, or 'pending' for general view
+      const batchId = approvals[0].batchId || 'pending';
+      buttons.push([
+        {
+          text: '📱 Открыть в приложении',
+          web_app: { url: `${this.miniAppUrl}?startapp=approval_${batchId}` },
+        },
+      ]);
+    }
+
+    return buttons;
   }
 
   /**
@@ -396,6 +507,7 @@ export class DigestService {
       [CommitmentType.DEADLINE]: 'Дедлайн',
       [CommitmentType.REMINDER]: 'Напоминание',
       [CommitmentType.RECURRING]: 'Периодическая задача',
+      [CommitmentType.MEETING]: 'Встреча',
     };
 
     const typeLabel = typeLabels[commitment.type] || 'Обязательство';
@@ -411,140 +523,6 @@ export class DigestService {
     return `${typeLabel}: ${commitment.title}`;
   }
 
-  private formatHourlyDigest(events: ExtractedEvent[]): string {
-    const lines: string[] = ['<b>Новые события:</b>', ''];
-
-    events.forEach((event, index) => {
-      lines.push(`${index + 1}. ${this.getEventEmoji(event.eventType)} ${this.getEventSummary(event)}`);
-    });
-
-    return lines.join('\n');
-  }
-
-  private formatDailyDigest(events: ExtractedEvent[]): string {
-    const lines: string[] = ['<b>Дайджест за день</b>', ''];
-
-    // Group by type
-    const grouped = this.groupEventsByType(events);
-
-    for (const [type, typeEvents] of Object.entries(grouped)) {
-      if (typeEvents.length === 0) continue;
-
-      lines.push(`<b>${this.getEventTypeLabel(type as ExtractedEventType)}:</b>`);
-      typeEvents.forEach((event) => {
-        lines.push(`• ${this.getEventSummary(event)}`);
-      });
-      lines.push('');
-    }
-
-    lines.push(`<i>Всего: ${events.length} событий</i>`);
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Get buttons for digest notification.
-   * Always uses Redis short ID for unified callback_data format.
-   * Format: d_c:<shortId> (confirm), d_r:<shortId> (reject)
-   */
-  private async getDigestButtons(
-    events: ExtractedEvent[],
-  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
-    const eventIds = events.map((e) => e.id);
-    const shortId = await this.digestActionStore.store(eventIds);
-
-    const confirmText = events.length === 1 ? 'Подтвердить' : 'Подтвердить все';
-    const rejectText = events.length === 1 ? 'Игнорировать' : 'Игнорировать все';
-
-    return [
-      [
-        { text: confirmText, callback_data: `d_c:${shortId}` },
-        { text: rejectText, callback_data: `d_r:${shortId}` },
-      ],
-    ];
-  }
-
-  /**
-   * Get batch action buttons for daily digest (vertical layout).
-   */
-  private async getBatchDigestButtons(
-    events: ExtractedEvent[],
-  ): Promise<Array<Array<{ text: string; callback_data: string }>>> {
-    const eventIds = events.map((e) => e.id);
-    const shortId = await this.digestActionStore.store(eventIds);
-
-    return [
-      [{ text: 'Подтвердить все', callback_data: `d_c:${shortId}` }],
-      [{ text: 'Игнорировать все', callback_data: `d_r:${shortId}` }],
-    ];
-  }
-
-  private groupEventsByType(events: ExtractedEvent[]): Record<string, ExtractedEvent[]> {
-    return events.reduce(
-      (acc, event) => {
-        const type = event.eventType;
-        if (!acc[type]) acc[type] = [];
-        acc[type].push(event);
-        return acc;
-      },
-      {} as Record<string, ExtractedEvent[]>,
-    );
-  }
-
-  private getEventEmoji(type: ExtractedEventType): string {
-    switch (type) {
-      case ExtractedEventType.MEETING:
-        return '';
-      case ExtractedEventType.PROMISE_BY_ME:
-        return '';
-      case ExtractedEventType.PROMISE_BY_THEM:
-        return '';
-      case ExtractedEventType.TASK:
-        return '';
-      case ExtractedEventType.FACT:
-        return '';
-      case ExtractedEventType.CANCELLATION:
-        return '';
-      default:
-        return '';
-    }
-  }
-
-  private getEventTypeLabel(type: ExtractedEventType): string {
-    switch (type) {
-      case ExtractedEventType.MEETING:
-        return 'Встречи';
-      case ExtractedEventType.PROMISE_BY_ME:
-        return 'Ты обещал';
-      case ExtractedEventType.PROMISE_BY_THEM:
-        return 'Тебе обещали';
-      case ExtractedEventType.TASK:
-        return 'Задачи';
-      case ExtractedEventType.FACT:
-        return 'Новые факты';
-      case ExtractedEventType.CANCELLATION:
-        return 'Отмены';
-      default:
-        return 'Прочее';
-    }
-  }
-
-  private getEventSummary(event: ExtractedEvent): string {
-    const data = event.extractedData as Record<string, unknown>;
-
-    let text: string;
-    if (data.topic) {
-      text = String(data.topic);
-    } else if (data.what) {
-      text = String(data.what);
-    } else if (data.value) {
-      text = `${data.factType}: ${data.value}`;
-    } else {
-      text = 'Событие без описания';
-    }
-
-    return escapeHtml(text);
-  }
 
   private getDaysOverdue(eventDate: Date | null): number {
     if (!eventDate) return 0;

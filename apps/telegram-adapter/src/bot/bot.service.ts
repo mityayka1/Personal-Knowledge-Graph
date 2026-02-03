@@ -13,11 +13,18 @@ import { ApprovalCallbackHandler } from './handlers/approval-callback.handler';
 import { BriefCallbackHandler } from './handlers/brief-callback.handler';
 import { FactCallbackHandler } from './handlers/fact-callback.handler';
 
+/**
+ * Telegram inline button - supports both callback_data and web_app types.
+ */
+export type TelegramButton =
+  | { text: string; callback_data: string }
+  | { text: string; web_app: { url: string } };
+
 export interface SendNotificationOptions {
   chatId: number | string;
   message: string;
   parseMode?: 'Markdown' | 'HTML';
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramButton>>;
 }
 
 @Injectable()
@@ -306,10 +313,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const replyMarkup: InlineKeyboardMarkup | undefined = options.buttons
         ? {
             inline_keyboard: options.buttons.map((row) =>
-              row.map((btn) => ({
-                text: btn.text,
-                callback_data: btn.callback_data,
-              })),
+              row.map((btn) => {
+                // Handle both callback_data and web_app button types
+                if ('web_app' in btn) {
+                  return { text: btn.text, web_app: btn.web_app };
+                }
+                return { text: btn.text, callback_data: btn.callback_data };
+              }),
             ),
           }
         : undefined;
@@ -335,7 +345,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     message: string,
     options?: {
       parseMode?: 'Markdown' | 'HTML';
-      buttons?: Array<Array<{ text: string; callback_data: string }>>;
+      buttons?: Array<Array<TelegramButton>>;
     },
   ): Promise<boolean> {
     if (!this.ownerChatId) {
@@ -380,10 +390,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const replyMarkup: InlineKeyboardMarkup | undefined = options.buttons
         ? {
             inline_keyboard: options.buttons.map((row) =>
-              row.map((btn) => ({
-                text: btn.text,
-                callback_data: btn.callback_data,
-              })),
+              row.map((btn) => {
+                // Handle both callback_data and web_app button types
+                if ('web_app' in btn) {
+                  return { text: btn.text, web_app: btn.web_app };
+                }
+                return { text: btn.text, callback_data: btn.callback_data };
+              }),
             ),
           }
         : undefined;
@@ -411,7 +424,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     message: string,
     options?: {
       parseMode?: 'Markdown' | 'HTML';
-      buttons?: Array<Array<{ text: string; callback_data: string }>>;
+      buttons?: Array<Array<TelegramButton>>;
     },
   ): Promise<boolean> {
     if (!this.bot) {
@@ -423,10 +436,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       const replyMarkup: InlineKeyboardMarkup | undefined = options?.buttons
         ? {
             inline_keyboard: options.buttons.map((row) =>
-              row.map((btn) => ({
-                text: btn.text,
-                callback_data: btn.callback_data,
-              })),
+              row.map((btn) => {
+                // Handle both callback_data and web_app button types
+                if ('web_app' in btn) {
+                  return { text: btn.text, web_app: btn.web_app };
+                }
+                return { text: btn.text, callback_data: btn.callback_data };
+              }),
             ),
           }
         : undefined;

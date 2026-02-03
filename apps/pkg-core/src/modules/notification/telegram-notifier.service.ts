@@ -4,11 +4,18 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { BriefState } from '@pkg/entities';
 
+/**
+ * Telegram inline button - supports both callback_data and web_app types.
+ */
+export type TelegramButton =
+  | { text: string; callback_data: string }
+  | { text: string; web_app: { url: string } };
+
 export interface SendNotificationOptions {
   chatId?: number | string;
   message: string;
   parseMode?: 'Markdown' | 'HTML';
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: Array<Array<TelegramButton>>;
 }
 
 export interface NotificationResponse {
@@ -87,7 +94,7 @@ export class TelegramNotifierService {
    */
   async sendWithButtons(
     message: string,
-    buttons: Array<Array<{ text: string; callback_data: string }>>,
+    buttons: Array<Array<TelegramButton>>,
     parseMode: 'Markdown' | 'HTML' = 'HTML',
   ): Promise<boolean> {
     return this.send({
@@ -103,7 +110,7 @@ export class TelegramNotifierService {
    */
   async sendWithButtonsAndGetId(
     message: string,
-    buttons: Array<Array<{ text: string; callback_data: string }>>,
+    buttons: Array<Array<TelegramButton>>,
     parseMode: 'Markdown' | 'HTML' = 'HTML',
   ): Promise<number | null> {
     const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/send-with-id`;
@@ -175,7 +182,7 @@ export class TelegramNotifierService {
     chatId: number | string,
     messageId: number,
     message: string,
-    buttons?: Array<Array<{ text: string; callback_data: string }>>,
+    buttons?: Array<Array<TelegramButton>>,
     parseMode: 'Markdown' | 'HTML' = 'HTML',
   ): Promise<boolean> {
     const targetUrl = `${this.telegramAdapterUrl}/api/v1/notifications/edit`;

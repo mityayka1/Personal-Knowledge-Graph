@@ -15,8 +15,13 @@ import {
   PromiseEventData,
   TaskEventData,
   FactEventData,
-  CancellationEventData,
 } from '@pkg/entities';
+import { DraftExtractionService } from './draft-extraction.service';
+import {
+  ExtractedFact,
+  ExtractedTask,
+  ExtractedCommitment,
+} from './daily-synthesis-extraction.types';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
@@ -35,7 +40,7 @@ interface RawExtractedEvent {
 
 /**
  * JSON Schema for Second Brain event extraction
- * Extracts: meetings, promises (by me/them), tasks, facts, cancellations
+ * Extracts: meetings, promises (by me/them), tasks, facts
  */
 const SECOND_BRAIN_EXTRACTION_SCHEMA = {
   type: 'object',
@@ -48,7 +53,7 @@ const SECOND_BRAIN_EXTRACTION_SCHEMA = {
         properties: {
           type: {
             type: 'string',
-            enum: ['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact', 'cancellation'],
+            enum: ['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact'],
             description: 'Event type',
           },
           confidence: {
@@ -95,7 +100,7 @@ const CONVERSATION_EXTRACTION_SCHEMA = {
         properties: {
           type: {
             type: 'string',
-            enum: ['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact', 'cancellation'],
+            enum: ['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact'],
             description: 'Event type',
           },
           confidence: {
@@ -141,17 +146,43 @@ interface ExtractionResponse {
   events: RawExtractedEvent[];
 }
 
+/**
+ * @deprecated Use ConversationExtractionResultV2 with PendingApproval system instead.
+ */
 export interface SecondBrainExtractionResult {
   sourceMessageId: string;
   extractedEvents: ExtractedEvent[];
   tokensUsed: number;
 }
 
+/**
+ * @deprecated Use ConversationExtractionResultV2 with PendingApproval system instead.
+ */
 export interface ConversationExtractionResult {
   /** IDs of all messages in the conversation */
   sourceMessageIds: string[];
   /** Extracted events from the conversation */
   extractedEvents: ExtractedEvent[];
+  /** Total tokens used for extraction */
+  tokensUsed: number;
+}
+
+/**
+ * Result from conversation extraction using new PendingApproval system.
+ */
+export interface ConversationExtractionResultV2 {
+  /** Batch ID for PendingApproval records */
+  batchId: string;
+  /** IDs of all messages in the conversation */
+  sourceMessageIds: string[];
+  /** Total items extracted */
+  extractedCount: number;
+  /** Breakdown by type */
+  counts: {
+    facts: number;
+    tasks: number;
+    commitments: number;
+  };
   /** Total tokens used for extraction */
   tokensUsed: number;
 }
@@ -172,6 +203,7 @@ export class SecondBrainExtractionService {
     private extractedEventRepo: Repository<ExtractedEvent>,
     private claudeAgentService: ClaudeAgentService,
     private settingsService: SettingsService,
+    private draftExtractionService: DraftExtractionService,
     @Optional()
     private enrichmentQueueService: EnrichmentQueueService | null,
     @Optional()
@@ -399,21 +431,30 @@ export class SecondBrainExtractionService {
    * - Resolves ambiguous pronouns
    * - Detects third-party mentions for fact attribution
    *
+   * Creates draft entities (EntityFact, Activity, Commitment) with PendingApproval
+   * records for user confirmation via Mini App.
+   *
    * @param conversation - Grouped conversation with messages
    * @param entityId - Entity ID of the main participant (other than user)
    * @param interactionId - ID of the interaction
+   * @param ownerEntityId - ID of the owner entity (user's own entity)
    */
   async extractFromConversation(
     conversation: ConversationGroup,
     entityId: string,
     interactionId: string,
-  ): Promise<ConversationExtractionResult> {
+    ownerEntityId: string,
+  ): Promise<ConversationExtractionResultV2> {
+    const sourceMessageIds = conversation.messages.map((m) => m.id);
+
     // Check if required services are available
     if (!this.conversationGrouperService) {
       this.logger.warn('ConversationGrouperService not available');
       return {
-        sourceMessageIds: conversation.messages.map((m) => m.id),
-        extractedEvents: [],
+        batchId: '',
+        sourceMessageIds,
+        extractedCount: 0,
+        counts: { facts: 0, tasks: 0, commitments: 0 },
         tokensUsed: 0,
       };
     }
@@ -468,11 +509,11 @@ export class SecondBrainExtractionService {
       });
 
       const rawEvents = data?.events || [];
-      const savedEvents: ExtractedEvent[] = [];
-      const sourceMessageIds = conversation.messages.map((m) => m.id);
 
-      // Use first message ID as the primary source for events
-      const primaryMessageId = sourceMessageIds[0];
+      // Map raw events to DraftExtractionInput format
+      const facts: ExtractedFact[] = [];
+      const tasks: ExtractedTask[] = [];
+      const commitments: ExtractedCommitment[] = [];
 
       for (const rawEvent of rawEvents) {
         // Skip low confidence
@@ -480,120 +521,178 @@ export class SecondBrainExtractionService {
           continue;
         }
 
-        const eventType = this.mapEventType(rawEvent.type);
-        if (!eventType) {
-          this.logger.warn(`Unknown event type: ${rawEvent.type}`);
-          continue;
-        }
+        switch (rawEvent.type) {
+          case 'fact':
+            facts.push(this.mapToExtractedFact(rawEvent, entityId));
+            break;
 
-        const extractedData = this.normalizeEventData(eventType, rawEvent.data);
+          case 'task':
+            tasks.push(this.mapToExtractedTask(rawEvent));
+            break;
 
-        try {
-          // Check if fact needs subject resolution (third-party mention)
-          const needsSubjectResolution =
-            eventType === ExtractedEventType.FACT && !!rawEvent.subjectMention;
+          case 'promise_by_me':
+            commitments.push(
+              this.mapToExtractedCommitment(rawEvent, 'promise', 'self', entityId),
+            );
+            break;
 
-          const event = this.extractedEventRepo.create({
-            sourceMessageId: primaryMessageId,
-            sourceInteractionId: interactionId,
-            entityId: needsSubjectResolution ? null : entityId, // null if needs resolution
-            eventType,
-            extractedData,
-            sourceQuote: rawEvent.sourceQuote?.substring(0, settings.maxQuoteLength) || null,
-            confidence: Math.min(1, Math.max(0, rawEvent.confidence)),
-            status: ExtractedEventStatus.PENDING,
-            needsContext: false,
-            enrichmentData: needsSubjectResolution
-              ? {
-                  needsSubjectResolution: true,
-                  subjectMention: rawEvent.subjectMention,
-                  conversationEntityId: entityId, // For context
-                }
-              : null,
-          });
+          case 'promise_by_them':
+            commitments.push(
+              this.mapToExtractedCommitment(rawEvent, 'request', entityId, 'self'),
+            );
+            break;
 
-          const saved = await this.extractedEventRepo.save(event);
-          savedEvents.push(saved);
+          case 'meeting':
+            commitments.push(this.mapToExtractedMeeting(rawEvent, entityId));
+            break;
 
-          // Trigger subject resolution for third-party facts
-          if (needsSubjectResolution && rawEvent.subjectMention && this.subjectResolverService) {
-            try {
-              const resolution = await this.subjectResolverService.resolve(
-                rawEvent.subjectMention,
-                conversation.participantEntityIds,
-                rawEvent.confidence,
-                {
-                  sourceExtractedEventId: saved.id,
-                  sourceQuote: rawEvent.sourceQuote,
-                },
-              );
-
-              // Handle resolution result
-              if (resolution.status === 'resolved' && resolution.entityId) {
-                // Auto-resolved: update the event with the entity ID
-                saved.entityId = resolution.entityId;
-                if (saved.enrichmentData) {
-                  saved.enrichmentData = {
-                    ...saved.enrichmentData,
-                    needsSubjectResolution: false,
-                    resolvedEntityId: resolution.entityId,
-                  };
-                }
-                await this.extractedEventRepo.save(saved);
-                this.logger.log(
-                  `Auto-resolved subject "${rawEvent.subjectMention}" to entity ${resolution.entityId}`,
-                );
-              } else if (resolution.status === 'pending') {
-                // Confirmation created, update event with confirmationId for tracking
-                if (saved.enrichmentData && resolution.confirmationId) {
-                  saved.enrichmentData = {
-                    ...saved.enrichmentData,
-                    pendingConfirmationId: resolution.confirmationId,
-                  };
-                  await this.extractedEventRepo.save(saved);
-                }
-                this.logger.debug(
-                  `Created subject confirmation ${resolution.confirmationId} for "${rawEvent.subjectMention}"`,
-                );
-              } else if (resolution.status === 'unknown') {
-                // No matches found, might need manual entity creation
-                this.logger.debug(
-                  `No matches found for subject "${rawEvent.subjectMention}", suggested name: ${resolution.suggestedName}`,
-                );
-              }
-            } catch (resolveError) {
-              const errMsg =
-                resolveError instanceof Error ? resolveError.message : String(resolveError);
-              this.logger.warn(
-                `Failed to resolve subject "${rawEvent.subjectMention}": ${errMsg}`,
-              );
-              // Don't fail the extraction, just log the error
-            }
-          }
-        } catch (saveError) {
-          const msg = saveError instanceof Error ? saveError.message : String(saveError);
-          this.logger.warn(`Failed to save extracted event: ${msg}`);
+          default:
+            this.logger.warn(`Unknown event type: ${rawEvent.type}`);
         }
       }
 
+      // Create drafts using DraftExtractionService
+      const draftResult = await this.draftExtractionService.createDrafts({
+        ownerEntityId,
+        facts,
+        projects: [],
+        tasks,
+        commitments,
+        sourceInteractionId: interactionId,
+      });
+
       this.logger.log(
-        `Extracted ${savedEvents.length} events from conversation ` +
-          `(${conversation.messages.length} messages, interactionId=${interactionId})`,
+        `Extracted from conversation (${conversation.messages.length} messages): ` +
+          `${draftResult.counts.facts} facts, ${draftResult.counts.tasks} tasks, ` +
+          `${draftResult.counts.commitments} commitments (batch=${draftResult.batchId})`,
       );
 
       return {
+        batchId: draftResult.batchId,
         sourceMessageIds,
-        extractedEvents: savedEvents,
+        extractedCount:
+          draftResult.counts.facts + draftResult.counts.tasks + draftResult.counts.commitments,
+        counts: {
+          facts: draftResult.counts.facts,
+          tasks: draftResult.counts.tasks,
+          commitments: draftResult.counts.commitments,
+        },
         tokensUsed: usage.inputTokens + usage.outputTokens,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Conversation extraction failed: ${message}`);
       return {
-        sourceMessageIds: conversation.messages.map((m) => m.id),
-        extractedEvents: [],
+        batchId: '',
+        sourceMessageIds,
+        extractedCount: 0,
+        counts: { facts: 0, tasks: 0, commitments: 0 },
         tokensUsed: 0,
       };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: Mapping helpers for DraftExtractionService
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Map raw event to ExtractedFact format.
+   */
+  private mapToExtractedFact(rawEvent: RawExtractedEvent, entityId: string): ExtractedFact {
+    const data = rawEvent.data as { factType?: string; value?: string };
+    return {
+      entityId,
+      factType: String(data.factType || 'other'),
+      value: String(data.value || ''),
+      sourceQuote: rawEvent.sourceQuote,
+      confidence: rawEvent.confidence,
+    };
+  }
+
+  /**
+   * Map raw event to ExtractedTask format.
+   */
+  private mapToExtractedTask(rawEvent: RawExtractedEvent): ExtractedTask {
+    const data = rawEvent.data as {
+      what?: string;
+      priority?: string;
+      deadline?: string;
+      deadlineText?: string;
+    };
+    return {
+      title: String(data.what || ''),
+      status: 'pending',
+      priority: this.mapTaskPriority(data.priority),
+      deadline: data.deadline,
+      sourceQuote: rawEvent.sourceQuote,
+      confidence: rawEvent.confidence,
+    };
+  }
+
+  /**
+   * Map raw event to ExtractedCommitment format.
+   */
+  private mapToExtractedCommitment(
+    rawEvent: RawExtractedEvent,
+    type: 'promise' | 'request',
+    from: string,
+    to: string,
+  ): ExtractedCommitment {
+    const data = rawEvent.data as {
+      what?: string;
+      deadline?: string;
+      deadlineText?: string;
+    };
+    return {
+      what: String(data.what || ''),
+      from,
+      to,
+      type,
+      deadline: data.deadline,
+      sourceQuote: rawEvent.sourceQuote,
+      confidence: rawEvent.confidence,
+    };
+  }
+
+  /**
+   * Map raw meeting event to ExtractedCommitment format.
+   */
+  private mapToExtractedMeeting(
+    rawEvent: RawExtractedEvent,
+    entityId: string,
+  ): ExtractedCommitment {
+    const data = rawEvent.data as {
+      topic?: string;
+      datetime?: string;
+      dateText?: string;
+    };
+    return {
+      what: data.topic || 'Встреча',
+      from: 'self',
+      to: entityId,
+      type: 'meeting',
+      deadline: data.datetime,
+      sourceQuote: rawEvent.sourceQuote,
+      confidence: rawEvent.confidence,
+    };
+  }
+
+  /**
+   * Map task priority string to expected format.
+   */
+  private mapTaskPriority(priority?: string): 'high' | 'medium' | 'low' | undefined {
+    switch (priority?.toLowerCase()) {
+      case 'high':
+      case 'urgent':
+        return 'high';
+      case 'low':
+        return 'low';
+      case 'normal':
+      case 'medium':
+        return 'medium';
+      default:
+        return undefined;
     }
   }
 
@@ -670,9 +769,6 @@ ${crossChatContext}
 5. **fact** — факт о человеке (ДР, телефон, email, должность, компания)
    data: { factType, value, quote }
    + subjectMention если факт о третьем лице
-
-6. **cancellation** — отмена/перенос
-   data: { what, newDateTime?, newDateText?, reason? }
 
 ВАЖНО:
 - confidence 0.0-1.0 (высокий если явно, низкий если вывод)
@@ -850,7 +946,6 @@ ${crossChatContext}
       promise_by_them: ExtractedEventType.PROMISE_BY_THEM,
       task: ExtractedEventType.TASK,
       fact: ExtractedEventType.FACT,
-      cancellation: ExtractedEventType.CANCELLATION,
     };
 
     const normalized = String(type).toLowerCase().replace('-', '_');
@@ -895,14 +990,6 @@ ${crossChatContext}
           value: String(data.value || ''),
           quote: String(data.quote || data.sourceQuote || ''),
         } as FactEventData;
-
-      case ExtractedEventType.CANCELLATION:
-        return {
-          what: String(data.what || data.description || ''),
-          newDateTime: data.newDateTime as string | undefined,
-          newDateText: data.newDateText as string | undefined,
-          reason: data.reason as string | undefined,
-        } as CancellationEventData;
 
       default:
         return data as ExtractedEventData;
@@ -1022,9 +1109,6 @@ ${recipientContext}Сегодня: ${today}
    - Нет КОНКРЕТНОГО значения (только упоминание типа "если есть номер" ≠ реальный номер)
    - Это условная/гипотетическая информация
    - Это вопрос ("какой у тебя номер?")
-
-6. **cancellation** — отмена или перенос чего-либо
-   data: { what: "что отменяется", newDateTime?, newDateText?, reason? }
 
 ВАЖНО:
 - confidence 0.0-1.0 (высокий если явно указано, низкий если домыслы)

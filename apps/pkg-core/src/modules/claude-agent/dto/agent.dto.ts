@@ -344,10 +344,10 @@ export class ExtractedCommitmentDto {
   deadline?: string;
 
   @ApiProperty({
-    enum: ['promise', 'request', 'agreement', 'deadline', 'reminder'],
+    enum: ['promise', 'request', 'agreement', 'deadline', 'reminder', 'meeting'],
     description: 'Commitment type',
   })
-  type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder';
+  type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder' | 'meeting';
 
   @ApiPropertyOptional({
     enum: ['high', 'medium', 'low'],

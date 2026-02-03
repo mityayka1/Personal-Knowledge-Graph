@@ -15,7 +15,6 @@ import {
 import { TelegramNotifierService } from './telegram-notifier.service';
 import { SettingsService } from '../settings/settings.service';
 import { DigestActionStoreService } from './digest-action-store.service';
-import { CarouselStateService, CarouselNavResult } from './carousel-state.service';
 
 type EventPriority = 'high' | 'medium' | 'low';
 
@@ -66,7 +65,6 @@ export class NotificationService {
     private telegramNotifier: TelegramNotifierService,
     private settingsService: SettingsService,
     private digestActionStore: DigestActionStoreService,
-    private carouselStateService: CarouselStateService,
   ) {}
 
   /**
@@ -740,126 +738,6 @@ export class NotificationService {
     return `<a href="${deepLink}">📎 Сообщение</a>`;
   }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Carousel Methods (Issue #61)
-  // ─────────────────────────────────────────────────────────────────
-
-  /**
-   * Format a carousel card for single event display.
-   * Shows event details with position indicator.
-   *
-   * Example:
-   * ```
-   * 📋 События (1/10)
-   * ─────────────────
-   * 📋 Задача • 🎯 Высокий приоритет
-   * 👤 От: Иван Петров
-   * 📝 подготовить отчёт
-   * ─────────────────
-   * ```
-   */
-  async formatCarouselCard(navResult: CarouselNavResult): Promise<string> {
-    const { event, index, total, remaining } = navResult;
-
-    const emoji = this.getEventEmoji(event.eventType);
-    const typeLabel = this.getEventTypeLabel(event.eventType);
-    const priority = await this.calculatePriority(event);
-    const priorityIcon = this.getPriorityIcon(priority);
-
-    // Get contact info and message link for the event (parallel)
-    const [contactInfo, messageLinkInfo] = await Promise.all([
-      this.getContactInfo(event),
-      this.getMessageLinkInfo(event),
-    ]);
-
-    const lines: string[] = [];
-
-    // Header with position
-    lines.push(`<b>📋 События (${index + 1}/${total})</b>`);
-    lines.push('─────────────────');
-
-    // Event type and priority
-    lines.push(`${emoji} ${typeLabel} • ${priorityIcon}`);
-
-    // Contact link (clickable if telegram info available)
-    if (contactInfo) {
-      const contactLink = this.formatContactLink(
-        contactInfo.name,
-        contactInfo.telegramUserId,
-        contactInfo.telegramUsername,
-      );
-      lines.push(`👤 ${contactLink}`);
-    }
-
-    // Event-specific content
-    const content = this.getCarouselEventContent(event);
-    lines.push(...content);
-
-    // Source quote (if available)
-    if (messageLinkInfo.sourceQuote) {
-      const truncatedQuote = messageLinkInfo.sourceQuote.length > 100
-        ? messageLinkInfo.sourceQuote.slice(0, 100) + '...'
-        : messageLinkInfo.sourceQuote;
-      lines.push(`💬 <i>"${escapeHtml(truncatedQuote)}"</i>`);
-    }
-
-    // Message deep link (if available)
-    if (messageLinkInfo.deepLink) {
-      lines.push(this.formatMessageLink(messageLinkInfo.deepLink));
-    }
-
-    // Warning for abstract events that need context clarification
-    if (event.needsContext) {
-      lines.push('');
-      lines.push('⚠️ <i>Контекст не найден. Уточните о чём речь.</i>');
-    }
-
-    // Show linked event info if enrichment found a related event
-    if (event.linkedEventId && event.enrichmentData?.synthesis) {
-      lines.push('');
-      lines.push(`🔗 <i>${escapeHtml(event.enrichmentData.synthesis)}</i>`);
-    }
-
-    // Footer with remaining count
-    lines.push('─────────────────');
-    if (remaining > 1) {
-      lines.push(`<i>Осталось: ${remaining - 1}</i>`);
-    }
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Get inline keyboard buttons for carousel navigation.
-   * Callback format:
-   * - car_p:<carouselId> - Previous
-   * - car_n:<carouselId> - Next
-   * - car_c:<carouselId> - Confirm current
-   * - car_r:<carouselId> - Reject current
-   */
-  getCarouselButtons(
-    carouselId: string,
-  ): Array<Array<{ text: string; callback_data: string }>> {
-    return [
-      [
-        { text: '◀️', callback_data: `car_p:${carouselId}` },
-        { text: '✅ Да', callback_data: `car_c:${carouselId}` },
-        { text: '❌ Нет', callback_data: `car_r:${carouselId}` },
-        { text: '▶️', callback_data: `car_n:${carouselId}` },
-      ],
-    ];
-  }
-
-  /**
-   * Format completion message when all carousel events are processed.
-   */
-  formatCarouselComplete(processedCount: number): string {
-    return (
-      `<b>✅ Все события обработаны</b>\n\n` +
-      `Обработано: ${processedCount} событий`
-    );
-  }
-
   /**
    * Get human-readable event type label.
    */
@@ -873,91 +751,5 @@ export class NotificationService {
       [ExtractedEventType.CANCELLATION]: 'Отмена',
     };
     return labels[type] || 'Событие';
-  }
-
-  /**
-   * Get priority icon.
-   */
-  private getPriorityIcon(priority: EventPriority): string {
-    switch (priority) {
-      case 'high':
-        return '🎯 Высокий';
-      case 'medium':
-        return '📌 Средний';
-      case 'low':
-        return '📎 Низкий';
-      default:
-        return '';
-    }
-  }
-
-  /**
-   * Get event-specific content lines for carousel card.
-   */
-  private getCarouselEventContent(event: ExtractedEvent): string[] {
-    const esc = (text: string | undefined | null): string =>
-      text ? escapeHtml(text) : '';
-    const lines: string[] = [];
-
-    switch (event.eventType) {
-      case ExtractedEventType.MEETING: {
-        const meetingData = event.extractedData as MeetingData;
-        if (meetingData.topic) {
-          lines.push(`📝 ${esc(meetingData.topic)}`);
-        }
-        if (meetingData.dateText || meetingData.datetime) {
-          lines.push(`🕐 ${esc(meetingData.dateText) || esc(meetingData.datetime)}`);
-        }
-        break;
-      }
-
-      case ExtractedEventType.PROMISE_BY_ME: {
-        const promiseData = event.extractedData as PromiseData;
-        lines.push(`📝 ${esc(promiseData.what)}`);
-        if (promiseData.deadlineText || promiseData.deadline) {
-          lines.push(`⏰ ${esc(promiseData.deadlineText) || esc(promiseData.deadline)}`);
-        }
-        break;
-      }
-
-      case ExtractedEventType.PROMISE_BY_THEM: {
-        const promiseData = event.extractedData as PromiseData;
-        lines.push(`📝 ${esc(promiseData.what)}`);
-        if (promiseData.deadlineText || promiseData.deadline) {
-          lines.push(`⏰ ${esc(promiseData.deadlineText) || esc(promiseData.deadline)}`);
-        }
-        break;
-      }
-
-      case ExtractedEventType.TASK: {
-        const taskData = event.extractedData as TaskData;
-        lines.push(`📝 ${esc(taskData.what)}`);
-        if (taskData.deadline) {
-          lines.push(`⏰ ${esc(taskData.deadline)}`);
-        }
-        break;
-      }
-
-      case ExtractedEventType.FACT: {
-        const factData = event.extractedData as FactData;
-        lines.push(`📝 ${esc(factData.factType)}: ${esc(factData.value)}`);
-        // Quote is handled by formatCarouselCard via messageLinkInfo.sourceQuote
-        break;
-      }
-
-      case ExtractedEventType.CANCELLATION: {
-        const cancelData = event.extractedData as CancellationData;
-        lines.push(`📝 ${esc(cancelData.what)}`);
-        if (cancelData.reason) {
-          lines.push(`💬 ${esc(cancelData.reason)}`);
-        }
-        break;
-      }
-
-      default:
-        lines.push(`📝 ${esc(JSON.stringify(event.extractedData))}`);
-    }
-
-    return lines;
   }
 }

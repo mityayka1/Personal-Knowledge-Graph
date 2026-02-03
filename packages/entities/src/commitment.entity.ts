@@ -30,6 +30,8 @@ export enum CommitmentType {
   REMINDER = 'reminder',
   /** Периодическая задача */
   RECURRING = 'recurring',
+  /** Встреча — обязательство по времени */
+  MEETING = 'meeting',
 }
 
 /**

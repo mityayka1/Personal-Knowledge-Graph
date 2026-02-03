@@ -13,6 +13,7 @@ import {
   PendingApprovalItemType,
   PendingApprovalStatus,
   EntityRecord,
+  EntityFact,
 } from '@pkg/entities';
 
 describe('DraftExtractionService', () => {
@@ -78,6 +79,14 @@ describe('DraftExtractionService', () => {
             createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
           },
         },
+        {
+          provide: getRepositoryToken(EntityFact),
+          useValue: {
+            create: jest.fn((data) => ({ id: 'fact-id', ...data })),
+            save: jest.fn((data) => Promise.resolve({ id: 'fact-id', ...data })),
+            createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
+          },
+        },
       ],
     }).compile();
 
@@ -96,6 +105,7 @@ describe('DraftExtractionService', () => {
     it('should create draft project with pending approval', async () => {
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [
           {
             name: 'Test Project',
@@ -135,6 +145,7 @@ describe('DraftExtractionService', () => {
     it('should create draft task with pending approval', async () => {
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [],
         tasks: [
           {
@@ -158,6 +169,7 @@ describe('DraftExtractionService', () => {
     it('should create draft commitment with pending approval', async () => {
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [],
         tasks: [],
         commitments: [
@@ -191,6 +203,7 @@ describe('DraftExtractionService', () => {
     it('should create all drafts in a batch with same batchId', async () => {
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [{ name: 'Project A', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [{ title: 'Task B', status: 'pending', confidence: 0.85 }],
         commitments: [
@@ -214,6 +227,7 @@ describe('DraftExtractionService', () => {
     it('should skip existing activity for project', async () => {
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [
           {
             name: 'Existing Project',
@@ -264,6 +278,7 @@ describe('DraftExtractionService', () => {
 
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [{ name: 'Parent Project', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [
           {
@@ -290,6 +305,7 @@ describe('DraftExtractionService', () => {
 
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [{ name: 'Failing Project', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [],
         commitments: [],
@@ -305,6 +321,7 @@ describe('DraftExtractionService', () => {
     it('should preserve messageRef for Telegram updates', async () => {
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [{ name: 'Test', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [],
         commitments: [],
@@ -338,6 +355,7 @@ describe('DraftExtractionService', () => {
 
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [{ name: 'Test Project', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [],
         commitments: [],
@@ -375,6 +393,7 @@ describe('DraftExtractionService', () => {
 
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [],
         tasks: [],
         commitments: [
@@ -401,6 +420,7 @@ describe('DraftExtractionService', () => {
 
       const input: DraftExtractionInput = {
         ownerEntityId: 'owner-123',
+        facts: [],
         projects: [],
         tasks: [],
         commitments: [
