@@ -15,6 +15,7 @@ import { EntityService } from '../../entity/entity.service';
 import { EntityRelationService } from '../../entity/entity-relation/entity-relation.service';
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { EnrichmentQueueService } from '../enrichment-queue.service';
+import { DraftExtractionService } from '../draft-extraction.service';
 import {
   FactSource,
   RelationType,
@@ -23,6 +24,7 @@ import {
   ExtractedEvent,
   ExtractedEventType,
   ExtractedEventStatus,
+  PendingApprovalItemType,
 } from '@pkg/entities';
 
 /** MCP server name for extraction tools */
@@ -43,6 +45,8 @@ export const EXTRACTION_MCP_NAME = 'extraction-tools';
 export interface ExtractionContext {
   messageId: string | null;
   interactionId: string | null;
+  /** Owner entity ID (the user) - required for draft creation */
+  ownerEntityId: string | null;
 }
 
 @Injectable()
@@ -64,6 +68,9 @@ export class ExtractionToolsProvider {
     private readonly extractedEventRepo: Repository<ExtractedEvent>,
     @Optional()
     private readonly enrichmentQueueService: EnrichmentQueueService | null,
+    @Optional()
+    @Inject(forwardRef(() => DraftExtractionService))
+    private readonly draftExtractionService: DraftExtractionService | null,
   ) {}
 
   /**
@@ -74,7 +81,7 @@ export class ExtractionToolsProvider {
    */
   getTools(context?: ExtractionContext): ToolDefinition[] {
     // Create tools fresh with context to avoid singleton race condition
-    const tools = this.createTools(context ?? { messageId: null, interactionId: null });
+    const tools = this.createTools(context ?? { messageId: null, interactionId: null, ownerEntityId: null });
     this.logger.debug(`Created ${tools.length} extraction tools`);
     return tools;
   }
@@ -118,8 +125,8 @@ export class ExtractionToolsProvider {
       this.createGetEntityContextTool(),
       this.createFindEntityByNameTool(),
 
-      // Write tools
-      this.createFactTool(),
+      // Write tools - all require context for draft creation
+      this.createFactTool(context),
       this.createRelationTool(),
       this.createPendingEntityTool(context),
       this.createEventTool(context),
@@ -206,12 +213,13 @@ export class ExtractionToolsProvider {
   }
 
   /**
-   * create_fact - Create a fact for an entity with Smart Fusion.
+   * create_fact - Create a draft fact for an entity (requires approval).
+   * Uses DraftExtractionService to create EntityFact with status=DRAFT + PendingApproval.
    */
-  private createFactTool() {
+  private createFactTool(context: ExtractionContext) {
     return tool(
       'create_fact',
-      `Создать факт для сущности. Проходит через Smart Fusion для дедупликации.
+      `Создать факт для сущности. Факт создаётся как ЧЕРНОВИК и требует подтверждения пользователем.
 
 Типы фактов:
 - position: должность ("Senior Developer", "CTO")
@@ -237,39 +245,66 @@ export class ExtractionToolsProvider {
           .describe('Категория факта'),
       },
       async (args) => {
+        if (!this.draftExtractionService) {
+          return toolError(
+            'DraftExtractionService not available',
+            'Draft fact creation is not configured in this environment.',
+          );
+        }
+
+        if (!context.ownerEntityId) {
+          return toolError(
+            'Owner entity ID not provided',
+            'Cannot create draft fact without owner entity context.',
+          );
+        }
+
         try {
-          // Map category string to enum
-          const categoryMap: Record<string, FactCategory> = {
-            professional: FactCategory.PROFESSIONAL,
-            personal: FactCategory.PERSONAL,
-            contact: FactCategory.CONTACT,
-            preferences: FactCategory.PREFERENCES,
-          };
-
-          const result = await this.entityFactService.createWithDedup(
-            args.entityId,
-            {
-              type: args.factType.toLowerCase() as any, // factType accepts string | FactType
-              value: args.value.trim(),
-              source: FactSource.EXTRACTED,
-              category: args.category ? categoryMap[args.category] : undefined,
-              confidence: args.confidence,
-            },
-            {
-              messageContext: args.sourceQuote,
-            },
-          );
-
-          this.logger.log(
-            `Created fact ${args.factType}="${args.value}" for entity ${args.entityId} (action: ${result.action})`,
-          );
-
-          return toolSuccess({
-            factId: result.fact.id,
-            action: result.action,
-            reason: result.reason,
-            existingFactId: result.existingFactId,
+          const result = await this.draftExtractionService.createDrafts({
+            ownerEntityId: context.ownerEntityId,
+            facts: [
+              {
+                entityId: args.entityId,
+                factType: args.factType.toLowerCase(),
+                value: args.value.trim(),
+                sourceQuote: args.sourceQuote?.substring(0, 200),
+                confidence: args.confidence,
+              },
+            ],
+            tasks: [],
+            commitments: [],
+            projects: [],
+            sourceInteractionId: context.interactionId ?? undefined,
           });
+
+          if (result.counts.facts > 0) {
+            const approval = result.approvals.find(
+              (a) => a.itemType === PendingApprovalItemType.FACT,
+            );
+            this.logger.log(
+              `Created draft fact ${args.factType}="${args.value}" for entity ${args.entityId} ` +
+                `(approvalId: ${approval?.id}, batchId: ${result.batchId})`,
+            );
+
+            return toolSuccess({
+              status: 'draft_created',
+              approvalId: approval?.id,
+              batchId: result.batchId,
+              message: 'Fact created as draft, pending user approval.',
+            });
+          }
+
+          if (result.skipped.facts > 0) {
+            this.logger.debug(
+              `Skipped duplicate fact ${args.factType}="${args.value}" for entity ${args.entityId}`,
+            );
+            return toolSuccess({
+              status: 'skipped_duplicate',
+              message: 'Similar fact already pending approval.',
+            });
+          }
+
+          return toolError('Failed to create draft fact', result.errors[0]?.error || 'Unknown error');
         } catch (error) {
           return handleToolError(error, this.logger, 'create_fact');
         }
@@ -443,32 +478,36 @@ Pending entity будет ожидать ручного связывания с 
   }
 
   /**
-   * create_event - Create an extracted event (meeting, promise, deadline, etc.).
+   * create_event - Create a draft event (commitment/task) that requires approval.
+   * Uses DraftExtractionService to create draft entities + PendingApproval records.
+   *
+   * Event type mapping:
+   * - meeting → Commitment (type=MEETING)
+   * - promise_by_me → Commitment (type=PROMISE, from=self)
+   * - promise_by_them → Commitment (type=REQUEST, from=contact)
+   * - task → Activity (type=TASK)
+   * - fact → EntityFact (via create_fact tool instead)
+   * - cancellation → skipped (not useful for pending approval flow)
    *
    * @param context - Message/interaction context for source tracking
    */
   private createEventTool(context: ExtractionContext) {
     return tool(
       'create_event',
-      `Создать событие (встреча, обещание, дедлайн, день рождения и т.д.)
+      `Создать событие (встреча, обещание, задача). Событие создаётся как ЧЕРНОВИК и требует подтверждения.
 
 ТИПЫ СОБЫТИЙ:
 - meeting: встречи, созвоны, переговоры — "давай созвонимся", "встреча в 15:00"
 - promise_by_me: обещание в ИСХОДЯЩЕМ сообщении (→) — "я пришлю завтра"
 - promise_by_them: обещание во ВХОДЯЩЕМ сообщении (←) — "пришлю документы"
 - task: задача/запрос — "можешь глянуть документ?"
-- fact: личный факт — "у меня ДР 15 марта"
-- cancellation: отмена/перенос — "давай перенесём"
+- fact: личный факт — ИСПОЛЬЗУЙ create_fact вместо этого!
+- cancellation: отмена/перенос — пропускается (не требует сохранения)
 
 ПРАВИЛА ОБЕЩАНИЙ:
 - promise_by_me: автор ИСХОДЯЩЕГО сообщения обещает что-то сделать
 - promise_by_them: автор ВХОДЯЩЕГО сообщения обещает что-то сделать
-- ОПРЕДЕЛЯЙ тип ТОЛЬКО по isOutgoing флагу сообщения, НЕ по тексту
-
-АБСТРАКТНЫЕ СОБЫТИЯ (needsEnrichment=true):
-- "давай встретимся" без даты → meeting + needsEnrichment=true
-- "надо обсудить" без деталей → meeting + needsEnrichment=true
-- "встреча 15 января в 14:00" → meeting + needsEnrichment=false`,
+- ОПРЕДЕЛЯЙ тип ТОЛЬКО по isOutgoing флагу сообщения, НЕ по тексту`,
       {
         eventType: z
           .enum(['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact', 'cancellation'])
@@ -492,54 +531,200 @@ Pending entity будет ожидать ручного связывания с 
         metadata: z.record(z.string(), z.unknown()).optional().describe('Доп. данные (participants, location и т.д.)'),
       },
       async (args) => {
-        try {
-          const eventType = args.eventType as ExtractedEventType;
-
-          // Build extractedData based on event type
-          const extractedData = this.buildEventData(eventType, args);
-
-          const event = this.extractedEventRepo.create({
-            sourceMessageId: args.sourceMessageId,
-            sourceInteractionId: context.interactionId,
-            entityId: args.entityId,
-            promiseToEntityId: args.promiseToEntityId || null,
-            eventType,
-            extractedData,
-            sourceQuote: args.sourceQuote.substring(0, 200),
-            confidence: Math.min(1, Math.max(0, args.confidence)),
-            status: ExtractedEventStatus.PENDING,
-            needsContext: args.needsEnrichment,
-            // Set enrichmentData for enrichment pipeline to find events needing context
-            enrichmentData: args.needsEnrichment ? { enrichmentSuccess: false } : null,
+        // Skip cancellation events - they don't need to be saved
+        if (args.eventType === 'cancellation') {
+          this.logger.debug(`Skipping cancellation event: "${args.title}"`);
+          return toolSuccess({
+            status: 'skipped',
+            reason: 'Cancellation events are not saved to pending approval.',
           });
+        }
 
-          const saved = await this.extractedEventRepo.save(event);
+        // Redirect fact type to create_fact tool
+        if (args.eventType === 'fact') {
+          return toolError(
+            'Use create_fact tool instead',
+            'For personal facts like birthdays, use the create_fact tool with appropriate factType.',
+          );
+        }
 
-          // Queue for enrichment if event is abstract
-          if (args.needsEnrichment && this.enrichmentQueueService) {
-            try {
-              await this.enrichmentQueueService.queueForEnrichment(saved.id);
-              this.logger.debug(`Queued event ${saved.id} for context enrichment`);
-            } catch (queueError) {
-              this.logger.warn(`Failed to queue event for enrichment: ${queueError}`);
+        if (!this.draftExtractionService) {
+          return toolError(
+            'DraftExtractionService not available',
+            'Draft event creation is not configured in this environment.',
+          );
+        }
+
+        if (!context.ownerEntityId) {
+          return toolError(
+            'Owner entity ID not provided',
+            'Cannot create draft event without owner entity context.',
+          );
+        }
+
+        try {
+          // Map event type to appropriate draft entity
+          if (args.eventType === 'task') {
+            // Create draft task (Activity with type=TASK)
+            const result = await this.draftExtractionService.createDrafts({
+              ownerEntityId: context.ownerEntityId,
+              facts: [],
+              tasks: [
+                {
+                  title: args.title,
+                  deadline: args.date,
+                  status: 'pending',
+                  priority: 'medium',
+                  sourceQuote: args.sourceQuote?.substring(0, 200),
+                  confidence: args.confidence,
+                },
+              ],
+              commitments: [],
+              projects: [],
+              sourceInteractionId: context.interactionId ?? undefined,
+            });
+
+            if (result.counts.tasks > 0) {
+              const approval = result.approvals.find(
+                (a) => a.itemType === PendingApprovalItemType.TASK,
+              );
+              this.logger.log(
+                `Created draft task "${args.title}" (approvalId: ${approval?.id}, batchId: ${result.batchId})`,
+              );
+
+              return toolSuccess({
+                status: 'draft_created',
+                itemType: 'task',
+                approvalId: approval?.id,
+                batchId: result.batchId,
+                message: 'Task created as draft, pending user approval.',
+              });
             }
+
+            if (result.skipped.tasks > 0) {
+              return toolSuccess({
+                status: 'skipped_duplicate',
+                message: 'Similar task already pending approval.',
+              });
+            }
+
+            return toolError('Failed to create draft task', result.errors[0]?.error || 'Unknown error');
           }
 
-          this.logger.log(
-            `Created event ${eventType} "${args.title}" for entity ${args.entityId} (id: ${saved.id})`,
+          // Map meeting and promises to commitments
+          const commitmentType = this.mapEventTypeToCommitmentType(args.eventType);
+          const { from, to } = this.resolveCommitmentParties(
+            args.eventType,
+            args.entityId,
+            args.promiseToEntityId,
           );
 
-          return toolSuccess({
-            eventId: saved.id,
-            eventType: saved.eventType,
-            status: saved.status,
-            needsEnrichment: args.needsEnrichment,
+          const result = await this.draftExtractionService.createDrafts({
+            ownerEntityId: context.ownerEntityId,
+            facts: [],
+            tasks: [],
+            commitments: [
+              {
+                what: args.title,
+                from,
+                to,
+                type: commitmentType,
+                deadline: args.date,
+                priority: 'medium',
+                sourceQuote: args.sourceQuote?.substring(0, 200),
+                confidence: args.confidence,
+              },
+            ],
+            projects: [],
+            sourceInteractionId: context.interactionId ?? undefined,
           });
+
+          if (result.counts.commitments > 0) {
+            const approval = result.approvals.find(
+              (a) => a.itemType === PendingApprovalItemType.COMMITMENT,
+            );
+            this.logger.log(
+              `Created draft commitment (${commitmentType}) "${args.title}" ` +
+                `(approvalId: ${approval?.id}, batchId: ${result.batchId})`,
+            );
+
+            return toolSuccess({
+              status: 'draft_created',
+              itemType: 'commitment',
+              commitmentType,
+              approvalId: approval?.id,
+              batchId: result.batchId,
+              message: 'Commitment created as draft, pending user approval.',
+            });
+          }
+
+          if (result.skipped.commitments > 0) {
+            return toolSuccess({
+              status: 'skipped_duplicate',
+              message: 'Similar commitment already pending approval.',
+            });
+          }
+
+          return toolError('Failed to create draft commitment', result.errors[0]?.error || 'Unknown error');
         } catch (error) {
           return handleToolError(error, this.logger, 'create_event');
         }
       },
     );
+  }
+
+  /**
+   * Map event type to commitment type.
+   */
+  private mapEventTypeToCommitmentType(
+    eventType: string,
+  ): 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder' | 'meeting' {
+    switch (eventType) {
+      case 'meeting':
+        return 'meeting';
+      case 'promise_by_me':
+        return 'promise';
+      case 'promise_by_them':
+        return 'request';
+      default:
+        return 'promise';
+    }
+  }
+
+  /**
+   * Resolve from/to parties for commitment based on event type.
+   * Returns 'self' or entity ID string.
+   */
+  private resolveCommitmentParties(
+    eventType: string,
+    entityId: string,
+    promiseToEntityId?: string,
+  ): { from: string; to: string } {
+    switch (eventType) {
+      case 'promise_by_me':
+        // I promised something to the contact
+        return {
+          from: 'self',
+          to: promiseToEntityId || entityId,
+        };
+      case 'promise_by_them':
+        // Contact promised something to me
+        return {
+          from: entityId,
+          to: 'self',
+        };
+      case 'meeting':
+        // Mutual agreement
+        return {
+          from: 'self',
+          to: entityId,
+        };
+      default:
+        return {
+          from: 'self',
+          to: entityId,
+        };
+    }
   }
 
   /**

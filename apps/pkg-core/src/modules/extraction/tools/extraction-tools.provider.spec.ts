@@ -1,3 +1,4 @@
+import { PendingApprovalItemType } from '@pkg/entities';
 import { ExtractionToolsProvider, EXTRACTION_MCP_NAME } from './extraction-tools.provider';
 
 describe('ExtractionToolsProvider', () => {
@@ -49,6 +50,16 @@ describe('ExtractionToolsProvider', () => {
     queueForEnrichment: jest.fn().mockResolvedValue(undefined),
   };
 
+  const mockDraftExtractionService = {
+    createDrafts: jest.fn().mockResolvedValue({
+      batchId: 'batch-uuid-1',
+      counts: { facts: 1, tasks: 0, commitments: 0, projects: 0 },
+      skipped: { facts: 0, tasks: 0, commitments: 0, projects: 0 },
+      errors: [],
+      approvals: [{ id: 'approval-uuid-1', itemType: PendingApprovalItemType.FACT }],
+    }),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -61,13 +72,14 @@ describe('ExtractionToolsProvider', () => {
       mockPendingResolutionService as any,
       mockExtractedEventRepo as any,
       mockEnrichmentQueueService as any,
+      mockDraftExtractionService as any,
     );
   });
 
   describe('getTools', () => {
-    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456' };
+    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456', ownerEntityId: 'owner-uuid' };
 
-    it('should return array of 5 tools', () => {
+    it('should return array of 6 tools', () => {
       const tools = provider.getTools(testContext);
 
       expect(Array.isArray(tools)).toBe(true);
@@ -112,7 +124,7 @@ describe('ExtractionToolsProvider', () => {
 
   describe('createMcpServer', () => {
     it('should create MCP server with tools', () => {
-      const server = provider.createMcpServer({ messageId: 'msg-123', interactionId: 'interaction-456' });
+      const server = provider.createMcpServer({ messageId: 'msg-123', interactionId: 'interaction-456', ownerEntityId: 'owner-uuid' });
 
       expect(server).toBeDefined();
     });
@@ -126,7 +138,7 @@ describe('ExtractionToolsProvider', () => {
 
   describe('tool structure', () => {
     it('each tool should have description defined', () => {
-      const tools = provider.getTools({ messageId: 'msg-123', interactionId: 'interaction-456' });
+      const tools = provider.getTools({ messageId: 'msg-123', interactionId: 'interaction-456', ownerEntityId: 'owner-uuid' });
 
       for (const tool of tools) {
         expect(tool.description).toBeDefined();
@@ -135,14 +147,14 @@ describe('ExtractionToolsProvider', () => {
   });
 
   describe('cross-entity routing', () => {
-    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456' };
+    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456', ownerEntityId: 'owner-uuid' };
 
     /**
      * Cross-entity routing allows facts to be created for ANY entity, not just the "current" contact.
      * Example: "Маша перешла в Сбер" → create fact for Маша's entity, not current chat contact.
      */
 
-    it('create_fact should route to specified entityId', async () => {
+    it('create_fact should route to specified entityId via DraftExtractionService', async () => {
       const tools = provider.getTools(testContext);
       const createFactTool = tools.find((t) => t.name === 'create_fact');
       expect(createFactTool).toBeDefined();
@@ -159,14 +171,18 @@ describe('ExtractionToolsProvider', () => {
         sourceQuote: 'Маша перешла в Сбер',
       });
 
-      // Verify fact was created for the TARGET entity, not any default
-      expect(mockEntityFactService.createWithDedup).toHaveBeenCalledWith(
-        targetEntityId, // First arg is entityId - confirms routing
+      // Verify fact was created through DraftExtractionService
+      expect(mockDraftExtractionService.createDrafts).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'company',
-          value: 'Сбер',
+          ownerEntityId: testContext.ownerEntityId,
+          facts: [
+            expect.objectContaining({
+              entityId: targetEntityId,
+              factType: 'company',
+              value: 'Сбер',
+            }),
+          ],
         }),
-        expect.any(Object),
       );
 
       expect(result.isError).toBeFalsy();
@@ -197,7 +213,7 @@ describe('ExtractionToolsProvider', () => {
       expect(resultData.entities[0].id).toBe('masha-entity-uuid');
     });
 
-    it('full routing flow: find entity then create fact for it', async () => {
+    it('full routing flow: find entity then create draft fact for it', async () => {
       const tools = provider.getTools(testContext);
       const findTool = tools.find((t) => t.name === 'find_entity_by_name');
       const createFactTool = tools.find((t) => t.name === 'create_fact');
@@ -213,7 +229,7 @@ describe('ExtractionToolsProvider', () => {
       const findResult = await (findTool as any).handler({ name: 'Маша', limit: 1 });
       const foundEntity = JSON.parse(findResult.content[0].text).entities[0];
 
-      // Step 2: LLM creates fact for that entity (not current contact)
+      // Step 2: LLM creates draft fact for that entity (not current contact)
       await (createFactTool as any).handler({
         entityId: foundEntity.id,
         factType: 'company',
@@ -222,11 +238,18 @@ describe('ExtractionToolsProvider', () => {
         sourceQuote: 'Маша перешла в Сбер',
       });
 
-      // Verify routing: fact created for Маша, not for chat contact
-      expect(mockEntityFactService.createWithDedup).toHaveBeenCalledWith(
-        'masha-uuid', // Маша's entity, not current contact
-        expect.objectContaining({ type: 'company', value: 'Сбербанк' }),
-        expect.any(Object),
+      // Verify routing: draft fact created for Маша via DraftExtractionService
+      expect(mockDraftExtractionService.createDrafts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerEntityId: testContext.ownerEntityId,
+          facts: [
+            expect.objectContaining({
+              entityId: 'masha-uuid',
+              factType: 'company',
+              value: 'Сбербанк',
+            }),
+          ],
+        }),
       );
     });
   });

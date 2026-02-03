@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
+import { EntityService } from '../entity/entity.service';
 import { PromiseRecipientService } from './promise-recipient.service';
 import { ExtractionToolsProvider, EXTRACTION_MCP_NAME } from './tools/extraction-tools.provider';
 import {
@@ -52,6 +53,8 @@ export class UnifiedExtractionService {
     @Optional()
     @Inject(forwardRef(() => EntityRelationService))
     private readonly entityRelationService: EntityRelationService | null,
+    @Inject(forwardRef(() => EntityService))
+    private readonly entityService: EntityService,
     @Inject(forwardRef(() => PromiseRecipientService))
     private readonly promiseRecipientService: PromiseRecipientService,
     @Optional()
@@ -116,10 +119,23 @@ export class UnifiedExtractionService {
     // 4. Build unified prompt
     const prompt = this.buildUnifiedPrompt(entityName, entityId, entityContext, relationsContext, enrichedMessages);
 
-    // 5. Create MCP server with extraction context
+    // 5. Get owner entity ID for draft creation
+    let ownerEntityId: string | null = null;
+    try {
+      const owner = await this.entityService.findMe();
+      ownerEntityId = owner?.id ?? null;
+      if (!ownerEntityId) {
+        this.logger.warn('Owner entity not set - draft entities will not be created');
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to get owner entity: ${error}`);
+    }
+
+    // 6. Create MCP server with extraction context
     const extractionContext = {
       messageId: validMessages[0]?.id ?? null,
       interactionId,
+      ownerEntityId,
     };
     const mcpServer = this.extractionToolsProvider.createMcpServer(extractionContext);
     const toolNames = this.extractionToolsProvider.getToolNames();

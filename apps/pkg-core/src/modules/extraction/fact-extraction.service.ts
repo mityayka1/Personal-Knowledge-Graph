@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common
 import { PendingFactService } from '../resolution/pending-fact/pending-fact.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
+import { EntityService } from '../entity/entity.service';
 import { ExtractionToolsProvider, EXTRACTION_MCP_NAME } from './tools/extraction-tools.provider';
 
 export interface ExtractedFact {
@@ -114,6 +115,9 @@ export class FactExtractionService {
     @Optional()
     @Inject(forwardRef(() => ExtractionToolsProvider))
     private extractionToolsProvider: ExtractionToolsProvider | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityService))
+    private entityService: EntityService | null,
   ) {}
 
   /**
@@ -464,10 +468,22 @@ ${memorySection}
       }
     }
 
+    // Get owner entity ID for draft creation
+    let ownerEntityId: string | null = null;
+    if (this.entityService) {
+      try {
+        const owner = await this.entityService.findMe();
+        ownerEntityId = owner?.id ?? null;
+      } catch (error) {
+        this.logger.warn(`Failed to get owner entity: ${error}`);
+      }
+    }
+
     // Create extraction context (passed to tools to avoid singleton state issues)
     const extractionContext = {
       messageId: messageId ?? null,
       interactionId: interactionId ?? null,
+      ownerEntityId,
     };
 
     // Create custom MCP config with context
@@ -619,10 +635,22 @@ ${memorySection}
       .join('\n---\n')
       .substring(0, AGENT_BATCH_CONTENT_LIMIT);
 
+    // Get owner entity ID for draft creation
+    let ownerEntityId: string | null = null;
+    if (this.entityService) {
+      try {
+        const owner = await this.entityService.findMe();
+        ownerEntityId = owner?.id ?? null;
+      } catch (error) {
+        this.logger.warn(`Failed to get owner entity: ${error}`);
+      }
+    }
+
     // Create extraction context
     const extractionContext = {
       messageId: validMessages[0]?.id ?? null,
       interactionId: validMessages[0]?.interactionId ?? null,
+      ownerEntityId,
     };
 
     // Create custom MCP config with context

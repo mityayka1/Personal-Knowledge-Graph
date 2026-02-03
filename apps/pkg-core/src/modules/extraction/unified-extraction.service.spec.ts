@@ -15,6 +15,7 @@ jest.mock('../claude-agent/claude-agent.service', () => ({
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
+import { EntityService } from '../entity/entity.service';
 import { PromiseRecipientService } from './promise-recipient.service';
 import { ExtractionToolsProvider, EXTRACTION_MCP_NAME } from './tools/extraction-tools.provider';
 
@@ -57,6 +58,12 @@ describe('UnifiedExtractionService', () => {
           useValue: {
             findByEntityWithContext: jest.fn().mockResolvedValue([]),
             formatForContext: jest.fn().mockReturnValue(''),
+          },
+        },
+        {
+          provide: EntityService,
+          useValue: {
+            findMe: jest.fn().mockResolvedValue({ id: 'owner-entity-1', name: 'Owner', isOwner: true }),
           },
         },
         {
@@ -169,6 +176,7 @@ describe('UnifiedExtractionService', () => {
             { provide: ClaudeAgentService, useValue: mockClaudeAgentService },
             { provide: EntityFactService, useValue: { getContextForExtraction: jest.fn() } },
             { provide: EntityRelationService, useValue: null },
+            { provide: EntityService, useValue: { findMe: jest.fn().mockResolvedValue({ id: 'owner-1' }) } },
             { provide: PromiseRecipientService, useValue: { loadReplyToInfo: jest.fn(), resolveRecipient: jest.fn() } },
             { provide: ExtractionToolsProvider, useValue: null },
           ],
