@@ -40,12 +40,26 @@ describe('DailySynthesisExtractionService', () => {
         client: 'Панавто',
         status: 'active',
         confidence: 0.95,
+        projectIndicators: {
+          hasDuration: true,
+          hasStructure: true,
+          hasDeliverable: true,
+          hasTeam: true,
+          hasExplicitContext: false,
+        },
       },
       {
         name: 'Новая интеграция',
         isNew: true,
         participants: ['Иван'],
         confidence: 0.8,
+        projectIndicators: {
+          hasDuration: true,
+          hasStructure: false,
+          hasDeliverable: true,
+          hasTeam: false,
+          hasExplicitContext: false,
+        },
       },
     ],
     tasks: [
@@ -235,6 +249,150 @@ describe('DailySynthesisExtractionService', () => {
 
       const callArgs = claudeAgentService.call.mock.calls[0][0];
       expect(callArgs.prompt).toContain('Фокус: "Панавто"');
+    });
+  });
+
+  describe('filterLowQualityProjects (via extract)', () => {
+    it('should filter out project with confidence < 0.6', async () => {
+      const responseWithLowConfidence: DailySynthesisExtractionResponse = {
+        projects: [
+          {
+            name: 'Low Confidence Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.4,
+            projectIndicators: {
+              hasDuration: true,
+              hasStructure: true,
+              hasDeliverable: true,
+              hasTeam: false,
+              hasExplicitContext: false,
+            },
+          },
+        ],
+        tasks: [],
+        commitments: [],
+        inferredRelations: [],
+        extractionSummary: 'test',
+      };
+
+      claudeAgentService.call.mockResolvedValue({
+        data: responseWithLowConfidence,
+        usage: { inputTokens: 100, outputTokens: 100, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      const result = await service.extract({
+        synthesisText: 'Some synthesis text',
+      });
+
+      expect(result.projects).toHaveLength(0);
+    });
+
+    it('should filter out project with fewer than 2 indicators', async () => {
+      const responseWithFewIndicators: DailySynthesisExtractionResponse = {
+        projects: [
+          {
+            name: 'Weak Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.8,
+            projectIndicators: {
+              hasDuration: true,
+              hasStructure: false,
+              hasDeliverable: false,
+              hasTeam: false,
+              hasExplicitContext: false,
+            },
+          },
+        ],
+        tasks: [],
+        commitments: [],
+        inferredRelations: [],
+        extractionSummary: 'test',
+      };
+
+      claudeAgentService.call.mockResolvedValue({
+        data: responseWithFewIndicators,
+        usage: { inputTokens: 100, outputTokens: 100, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      const result = await service.extract({
+        synthesisText: 'Some synthesis text',
+      });
+
+      // Only 1 indicator (hasDuration) => should be filtered
+      expect(result.projects).toHaveLength(0);
+    });
+
+    it('should keep project with >= 2 indicators and confidence >= 0.6', async () => {
+      const responseWithGoodProject: DailySynthesisExtractionResponse = {
+        projects: [
+          {
+            name: 'Good Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.7,
+            projectIndicators: {
+              hasDuration: true,
+              hasStructure: true,
+              hasDeliverable: false,
+              hasTeam: false,
+              hasExplicitContext: false,
+            },
+          },
+        ],
+        tasks: [],
+        commitments: [],
+        inferredRelations: [],
+        extractionSummary: 'test',
+      };
+
+      claudeAgentService.call.mockResolvedValue({
+        data: responseWithGoodProject,
+        usage: { inputTokens: 100, outputTokens: 100, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      const result = await service.extract({
+        synthesisText: 'Some synthesis text',
+      });
+
+      expect(result.projects).toHaveLength(1);
+      expect(result.projects[0].name).toBe('Good Project');
+    });
+
+    it('should keep project without projectIndicators (legacy)', async () => {
+      const responseWithLegacyProject: DailySynthesisExtractionResponse = {
+        projects: [
+          {
+            name: 'Legacy Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.8,
+            // No projectIndicators field
+          },
+        ],
+        tasks: [],
+        commitments: [],
+        inferredRelations: [],
+        extractionSummary: 'test',
+      };
+
+      claudeAgentService.call.mockResolvedValue({
+        data: responseWithLegacyProject,
+        usage: { inputTokens: 100, outputTokens: 100, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      const result = await service.extract({
+        synthesisText: 'Some synthesis text',
+      });
+
+      // Legacy project without indicators should be kept (only confidence check applies)
+      expect(result.projects).toHaveLength(1);
+      expect(result.projects[0].name).toBe('Legacy Project');
     });
   });
 });
