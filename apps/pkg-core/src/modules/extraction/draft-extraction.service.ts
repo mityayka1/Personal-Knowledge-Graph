@@ -26,6 +26,7 @@ import {
   ExtractedCommitment,
   ExtractedFact,
 } from './daily-synthesis-extraction.types';
+import { ProjectMatchingService } from './project-matching.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -107,6 +108,7 @@ export class DraftExtractionService {
     private readonly entityRepo: Repository<EntityRecord>,
     @InjectRepository(EntityFact)
     private readonly factRepo: Repository<EntityFact>,
+    private readonly projectMatchingService: ProjectMatchingService,
   ) {}
 
   /**
@@ -176,18 +178,23 @@ export class DraftExtractionService {
         // Skip if already matched to existing activity
         if (project.existingActivityId) {
           this.logger.debug(`Skipping existing project: ${project.existingActivityId}`);
+          projectMap.set(project.name.toLowerCase(), project.existingActivityId);
           continue;
         }
 
-        // DEDUPLICATION: Check for existing pending project with similar name
-        const existingProject = await this.findExistingPendingProject(project.name);
-        if (existingProject) {
+        // DEDUPLICATION: Enhanced check -- pending approvals + fuzzy match via ProjectMatchingService
+        const existing = await this.findExistingProjectEnhanced(
+          project.name,
+          input.ownerEntityId,
+        );
+        if (existing.found && existing.activityId) {
           this.logger.debug(
             `Skipping duplicate project "${project.name}" - ` +
-              `already pending as ${existingProject.targetId}`,
+              `matched via ${existing.source} (activityId: ${existing.activityId}` +
+              `${existing.similarity != null ? `, similarity: ${existing.similarity.toFixed(3)}` : ''})`,
           );
-          // Add to projectMap so tasks can still reference it
-          projectMap.set(project.name.toLowerCase(), existingProject.targetId);
+          // Add to projectMap so tasks can still reference the existing activity
+          projectMap.set(project.name.toLowerCase(), existing.activityId);
           result.skipped.projects++;
           continue;
         }
@@ -636,6 +643,52 @@ export class DraftExtractionService {
     if (!matchingActivity) return null;
 
     return pendingApprovals.find((p) => p.targetId === matchingActivity.id) ?? null;
+  }
+
+  /**
+   * Enhanced project deduplication check.
+   *
+   * Checks two layers:
+   * 1. Existing pending approvals (exact ILIKE match -- current behavior)
+   * 2. Active/Draft activities via fuzzy Levenshtein matching (ProjectMatchingService)
+   *
+   * Returns the activity ID if a match is found so the caller can skip
+   * creating a new draft and instead reference the existing activity.
+   */
+  private async findExistingProjectEnhanced(
+    projectName: string,
+    ownerEntityId: string,
+  ): Promise<{ found: boolean; activityId?: string; similarity?: number; source?: string }> {
+    // Step 1: Check pending approvals (existing exact ILIKE logic)
+    const pendingMatch = await this.findExistingPendingProject(projectName);
+    if (pendingMatch) {
+      return {
+        found: true,
+        activityId: pendingMatch.targetId,
+        source: 'pending_approval',
+      };
+    }
+
+    // Step 2: Check active activities via ProjectMatchingService (fuzzy Levenshtein)
+    const matchResult = await this.projectMatchingService.findBestMatch({
+      name: projectName,
+      ownerEntityId,
+    });
+
+    if (matchResult.matched && matchResult.activity) {
+      this.logger.log(
+        `Fuzzy matched project "${projectName}" -> "${matchResult.activity.name}" ` +
+          `(similarity: ${matchResult.similarity.toFixed(3)})`,
+      );
+      return {
+        found: true,
+        activityId: matchResult.activity.id,
+        similarity: matchResult.similarity,
+        source: 'fuzzy_match',
+      };
+    }
+
+    return { found: false };
   }
 
   /**
