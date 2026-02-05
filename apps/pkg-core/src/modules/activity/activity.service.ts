@@ -24,6 +24,7 @@ export interface FindActivitiesOptions {
   ownerEntityId?: string;
   clientEntityId?: string;
   hasDeadline?: boolean;
+  search?: string;
   limit?: number;
   offset?: number;
 }
@@ -67,6 +68,31 @@ export class ActivityService {
   }
 
   /**
+   * Найти активность по ID с расширенными связями (members, children count).
+   */
+  async findOneWithDetails(id: string): Promise<Activity & { childrenCount: number; members: ActivityMember[] }> {
+    const activity = await this.activityRepo.findOne({
+      where: { id },
+      relations: ['parent', 'ownerEntity', 'clientEntity'],
+    });
+
+    if (!activity) {
+      throw new NotFoundException(`Activity with id '${id}' not found`);
+    }
+
+    const [members, childrenCount] = await Promise.all([
+      this.memberRepo.find({
+        where: { activityId: id, isActive: true },
+        relations: ['entity'],
+        order: { role: 'ASC', joinedAt: 'ASC' },
+      }),
+      this.activityRepo.count({ where: { parentId: id } }),
+    ]);
+
+    return Object.assign(activity, { childrenCount, members });
+  }
+
+  /**
    * Найти активности с фильтрами.
    */
   async findAll(options: FindActivitiesOptions = {}): Promise<{
@@ -81,6 +107,7 @@ export class ActivityService {
       ownerEntityId,
       clientEntityId,
       hasDeadline,
+      search,
       limit = 50,
       offset = 0,
     } = options;
@@ -143,6 +170,11 @@ export class ActivityService {
       } else {
         qb.andWhere('activity.deadline IS NULL');
       }
+    }
+
+    // Поиск по названию (fuzzy search)
+    if (search) {
+      qb.andWhere('activity.name ILIKE :search', { search: `%${search}%` });
     }
 
     const [items, total] = await qb.getManyAndCount();

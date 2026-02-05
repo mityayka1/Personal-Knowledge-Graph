@@ -5,6 +5,7 @@ import { ActivityService } from './activity.service';
 import { ActivityMemberService } from './activity-member.service';
 import { ActivityValidationService } from './activity-validation.service';
 import { CommitmentService } from './commitment.service';
+import { ActivityController } from './activity.controller';
 
 /**
  * ActivityModule — модуль для управления активностями.
@@ -22,6 +23,7 @@ import { CommitmentService } from './commitment.service';
   imports: [
     TypeOrmModule.forFeature([Activity, ActivityMember, Commitment, EntityRecord]),
   ],
+  controllers: [ActivityController],
   providers: [ActivityService, ActivityMemberService, ActivityValidationService, CommitmentService],
   exports: [ActivityService, ActivityMemberService, ActivityValidationService, CommitmentService],
 })
