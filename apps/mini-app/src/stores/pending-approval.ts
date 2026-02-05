@@ -277,6 +277,48 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
     }
   }
 
+  /**
+   * Update the target entity of current pending approval.
+   * Used for editing before approval.
+   */
+  async function updateTarget(updates: {
+    name?: string
+    description?: string
+    priority?: string
+    deadline?: string | null
+    parentId?: string | null
+  }) {
+    const item = currentItem.value
+    if (!item || isProcessing.value) return
+
+    isProcessing.value = true
+
+    try {
+      const updatedApproval = await api.updatePendingApprovalTarget(item.id, updates)
+
+      // Update local item with new target data
+      const itemIndex = items.value.findIndex((i) => i.id === item.id)
+      if (itemIndex !== -1 && updatedApproval.target) {
+        const existingItem = items.value[itemIndex]
+        if (existingItem) {
+          // Merge updated target data
+          items.value[itemIndex] = {
+            ...existingItem,
+            target: updatedApproval.target as PendingApprovalItem['target'],
+          }
+        }
+      }
+
+      return true
+    } catch (e) {
+      error.value = 'Не удалось сохранить изменения'
+      console.error('Failed to update target:', e)
+      return false
+    } finally {
+      isProcessing.value = false
+    }
+  }
+
   function reset() {
     items.value = []
     currentIndex.value = 0
@@ -306,6 +348,7 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
     approveAll,
     rejectAll,
     goToIndex,
+    updateTarget,
     reset,
   }
 })

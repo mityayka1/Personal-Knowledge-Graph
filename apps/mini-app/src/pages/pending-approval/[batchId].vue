@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePendingApprovalStore } from '@/stores/pending-approval'
 import { useBackButton } from '@/composables/useTelegram'
@@ -16,6 +16,95 @@ const haptics = useSmartHaptics()
 const popup = usePopup()
 
 const batchIdParam = computed(() => route.params.batchId as string)
+
+// Edit mode state
+const isEditing = ref(false)
+const editForm = ref({
+  name: '',
+  description: '',
+  priority: '',
+  deadline: '',
+})
+
+// Initialize edit form when item changes
+watch(() => store.currentItem, (item) => {
+  if (item) {
+    const target = item.target || {}
+    const priorityValue = target.priority
+    const dueDateValue = target.dueDate
+    const name: string = target.title || target.name || ''
+    const description: string = target.description || ''
+    const priority: string = typeof priorityValue === 'string' ? priorityValue : ''
+    const deadline: string = dueDateValue ? (String(dueDateValue).split('T')[0] ?? '') : ''
+    editForm.value = { name, description, priority, deadline }
+  }
+  // Close edit mode when navigating to different item
+  isEditing.value = false
+}, { immediate: true })
+
+function startEditing() {
+  haptics.selection()
+  isEditing.value = true
+}
+
+function cancelEditing() {
+  haptics.selection()
+  isEditing.value = false
+  // Reset form to current values
+  const target = store.currentItem?.target || {}
+  const priorityValue = target.priority
+  const dueDateValue = target.dueDate
+  const name: string = target.title || target.name || ''
+  const description: string = target.description || ''
+  const priority: string = typeof priorityValue === 'string' ? priorityValue : ''
+  const deadline: string = dueDateValue ? (String(dueDateValue).split('T')[0] ?? '') : ''
+  editForm.value = { name, description, priority, deadline }
+}
+
+async function saveEdits() {
+  haptics.confirm()
+
+  const updates: Record<string, string | null | undefined> = {}
+
+  // Only include changed fields
+  const target = store.currentItem?.target || {}
+  const originalName = target.title || target.name || ''
+  const originalDescription = target.description || ''
+  const originalPriority = typeof target.priority === 'string' ? target.priority : ''
+  const originalDeadline = target.dueDate ? target.dueDate.split('T')[0] : ''
+
+  if (editForm.value.name !== originalName) {
+    updates.name = editForm.value.name
+  }
+  if (editForm.value.description !== originalDescription) {
+    updates.description = editForm.value.description
+  }
+  if (editForm.value.priority !== originalPriority) {
+    updates.priority = editForm.value.priority || undefined
+  }
+  if (editForm.value.deadline !== originalDeadline) {
+    // Convert date to ISO string or null if cleared
+    updates.deadline = editForm.value.deadline
+      ? new Date(editForm.value.deadline).toISOString()
+      : null
+  }
+
+  if (Object.keys(updates).length === 0) {
+    isEditing.value = false
+    return
+  }
+
+  const success = await store.updateTarget(updates)
+  if (success) {
+    isEditing.value = false
+  }
+}
+
+// Check if current item type supports editing
+const canEdit = computed(() => {
+  const itemType = store.currentItem?.itemType
+  return itemType === 'task' || itemType === 'project' || itemType === 'commitment'
+})
 
 function getTypeIcon(itemType: string): string {
   const icons: Record<string, string> = {
@@ -383,17 +472,94 @@ onUnmounted(() => {
             </div>
 
             <!-- Title -->
-            <h2 class="text-lg font-bold text-tg-text mb-2">
+            <h2 v-if="!isEditing" class="text-lg font-bold text-tg-text mb-2">
               {{ getDisplayTitle() }}
             </h2>
 
             <!-- Description if available -->
-            <p v-if="store.currentItem.target?.description" class="text-sm text-tg-text mb-3">
+            <p v-if="!isEditing && store.currentItem.target?.description" class="text-sm text-tg-text mb-3">
               {{ store.currentItem.target.description }}
             </p>
 
-            <!-- Metadata badges row -->
-            <div v-if="getCounterparty() || getDueDate() || getPriority()" class="flex flex-wrap gap-2 mb-3">
+            <!-- Edit Form (shown when editing) -->
+            <div v-if="isEditing" class="space-y-3 mb-3">
+              <!-- Name/Title -->
+              <div>
+                <label class="block text-xs text-tg-hint mb-1">Название</label>
+                <input
+                  v-model="editForm.name"
+                  type="text"
+                  class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
+                  placeholder="Название задачи"
+                />
+              </div>
+
+              <!-- Description -->
+              <div>
+                <label class="block text-xs text-tg-hint mb-1">Описание</label>
+                <textarea
+                  v-model="editForm.description"
+                  rows="2"
+                  class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none resize-none"
+                  placeholder="Описание (необязательно)"
+                />
+              </div>
+
+              <!-- Priority -->
+              <div>
+                <label class="block text-xs text-tg-hint mb-1">Приоритет</label>
+                <select
+                  v-model="editForm.priority"
+                  class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
+                >
+                  <option value="">Не указан</option>
+                  <option value="critical">🔴 Критичный</option>
+                  <option value="high">🔴 Высокий</option>
+                  <option value="medium">🟡 Средний</option>
+                  <option value="low">🟢 Низкий</option>
+                </select>
+              </div>
+
+              <!-- Deadline -->
+              <div>
+                <label class="block text-xs text-tg-hint mb-1">Дедлайн</label>
+                <input
+                  v-model="editForm.deadline"
+                  type="date"
+                  class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
+                />
+              </div>
+
+              <!-- Edit actions -->
+              <div class="flex gap-2 pt-2">
+                <button
+                  class="btn btn-secondary flex-1"
+                  :disabled="store.isProcessing"
+                  @click="cancelEditing"
+                >
+                  Отмена
+                </button>
+                <button
+                  class="btn btn-primary flex-1"
+                  :disabled="store.isProcessing"
+                  @click="saveEdits"
+                >
+                  {{ store.isProcessing ? 'Сохранение...' : 'Сохранить' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Edit button (shown when not editing) -->
+            <button
+              v-if="!isEditing && canEdit && store.currentItem.status === 'pending'"
+              class="text-sm text-tg-link hover:underline mb-3"
+              @click="startEditing"
+            >
+              ✏️ Редактировать
+            </button>
+
+            <!-- Metadata badges row (hidden when editing) -->
+            <div v-if="!isEditing && (getCounterparty() || getDueDate() || getPriority())" class="flex flex-wrap gap-2 mb-3">
               <span v-if="getCounterparty()" class="inline-flex items-center px-2 py-1 rounded-md bg-tg-secondary-bg text-xs">
                 👤 {{ getCounterparty() }}
               </span>

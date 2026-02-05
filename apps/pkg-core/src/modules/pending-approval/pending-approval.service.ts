@@ -16,6 +16,7 @@ import {
   activateTarget,
   softDeleteTarget,
   hardDeleteTarget,
+  updateTarget,
 } from './item-type-registry';
 
 /**
@@ -48,6 +49,27 @@ export interface BatchOperationResult {
   processed: number;
   failed: number;
   errors?: string[];
+}
+
+/**
+ * Input for updating a pending approval's target entity.
+ * Fields vary by item type:
+ * - task/project: name, description, deadline, priority, parentId
+ * - commitment: title, description, dueDate, priority
+ * - fact: value, factType
+ */
+export interface UpdateTargetInput {
+  // Common fields
+  name?: string; // Activity: name, Commitment: title
+  description?: string;
+  priority?: string;
+
+  // Activity/Task fields
+  deadline?: Date | null;
+  parentId?: string | null;
+
+  // Commitment fields
+  dueDate?: Date | null;
 }
 
 /**
@@ -234,6 +256,81 @@ export class PendingApprovalService {
           `Rejected ${approval.itemType} target=${approval.targetId} (soft delete, ${this.retentionDays} day retention)`,
         );
       }
+    });
+  }
+
+  /**
+   * Update the target entity of a pending approval.
+   * Allows editing draft entities before approving.
+   *
+   * @param id - PendingApproval ID
+   * @param updates - Fields to update on the target entity
+   * @throws NotFoundException if approval not found
+   * @throws ConflictException if approval is not pending
+   */
+  async updateTargetEntity(id: string, updates: UpdateTargetInput): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const approval = await manager.findOne(PendingApproval, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!approval) {
+        throw new NotFoundException(`Approval ${id} not found`);
+      }
+
+      if (approval.status !== PendingApprovalStatus.PENDING) {
+        throw new ConflictException(
+          `Cannot update target: approval ${id} is already ${approval.status}`,
+        );
+      }
+
+      // Build updates object based on item type
+      const targetUpdates: Record<string, unknown> = {};
+
+      if (
+        approval.itemType === PendingApprovalItemType.TASK ||
+        approval.itemType === PendingApprovalItemType.PROJECT
+      ) {
+        // Activity entity updates
+        if (updates.name !== undefined) targetUpdates.name = updates.name;
+        if (updates.description !== undefined) targetUpdates.description = updates.description;
+        if (updates.priority !== undefined) targetUpdates.priority = updates.priority;
+        if (updates.deadline !== undefined) targetUpdates.deadline = updates.deadline;
+        if (updates.parentId !== undefined) targetUpdates.parentId = updates.parentId;
+      } else if (approval.itemType === PendingApprovalItemType.COMMITMENT) {
+        // Commitment entity updates (field name mapping)
+        if (updates.name !== undefined) targetUpdates.title = updates.name;
+        if (updates.description !== undefined) targetUpdates.description = updates.description;
+        if (updates.priority !== undefined) targetUpdates.priority = updates.priority;
+        if (updates.dueDate !== undefined) targetUpdates.dueDate = updates.dueDate;
+      } else if (approval.itemType === PendingApprovalItemType.FACT) {
+        // EntityFact entity - limited updates allowed
+        // Facts are typically not edited, just approved/rejected
+        this.logger.warn(`Fact updates not yet supported for approval ${id}`);
+      }
+
+      if (Object.keys(targetUpdates).length === 0) {
+        this.logger.debug(`No updates to apply for approval ${id}`);
+        return;
+      }
+
+      const updated = await updateTarget(
+        manager,
+        approval.itemType,
+        approval.targetId,
+        targetUpdates,
+      );
+
+      if (!updated) {
+        throw new NotFoundException(
+          `Target ${approval.itemType} ${approval.targetId} not found`,
+        );
+      }
+
+      this.logger.log(
+        `Updated ${approval.itemType} target=${approval.targetId}: ${JSON.stringify(targetUpdates)}`,
+      );
     });
   }
 

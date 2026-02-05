@@ -520,4 +520,121 @@ describe('PendingApprovalService', () => {
       });
     });
   });
+
+  describe('updateTargetEntity', () => {
+    const taskApproval: Partial<PendingApproval> = {
+      id: 'approval-task-1',
+      itemType: PendingApprovalItemType.TASK,
+      targetId: 'activity-uuid-1',
+      batchId: 'batch-uuid-1',
+      status: PendingApprovalStatus.PENDING,
+      confidence: 0.9,
+      createdAt: new Date(),
+      reviewedAt: null,
+    };
+
+    const commitmentApproval: Partial<PendingApproval> = {
+      id: 'approval-commitment-1',
+      itemType: PendingApprovalItemType.COMMITMENT,
+      targetId: 'commitment-uuid-1',
+      batchId: 'batch-uuid-1',
+      status: PendingApprovalStatus.PENDING,
+      confidence: 0.85,
+      createdAt: new Date(),
+      reviewedAt: null,
+    };
+
+    it('should update task/activity fields', async () => {
+      mockManager.findOne.mockResolvedValue({ ...taskApproval });
+      mockManager.update.mockResolvedValue({ affected: 1 });
+
+      await service.updateTargetEntity('approval-task-1', {
+        name: 'Updated Task Name',
+        priority: 'high',
+        deadline: new Date('2026-03-01'),
+      });
+
+      expect(mockManager.update).toHaveBeenCalledWith(
+        Activity,
+        { id: 'activity-uuid-1' },
+        {
+          name: 'Updated Task Name',
+          priority: 'high',
+          deadline: new Date('2026-03-01'),
+        },
+      );
+    });
+
+    it('should update commitment fields with name→title mapping', async () => {
+      mockManager.findOne.mockResolvedValue({ ...commitmentApproval });
+      mockManager.update.mockResolvedValue({ affected: 1 });
+
+      await service.updateTargetEntity('approval-commitment-1', {
+        name: 'Updated Commitment Title',
+        description: 'New description',
+        dueDate: new Date('2026-03-15'),
+      });
+
+      expect(mockManager.update).toHaveBeenCalledWith(
+        Commitment,
+        { id: 'commitment-uuid-1' },
+        {
+          title: 'Updated Commitment Title',
+          description: 'New description',
+          dueDate: new Date('2026-03-15'),
+        },
+      );
+    });
+
+    it('should clear deadline when null is passed', async () => {
+      mockManager.findOne.mockResolvedValue({ ...taskApproval });
+      mockManager.update.mockResolvedValue({ affected: 1 });
+
+      await service.updateTargetEntity('approval-task-1', {
+        deadline: null,
+      });
+
+      expect(mockManager.update).toHaveBeenCalledWith(
+        Activity,
+        { id: 'activity-uuid-1' },
+        { deadline: null },
+      );
+    });
+
+    it('should throw NotFoundException when approval not found', async () => {
+      mockManager.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateTargetEntity('non-existent', { name: 'Test' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ConflictException when approval is already processed', async () => {
+      mockManager.findOne.mockResolvedValue({
+        ...taskApproval,
+        status: PendingApprovalStatus.APPROVED,
+      });
+
+      await expect(
+        service.updateTargetEntity('approval-task-1', { name: 'Test' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should throw NotFoundException when target entity not found', async () => {
+      mockManager.findOne.mockResolvedValue({ ...taskApproval });
+      mockManager.update.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.updateTargetEntity('approval-task-1', { name: 'Test' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should do nothing when no updates provided', async () => {
+      mockManager.findOne.mockResolvedValue({ ...taskApproval });
+
+      await service.updateTargetEntity('approval-task-1', {});
+
+      expect(mockManager.update).not.toHaveBeenCalled();
+    });
+  });
 });

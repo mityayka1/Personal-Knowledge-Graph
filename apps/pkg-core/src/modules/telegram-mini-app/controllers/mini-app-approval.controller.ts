@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Body,
   Param,
   Query,
   UseGuards,
@@ -18,6 +20,7 @@ import { Public } from '../../../common/decorators/public.decorator';
 import { PendingApprovalService } from '../../pending-approval/pending-approval.service';
 import { PendingApprovalStatus } from '@pkg/entities';
 import { MiniAppMapperService } from '../services/mini-app-mapper.service';
+import { UpdatePendingApprovalTargetDto } from '../dto/mini-app.dto';
 
 /**
  * Valid status values for filtering pending approvals.
@@ -150,6 +153,48 @@ export class MiniAppApprovalController {
   ) {
     this.logger.debug(`getPendingApproval ${id} for user ${user?.id}`);
 
+    const approval = await this.pendingApprovalService.getById(id);
+    if (!approval) {
+      throw new NotFoundException(`Pending approval ${id} not found`);
+    }
+
+    return await this.mapper.mapPendingApprovalToResponse(approval);
+  }
+
+  /**
+   * PATCH /api/mini-app/pending-approval/:id
+   * Update the target entity of a pending approval.
+   * Allows editing draft entities before approving.
+   */
+  @Patch('pending-approval/:id')
+  async updatePendingApprovalTarget(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdatePendingApprovalTargetDto,
+    @TgUser() user?: TelegramUser,
+  ) {
+    this.logger.debug(`updatePendingApprovalTarget ${id} for user ${user?.id}`);
+
+    // Convert DTO to service input
+    const updates = {
+      name: dto.name,
+      description: dto.description,
+      priority: dto.priority,
+      deadline: dto.deadline ? new Date(dto.deadline) : dto.deadline === null ? null : undefined,
+      parentId: dto.parentId,
+      // For commitments, deadline maps to dueDate
+      dueDate: dto.deadline ? new Date(dto.deadline) : dto.deadline === null ? null : undefined,
+    };
+
+    // Remove undefined values
+    Object.keys(updates).forEach((key) => {
+      if (updates[key as keyof typeof updates] === undefined) {
+        delete updates[key as keyof typeof updates];
+      }
+    });
+
+    await this.pendingApprovalService.updateTargetEntity(id, updates);
+
+    // Return updated approval with target data
     const approval = await this.pendingApprovalService.getById(id);
     if (!approval) {
       throw new NotFoundException(`Pending approval ${id} not found`);

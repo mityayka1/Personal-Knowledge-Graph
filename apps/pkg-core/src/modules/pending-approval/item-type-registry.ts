@@ -131,6 +131,30 @@ export async function hardDeleteTarget(
 }
 
 /**
+ * Update target entity fields.
+ * Only updates fields that are provided (partial update).
+ * Returns true if entity was found and updated.
+ */
+export async function updateTarget(
+  manager: EntityManager,
+  itemType: PendingApprovalItemType,
+  targetId: string,
+  updates: Record<string, unknown>,
+): Promise<boolean> {
+  if (Object.keys(updates).length === 0) {
+    return true; // Nothing to update
+  }
+
+  const config = getItemTypeConfig(itemType);
+  const result = await manager.update(
+    config.entityClass as typeof EntityFact,
+    { id: targetId },
+    updates,
+  );
+  return (result.affected ?? 0) > 0;
+}
+
+/**
  * Hard delete multiple target entities.
  * Uses raw SQL for efficiency.
  * Returns number of deleted rows (0 for unknown item types).

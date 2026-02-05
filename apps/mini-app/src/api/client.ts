@@ -263,6 +263,31 @@ class ApiClient {
       method: 'POST',
     })
   }
+
+  async updatePendingApprovalTarget(
+    id: string,
+    updates: {
+      name?: string
+      description?: string
+      priority?: string
+      deadline?: string | null
+      parentId?: string | null
+    }
+  ) {
+    return this.request<{
+      id: string
+      itemType: 'fact' | 'project' | 'task' | 'commitment'
+      targetId: string
+      confidence: number
+      sourceQuote: string | null
+      status: 'pending' | 'approved' | 'rejected'
+      createdAt: string
+      target?: Record<string, unknown>
+    }>(`/pending-approval/${id}`, {
+      method: 'PATCH',
+      body: updates,
+    })
+  }
 }
 
 export const api = new ApiClient()
