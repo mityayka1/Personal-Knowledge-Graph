@@ -28,6 +28,7 @@ import {
 } from './daily-synthesis-extraction.types';
 import { ProjectMatchingService } from './project-matching.service';
 import { ClientResolutionService } from './client-resolution.service';
+import { ActivityMemberService } from '../activity/activity-member.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -111,6 +112,7 @@ export class DraftExtractionService {
     private readonly factRepo: Repository<EntityFact>,
     private readonly projectMatchingService: ProjectMatchingService,
     private readonly clientResolutionService: ClientResolutionService,
+    private readonly activityMemberService: ActivityMemberService,
   ) {}
 
   /**
@@ -211,6 +213,22 @@ export class DraftExtractionService {
         result.approvals.push(approval);
         result.counts.projects++;
         this.logger.debug(`Created draft project: ${activity.name} (${activity.id})`);
+
+        // Create ActivityMember records for project participants
+        if (project.participants?.length) {
+          try {
+            await this.activityMemberService.resolveAndCreateMembers({
+              activityId: activity.id,
+              participants: project.participants,
+              ownerEntityId: input.ownerEntityId,
+              clientEntityId: activity.clientEntityId ?? undefined,
+            });
+          } catch (memberError) {
+            this.logger.warn(
+              `Failed to create members for project "${project.name}": ${memberError instanceof Error ? memberError.message : 'Unknown'}`,
+            );
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         result.errors.push({ item: `project:${project.name}`, error: message });
@@ -267,10 +285,17 @@ export class DraftExtractionService {
           continue;
         }
 
+        // Resolve activityId from projectMap for commitment
+        let commitmentActivityId: string | undefined;
+        if (commitment.projectName) {
+          commitmentActivityId = projectMap.get(commitment.projectName.toLowerCase());
+        }
+
         const { entity, approval } = await this.createDraftCommitment(
           commitment,
           input,
           batchId,
+          commitmentActivityId,
         );
 
         result.approvals.push(approval);
@@ -389,13 +414,15 @@ export class DraftExtractionService {
         status: ActivityStatus.DRAFT,
         ownerEntityId: input.ownerEntityId,
         clientEntityId,
+        description: project.description ?? null,
+        tags: project.tags ?? null,
+        lastActivityAt: new Date(),
         depth: 0,
         materializedPath: null,
         metadata: {
           extractedFrom: 'daily_synthesis',
           synthesisDate: input.synthesisDate,
           focusTopic: input.focusTopic,
-          participants: project.participants,
           sourceQuote: project.sourceQuote,
           confidence: project.confidence,
           clientResolutionMethod,
@@ -533,6 +560,7 @@ export class DraftExtractionService {
     commitment: ExtractedCommitment,
     input: DraftExtractionInput,
     batchId: string,
+    activityId?: string,
   ): Promise<{ entity: Commitment; approval: PendingApproval }> {
     // Resolve from/to entities
     let fromEntityId = input.ownerEntityId;
@@ -568,6 +596,7 @@ export class DraftExtractionService {
       title: commitment.what,
       fromEntityId,
       toEntityId,
+      activityId: activityId ?? null,
       status: CommitmentStatus.DRAFT,
       priority: this.mapCommitmentPriority(commitment.priority),
       dueDate: commitment.deadline ? new Date(commitment.deadline) : null,

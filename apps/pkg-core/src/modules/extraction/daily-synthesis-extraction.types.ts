@@ -98,6 +98,8 @@ export interface ExtractedCommitment {
   type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder' | 'meeting';
   /** Priority if inferable */
   priority?: 'high' | 'medium' | 'low';
+  /** Related project name if commitment is tied to a project */
+  projectName?: string;
   /** Context snippet */
   sourceQuote?: string;
   /** Confidence of extraction (0-1) */
@@ -276,6 +278,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
             description: 'Commitment type',
           },
           priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+          projectName: { type: 'string', description: 'Related project name if commitment is tied to a project' },
           sourceQuote: { type: 'string', description: 'Relevant quote' },
           confidence: { type: 'number', description: 'Confidence 0-1' },
         },
