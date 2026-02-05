@@ -6,6 +6,7 @@ import {
   IsUUID,
   ValidateNested,
   ArrayMinSize,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ActivityMemberRole } from '@pkg/entities';
@@ -44,6 +45,7 @@ export class AddMembersDto {
    */
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(50)
   @ValidateNested({ each: true })
   @Type(() => AddMemberItemDto)
   members: AddMemberItemDto[];

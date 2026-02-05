@@ -5,6 +5,8 @@ import {
   IsUUID,
   IsNumber,
   Min,
+  Max,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -64,6 +66,7 @@ export class ActivityQueryDto {
    */
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   /**
@@ -73,6 +76,7 @@ export class ActivityQueryDto {
   @Type(() => Number)
   @IsNumber()
   @Min(1)
+  @Max(200)
   limit?: number;
 
   /**
