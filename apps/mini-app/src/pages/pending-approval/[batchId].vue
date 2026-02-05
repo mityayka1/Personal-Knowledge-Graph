@@ -5,9 +5,9 @@ import { usePendingApprovalStore } from '@/stores/pending-approval'
 import { useBackButton } from '@/composables/useTelegram'
 import { useSmartHaptics } from '@/composables/useSmartHaptics'
 import { usePopup } from '@/composables/useTelegram'
-import { api } from '@/api/client'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
+import EntityAutocomplete from '@/components/common/EntityAutocomplete.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -29,14 +29,11 @@ const editForm = ref({
   assignee: '' as string | null,
 })
 
-// Entities for dropdowns
-interface EntityOption {
-  id: string
-  name: string
-  type: 'person' | 'organization'
-}
-const entities = ref<EntityOption[]>([])
-const entitiesLoading = ref(false)
+// Owner entity for "Себе" option in autocomplete
+const ownerEntity = computed(() => {
+  const owner = store.currentItem?.target?.ownerEntity
+  return owner ? { id: owner.id, name: owner.name } : null
+})
 
 // Initialize edit form when item changes
 watch(() => store.currentItem, (item) => {
@@ -56,22 +53,9 @@ watch(() => store.currentItem, (item) => {
   isEditing.value = false
 }, { immediate: true })
 
-async function startEditing() {
+function startEditing() {
   haptics.selection()
   isEditing.value = true
-
-  // Load entities for dropdowns if not already loaded (only for tasks)
-  if (store.currentItem?.itemType === 'task' && entities.value.length === 0) {
-    entitiesLoading.value = true
-    try {
-      const response = await api.getEntities({ limit: 100 })
-      entities.value = response.items
-    } catch (e) {
-      console.error('Failed to load entities:', e)
-    } finally {
-      entitiesLoading.value = false
-    }
-  }
 }
 
 function cancelEditing() {
@@ -575,44 +559,21 @@ onUnmounted(() => {
                 <!-- От кого (clientEntity) -->
                 <div>
                   <label class="block text-xs text-tg-hint mb-1">От кого</label>
-                  <select
+                  <EntityAutocomplete
                     v-model="editForm.clientEntityId"
-                    class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
-                    :disabled="entitiesLoading"
-                  >
-                    <option :value="null">Не указан</option>
-                    <option
-                      v-if="store.currentItem?.target?.ownerEntity?.id"
-                      :value="store.currentItem.target.ownerEntity.id"
-                    >
-                      Себе ({{ store.currentItem.target.ownerEntity.name }})
-                    </option>
-                    <option
-                      v-for="entity in entities.filter(e => e.id !== store.currentItem?.target?.ownerEntity?.id)"
-                      :key="entity.id"
-                      :value="entity.id"
-                    >
-                      {{ entity.name }}
-                    </option>
-                  </select>
-                  <p v-if="entitiesLoading" class="text-xs text-tg-hint mt-1">Загрузка контактов...</p>
+                    placeholder="Поиск по имени, телефону, @username..."
+                    :self-option="ownerEntity"
+                  />
                 </div>
 
                 <!-- Кому (assignee) -->
                 <div>
                   <label class="block text-xs text-tg-hint mb-1">Кому</label>
-                  <select
+                  <EntityAutocomplete
                     v-model="editForm.assignee"
-                    class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
-                    :disabled="entitiesLoading"
-                  >
-                    <option :value="null">Не указан</option>
-                    <option value="self">Себе</option>
-                    <option v-for="entity in entities" :key="entity.id" :value="entity.id">
-                      {{ entity.name }}
-                    </option>
-                  </select>
-                  <p v-if="entitiesLoading" class="text-xs text-tg-hint mt-1">Загрузка контактов...</p>
+                    placeholder="Поиск по имени, телефону, @username..."
+                    :self-option="ownerEntity"
+                  />
                 </div>
               </template>
 
