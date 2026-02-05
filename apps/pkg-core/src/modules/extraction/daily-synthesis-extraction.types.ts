@@ -44,7 +44,9 @@ export interface ExtractedTask {
   projectName?: string;
   /** Deadline if mentioned (ISO 8601) */
   deadline?: string;
-  /** Who should do this task */
+  /** Who requested this task ('self' or entity name/ID) */
+  requestedBy?: 'self' | string;
+  /** Who should do this task ('self' or entity name) */
   assignee?: 'self' | string;
   /** Task status */
   status: 'pending' | 'in_progress' | 'done';

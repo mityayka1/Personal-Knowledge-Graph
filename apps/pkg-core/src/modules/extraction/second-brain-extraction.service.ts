@@ -527,7 +527,8 @@ export class SecondBrainExtractionService {
             break;
 
           case 'task':
-            tasks.push(this.mapToExtractedTask(rawEvent));
+            // Task from conversation: requested by counterparty, assigned to self
+            tasks.push(this.mapToExtractedTask(rawEvent, entityId));
             break;
 
           case 'promise_by_me':
@@ -612,8 +613,13 @@ export class SecondBrainExtractionService {
 
   /**
    * Map raw event to ExtractedTask format.
+   * @param rawEvent - Raw extracted event from LLM
+   * @param requestedBy - Entity ID of who requested the task (counterparty) or 'self'
    */
-  private mapToExtractedTask(rawEvent: RawExtractedEvent): ExtractedTask {
+  private mapToExtractedTask(
+    rawEvent: RawExtractedEvent,
+    requestedBy: string,
+  ): ExtractedTask {
     const data = rawEvent.data as {
       what?: string;
       priority?: string;
@@ -625,6 +631,8 @@ export class SecondBrainExtractionService {
       status: 'pending',
       priority: this.mapTaskPriority(data.priority),
       deadline: data.deadline,
+      requestedBy, // Who asked for this task (counterparty entity ID or 'self')
+      assignee: 'self', // Tasks from conversation are assigned to system owner
       sourceQuote: rawEvent.sourceQuote,
       confidence: rawEvent.confidence,
     };

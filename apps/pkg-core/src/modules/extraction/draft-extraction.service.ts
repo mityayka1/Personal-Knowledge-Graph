@@ -436,6 +436,18 @@ export class DraftExtractionService {
       }
     }
 
+    // Resolve requestedBy to clientEntityId
+    // clientEntityId = who requested the task (counterparty)
+    let clientEntityId: string | null = null;
+    if (task.requestedBy && task.requestedBy !== 'self') {
+      const clientEntity = await this.findEntityByNameOrId(task.requestedBy);
+      if (clientEntity) {
+        clientEntityId = clientEntity.id;
+      } else {
+        this.logger.warn(`Could not resolve 'requestedBy' entity: "${task.requestedBy}"`);
+      }
+    }
+
     // Generate ID manually since QueryBuilder doesn't return the entity
     const activityId = randomUUID();
 
@@ -454,6 +466,7 @@ export class DraftExtractionService {
         depth,
         materializedPath,
         ownerEntityId: input.ownerEntityId,
+        clientEntityId, // Who requested the task (counterparty)
         deadline: task.deadline ? new Date(task.deadline) : null,
         metadata: {
           extractedFrom: 'daily_synthesis',
