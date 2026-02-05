@@ -75,16 +75,36 @@ function getDisplaySubtitle(): string {
 
 function getCounterparty(): string | null {
   const item = store.currentItem
-  if (!item || item.itemType !== 'commitment') return null
+  if (!item) return null
 
-  // Show the other party in the commitment
-  const from = item.target?.fromEntity?.name
-  const to = item.target?.toEntity?.name
-
-  if (from && to) {
-    return `${from} → ${to}`
+  // For commitments: fromEntity → toEntity
+  if (item.itemType === 'commitment') {
+    const from = item.target?.fromEntity?.name
+    const to = item.target?.toEntity?.name
+    if (from && to) {
+      return `${from} → ${to}`
+    }
+    return from || to || null
   }
-  return from || to || null
+
+  // For tasks: clientEntity (requester) → assignee/ownerEntity
+  if (item.itemType === 'task') {
+    const from = item.target?.clientEntity?.name
+    const to = item.target?.assignee === 'self'
+      ? item.target?.ownerEntity?.name
+      : item.target?.assignee || item.target?.ownerEntity?.name
+
+    if (from && to) {
+      return `${from} → ${to}`
+    }
+    // If no client, just show who it's assigned to
+    if (to) {
+      return `→ ${to}`
+    }
+    return null
+  }
+
+  return null
 }
 
 function getDueDate(): string | null {
@@ -108,12 +128,27 @@ function getPriority(): string | null {
   const item = store.currentItem
   if (!item?.target?.priority) return null
 
-  const priorities: Record<number, string> = {
-    1: '🔴 Высокий',
-    2: '🟡 Средний',
-    3: '🟢 Низкий',
+  const priority = item.target.priority
+
+  // Numeric priorities (for Commitment)
+  if (typeof priority === 'number') {
+    const numericPriorities: Record<number, string> = {
+      1: '🔴 Высокий',
+      2: '🟡 Средний',
+      3: '🟢 Низкий',
+    }
+    return numericPriorities[priority] || null
   }
-  return priorities[item.target.priority] || null
+
+  // String priorities (for Activity/Task)
+  const stringPriorities: Record<string, string> = {
+    critical: '🔴 Критичный',
+    high: '🔴 Высокий',
+    medium: '🟡 Средний',
+    low: '🟢 Низкий',
+    none: null as unknown as string,
+  }
+  return stringPriorities[priority] || null
 }
 
 function getCommitmentTypeName(): string | null {
@@ -129,6 +164,34 @@ function getCommitmentTypeName(): string | null {
     task: 'Задача',
   }
   return typeNames[item.target.typeName] || item.target.typeName
+}
+
+function hasSourceLink(): boolean {
+  const item = store.currentItem
+  return !!(item?.messageRef || item?.sourceInteractionId)
+}
+
+function openSourceMessage() {
+  const item = store.currentItem
+  if (!item?.messageRef) return
+
+  // messageRef format: "chatId:messageId"
+  const [chatId, messageId] = item.messageRef.split(':')
+  if (!chatId || !messageId) return
+
+  haptics.selection()
+
+  // Use Telegram deep link to open the message
+  // For private chats: tg://privatepost?channel=chatId&post=messageId
+  // For public: https://t.me/c/chatId/messageId
+  const link = `https://t.me/c/${chatId.replace('-100', '')}/${messageId}`
+
+  // Open in Telegram using WebApp API
+  if (window.Telegram?.WebApp?.openTelegramLink) {
+    window.Telegram.WebApp.openTelegramLink(link)
+  } else {
+    window.open(link, '_blank')
+  }
 }
 
 async function handleApprove() {
@@ -344,7 +407,16 @@ onUnmounted(() => {
 
             <!-- Source Quote (reasoning/context) -->
             <div v-if="store.currentItem.sourceQuote" class="mt-3 pt-3 border-t border-tg-secondary-bg">
-              <p class="text-xs text-tg-hint mb-1">Источник:</p>
+              <div class="flex items-center justify-between mb-1">
+                <p class="text-xs text-tg-hint">Источник:</p>
+                <button
+                  v-if="hasSourceLink()"
+                  class="text-xs text-tg-link hover:underline"
+                  @click="openSourceMessage"
+                >
+                  Открыть в чате →
+                </button>
+              </div>
               <blockquote class="border-l-2 border-tg-accent pl-3 py-1 text-sm text-tg-hint italic">
                 "{{ store.currentItem.sourceQuote }}"
               </blockquote>

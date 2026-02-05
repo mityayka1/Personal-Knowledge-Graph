@@ -78,6 +78,9 @@ interface TelegramWebApp {
 
   setHeaderColor(color: 'bg_color' | 'secondary_bg_color' | string): void
   setBackgroundColor(color: 'bg_color' | 'secondary_bg_color' | string): void
+
+  openLink(url: string, options?: { try_instant_view?: boolean }): void
+  openTelegramLink(url: string): void
 }
 
 interface Window {

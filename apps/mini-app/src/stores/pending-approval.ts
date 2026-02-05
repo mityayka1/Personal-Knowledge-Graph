@@ -10,6 +10,8 @@ export interface PendingApprovalItem {
   sourceQuote: string | null
   status: 'pending' | 'approved' | 'rejected'
   createdAt: string
+  sourceInteractionId?: string | null
+  messageRef?: string | null
   target?: {
     // Common fields
     name?: string
@@ -18,7 +20,7 @@ export interface PendingApprovalItem {
     preview?: string
     description?: string
     dueDate?: string
-    priority?: number
+    priority?: number | string
     // Fact fields
     factType?: string
     // Commitment fields
@@ -30,6 +32,7 @@ export interface PendingApprovalItem {
     parentActivity?: { id: string; name: string } | null
     ownerEntity?: { id: string; name: string } | null
     clientEntity?: { id: string; name: string } | null
+    assignee?: string
   }
 }
 

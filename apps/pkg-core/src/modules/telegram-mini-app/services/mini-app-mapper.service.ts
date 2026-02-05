@@ -33,6 +33,8 @@ export class MiniAppMapperService {
       sourceQuote: approval.sourceQuote,
       status: approval.status,
       createdAt: approval.createdAt.toISOString(),
+      sourceInteractionId: approval.sourceInteractionId,
+      messageRef: approval.messageRef,
       target: await this.loadTargetData(approval),
     };
   }
@@ -72,6 +74,7 @@ export class MiniAppMapperService {
         approval.itemType === PendingApprovalItemType.PROJECT
       ) {
         const activity = await this.activityService.findOne(approval.targetId);
+        const metadata = activity.metadata as Record<string, unknown> | null;
         return {
           title: activity.name,
           description: activity.description,
@@ -86,6 +89,8 @@ export class MiniAppMapperService {
           clientEntity: activity.clientEntity
             ? { id: activity.clientEntity.id, name: activity.clientEntity.name }
             : null,
+          // Task-specific metadata
+          assignee: metadata?.assignee as string | undefined,
           preview: approval.sourceQuote?.substring(0, 200),
         };
       }
