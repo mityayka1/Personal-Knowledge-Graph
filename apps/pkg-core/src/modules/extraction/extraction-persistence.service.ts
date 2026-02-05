@@ -1,6 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import {
   Activity,
   ActivityType,
@@ -8,7 +6,6 @@ import {
   ActivityPriority,
   CommitmentType,
   CommitmentPriority,
-  EntityRecord,
 } from '@pkg/entities';
 import { ActivityService } from '../activity/activity.service';
 import { CommitmentService, CreateCommitmentDto } from '../activity/commitment.service';
@@ -17,6 +14,7 @@ import {
   ExtractedTask,
   ExtractedCommitment,
 } from './daily-synthesis-extraction.types';
+import { ClientResolutionService } from './client-resolution.service';
 
 /**
  * Input for persisting extracted items.
@@ -71,8 +69,7 @@ export class ExtractionPersistenceService {
   constructor(
     private readonly activityService: ActivityService,
     private readonly commitmentService: CommitmentService,
-    @InjectRepository(EntityRecord)
-    private readonly entityRepo: Repository<EntityRecord>,
+    private readonly clientResolutionService: ClientResolutionService,
   ) {}
 
   /**
@@ -171,11 +168,20 @@ export class ExtractionPersistenceService {
       return existing;
     }
 
-    // Try to resolve client entity
+    // Try to resolve client entity via 3-strategy approach
     let clientEntityId: string | undefined;
-    if (project.client) {
-      const client = await this.findEntityByName(project.client);
-      clientEntityId = client?.id;
+    let clientResolutionMethod: string | undefined;
+    const clientResult = await this.clientResolutionService.resolveClient({
+      clientName: project.client,
+      participants: project.participants,
+      ownerEntityId: input.ownerEntityId,
+    });
+    if (clientResult) {
+      clientEntityId = clientResult.entityId;
+      clientResolutionMethod = clientResult.method;
+      this.logger.debug(
+        `Resolved client for project "${project.name}": "${clientResult.entityName}" via ${clientResult.method}`,
+      );
     }
 
     return this.activityService.create({
@@ -191,6 +197,7 @@ export class ExtractionPersistenceService {
         participants: project.participants,
         sourceQuote: project.sourceQuote,
         confidence: project.confidence,
+        clientResolutionMethod,
       },
     });
   }
@@ -234,14 +241,14 @@ export class ExtractionPersistenceService {
     let toEntityId = input.ownerEntityId;
 
     if (commitment.from !== 'self') {
-      const fromEntity = await this.findEntityByName(commitment.from);
+      const fromEntity = await this.clientResolutionService.findEntityByName(commitment.from);
       if (fromEntity) {
         fromEntityId = fromEntity.id;
       }
     }
 
     if (commitment.to !== 'self') {
-      const toEntity = await this.findEntityByName(commitment.to);
+      const toEntity = await this.clientResolutionService.findEntityByName(commitment.to);
       if (toEntity) {
         toEntityId = toEntity.id;
       }
@@ -265,21 +272,6 @@ export class ExtractionPersistenceService {
 
     const created = await this.commitmentService.create(dto);
     return { id: created.id, title: created.title };
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Private: Entity Resolution
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Find entity by name (fuzzy match).
-   */
-  private async findEntityByName(name: string): Promise<EntityRecord | null> {
-    return this.entityRepo
-      .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${name}%` })
-      .orderBy('e.updatedAt', 'DESC')
-      .getOne();
   }
 
   // ─────────────────────────────────────────────────────────────

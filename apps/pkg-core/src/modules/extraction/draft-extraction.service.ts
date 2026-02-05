@@ -27,6 +27,7 @@ import {
   ExtractedFact,
 } from './daily-synthesis-extraction.types';
 import { ProjectMatchingService } from './project-matching.service';
+import { ClientResolutionService } from './client-resolution.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -109,6 +110,7 @@ export class DraftExtractionService {
     @InjectRepository(EntityFact)
     private readonly factRepo: Repository<EntityFact>,
     private readonly projectMatchingService: ProjectMatchingService,
+    private readonly clientResolutionService: ClientResolutionService,
   ) {}
 
   /**
@@ -356,11 +358,20 @@ export class DraftExtractionService {
     input: DraftExtractionInput,
     batchId: string,
   ): Promise<{ activity: Activity; approval: PendingApproval }> {
-    // Try to resolve client entity
+    // Try to resolve client entity via 3-strategy approach
     let clientEntityId: string | null = null;
-    if (project.client) {
-      const client = await this.findEntityByName(project.client);
-      clientEntityId = client?.id ?? null;
+    let clientResolutionMethod: string | undefined;
+    const clientResult = await this.clientResolutionService.resolveClient({
+      clientName: project.client,
+      participants: project.participants,
+      ownerEntityId: input.ownerEntityId,
+    });
+    if (clientResult) {
+      clientEntityId = clientResult.entityId;
+      clientResolutionMethod = clientResult.method;
+      this.logger.debug(
+        `Resolved client for project "${project.name}": "${clientResult.entityName}" via ${clientResult.method}`,
+      );
     }
 
     // Generate ID manually since QueryBuilder doesn't return the entity
@@ -387,6 +398,7 @@ export class DraftExtractionService {
           participants: project.participants,
           sourceQuote: project.sourceQuote,
           confidence: project.confidence,
+          clientResolutionMethod,
           draftBatchId: batchId,
         },
       })
@@ -447,11 +459,14 @@ export class DraftExtractionService {
     // clientEntityId = who requested the task (counterparty)
     let clientEntityId: string | null = null;
     if (task.requestedBy && task.requestedBy !== 'self') {
-      const clientEntity = await this.findEntityByNameOrId(task.requestedBy);
-      if (clientEntity) {
-        clientEntityId = clientEntity.id;
+      if (DraftExtractionService.UUID_PATTERN.test(task.requestedBy)) {
+        const clientEntity = await this.entityRepo.findOne({ where: { id: task.requestedBy } });
+        if (clientEntity) clientEntityId = clientEntity.id;
+        else this.logger.warn(`Could not resolve 'requestedBy' entity by UUID: "${task.requestedBy}"`);
       } else {
-        this.logger.warn(`Could not resolve 'requestedBy' entity: "${task.requestedBy}"`);
+        const clientEntity = await this.clientResolutionService.findEntityByName(task.requestedBy);
+        if (clientEntity) clientEntityId = clientEntity.id;
+        else this.logger.warn(`Could not resolve 'requestedBy' entity: "${task.requestedBy}"`);
       }
     }
 
@@ -524,20 +539,26 @@ export class DraftExtractionService {
     let toEntityId = input.ownerEntityId;
 
     if (commitment.from !== 'self') {
-      const fromEntity = await this.findEntityByNameOrId(commitment.from);
-      if (fromEntity) {
-        fromEntityId = fromEntity.id;
+      if (DraftExtractionService.UUID_PATTERN.test(commitment.from)) {
+        const fromEntity = await this.entityRepo.findOne({ where: { id: commitment.from } });
+        if (fromEntity) fromEntityId = fromEntity.id;
+        else this.logger.warn(`Could not resolve 'from' entity by UUID: "${commitment.from}"`);
       } else {
-        this.logger.warn(`Could not resolve 'from' entity: "${commitment.from}"`);
+        const fromEntity = await this.clientResolutionService.findEntityByName(commitment.from);
+        if (fromEntity) fromEntityId = fromEntity.id;
+        else this.logger.warn(`Could not resolve 'from' entity: "${commitment.from}"`);
       }
     }
 
     if (commitment.to !== 'self') {
-      const toEntity = await this.findEntityByNameOrId(commitment.to);
-      if (toEntity) {
-        toEntityId = toEntity.id;
+      if (DraftExtractionService.UUID_PATTERN.test(commitment.to)) {
+        const toEntity = await this.entityRepo.findOne({ where: { id: commitment.to } });
+        if (toEntity) toEntityId = toEntity.id;
+        else this.logger.warn(`Could not resolve 'to' entity by UUID: "${commitment.to}"`);
       } else {
-        this.logger.warn(`Could not resolve 'to' entity: "${commitment.to}"`);
+        const toEntity = await this.clientResolutionService.findEntityByName(commitment.to);
+        if (toEntity) toEntityId = toEntity.id;
+        else this.logger.warn(`Could not resolve 'to' entity: "${commitment.to}"`);
       }
     }
 
@@ -757,36 +778,6 @@ export class DraftExtractionService {
   private static readonly UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  /**
-   * Find entity by name or ID.
-   * If value looks like a UUID, search by ID directly.
-   * Otherwise, do a fuzzy name search.
-   */
-  private async findEntityByNameOrId(value: string): Promise<EntityRecord | null> {
-    // If it looks like a UUID, search by ID
-    if (DraftExtractionService.UUID_PATTERN.test(value)) {
-      return this.entityRepo.findOne({ where: { id: value } });
-    }
-
-    // Otherwise, fuzzy search by name
-    return this.entityRepo
-      .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${value}%` })
-      .orderBy('e.updatedAt', 'DESC')
-      .getOne();
-  }
-
-  /**
-   * Find entity by name (fuzzy match).
-   * @deprecated Use findEntityByNameOrId instead
-   */
-  private async findEntityByName(name: string): Promise<EntityRecord | null> {
-    return this.entityRepo
-      .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${name}%` })
-      .orderBy('e.updatedAt', 'DESC')
-      .getOne();
-  }
 
   // ─────────────────────────────────────────────────────────────
   // Private: Mapping Functions
