@@ -34,3 +34,5 @@ export * from './utils/html.utils';
 export * from './activity.entity';
 export * from './activity-member.entity';
 export * from './commitment.entity';
+// Phase D: Data Quality
+export * from './data-quality-report.entity';

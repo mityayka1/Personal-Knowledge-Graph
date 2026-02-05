@@ -34,6 +34,8 @@ import {
   Activity,
   ActivityMember,
   Commitment,
+  // Phase D: Data Quality
+  DataQualityReport,
 } from '@pkg/entities';
 
 /**
@@ -68,4 +70,6 @@ export const ALL_ENTITIES = [
   Activity,
   ActivityMember,
   Commitment,
+  // Phase D: Data Quality
+  DataQualityReport,
 ] as const;
