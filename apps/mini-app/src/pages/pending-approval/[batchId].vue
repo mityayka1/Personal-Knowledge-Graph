@@ -581,7 +581,17 @@ onUnmounted(() => {
                     :disabled="entitiesLoading"
                   >
                     <option :value="null">Не указан</option>
-                    <option v-for="entity in entities" :key="entity.id" :value="entity.id">
+                    <option
+                      v-if="store.currentItem?.target?.ownerEntity?.id"
+                      :value="store.currentItem.target.ownerEntity.id"
+                    >
+                      Себе ({{ store.currentItem.target.ownerEntity.name }})
+                    </option>
+                    <option
+                      v-for="entity in entities.filter(e => e.id !== store.currentItem?.target?.ownerEntity?.id)"
+                      :key="entity.id"
+                      :value="entity.id"
+                    >
                       {{ entity.name }}
                     </option>
                   </select>
