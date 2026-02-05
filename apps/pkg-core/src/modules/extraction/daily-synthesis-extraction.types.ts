@@ -253,6 +253,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           title: { type: 'string', description: 'Task title' },
           projectName: { type: 'string', description: 'Parent project name' },
           deadline: { type: 'string', description: 'ISO 8601 deadline if known' },
+          requestedBy: { type: 'string', description: 'Who requested this task ("self" or entity name/UUID)' },
           assignee: { type: 'string', description: '"self" or person name' },
           status: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Task status' },
           priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Priority' },
@@ -274,7 +275,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           deadline: { type: 'string', description: 'Due date ISO 8601' },
           type: {
             type: 'string',
-            enum: ['promise', 'request', 'agreement', 'deadline', 'reminder'],
+            enum: ['promise', 'request', 'agreement', 'deadline', 'reminder', 'meeting'],
             description: 'Commitment type',
           },
           priority: { type: 'string', enum: ['high', 'medium', 'low'] },

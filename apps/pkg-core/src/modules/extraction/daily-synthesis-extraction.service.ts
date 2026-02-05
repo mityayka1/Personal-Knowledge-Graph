@@ -344,6 +344,9 @@ ${synthesisText}
   /**
    * Filter out low-quality project extractions.
    * Projects with low confidence or insufficient indicators are removed.
+   *
+   * Note: The prompt asks Claude for 3/5 indicators, but code accepts 2/5 as a safety net.
+   * This intentional relaxation accounts for LLM extraction inaccuracies.
    */
   private filterLowQualityProjects(projects: ExtractedProject[]): ExtractedProject[] {
     return projects.filter((project) => {
