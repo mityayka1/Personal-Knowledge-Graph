@@ -504,16 +504,20 @@ export class DraftExtractionService {
     let toEntityId = input.ownerEntityId;
 
     if (commitment.from !== 'self') {
-      const fromEntity = await this.findEntityByName(commitment.from);
+      const fromEntity = await this.findEntityByNameOrId(commitment.from);
       if (fromEntity) {
         fromEntityId = fromEntity.id;
+      } else {
+        this.logger.warn(`Could not resolve 'from' entity: "${commitment.from}"`);
       }
     }
 
     if (commitment.to !== 'self') {
-      const toEntity = await this.findEntityByName(commitment.to);
+      const toEntity = await this.findEntityByNameOrId(commitment.to);
       if (toEntity) {
         toEntityId = toEntity.id;
+      } else {
+        this.logger.warn(`Could not resolve 'to' entity: "${commitment.to}"`);
       }
     }
 
@@ -682,7 +686,33 @@ export class DraftExtractionService {
   // ─────────────────────────────────────────────────────────────
 
   /**
+   * UUID v4 regex pattern.
+   */
+  private static readonly UUID_PATTERN =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /**
+   * Find entity by name or ID.
+   * If value looks like a UUID, search by ID directly.
+   * Otherwise, do a fuzzy name search.
+   */
+  private async findEntityByNameOrId(value: string): Promise<EntityRecord | null> {
+    // If it looks like a UUID, search by ID
+    if (DraftExtractionService.UUID_PATTERN.test(value)) {
+      return this.entityRepo.findOne({ where: { id: value } });
+    }
+
+    // Otherwise, fuzzy search by name
+    return this.entityRepo
+      .createQueryBuilder('e')
+      .where('e.name ILIKE :pattern', { pattern: `%${value}%` })
+      .orderBy('e.updatedAt', 'DESC')
+      .getOne();
+  }
+
+  /**
    * Find entity by name (fuzzy match).
+   * @deprecated Use findEntityByNameOrId instead
    */
   private async findEntityByName(name: string): Promise<EntityRecord | null> {
     return this.entityRepo
