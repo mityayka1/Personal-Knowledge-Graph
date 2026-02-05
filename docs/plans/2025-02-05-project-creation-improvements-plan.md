@@ -1,8 +1,9 @@
 # План улучшений системы создания проектов
 
 > **Дата:** 2025-02-05
-> **Статус:** Draft
+> **Статус:** In Progress (Phase 1 Completed)
 > **Автор:** Claude (Tech Lead)
+> **Обновлено:** 2025-02-06 -- Phase 1 (Foundation Services) завершена
 
 ## Executive Summary
 
@@ -3755,25 +3756,28 @@ Scenario: Activity created with enriched fields
 
 ## Migration Strategy
 
-### Phase 1: Preparation (Week 1)
+### Phase 1: Preparation (Week 1) -- COMPLETED
 
-1. **Code Review текущей системы**
+> **Завершено:** 2025-02-06. Все четыре фундаментальных сервиса созданы, unit-тесты написаны. Сервисы готовы к интеграции в extraction pipeline (Phase 2).
+
+1. **Code Review текущей системы** -- Done
    - Audit всех мест создания проектов
    - Документировать текущие edge cases
 
-2. **Создание новых сервисов (без breaking changes)**
-   - ProjectMatchingService
-   - ClientResolutionService
-   - ActivityValidationService
+2. **Создание новых сервисов (без breaking changes)** -- Done
+   - ProjectMatchingService (`apps/pkg-core/src/modules/extraction/project-matching.service.ts`)
+   - ClientResolutionService (`apps/pkg-core/src/modules/extraction/client-resolution.service.ts`)
+   - ActivityValidationService (`apps/pkg-core/src/modules/activity/activity-validation.service.ts`)
+   - ActivityMemberService (`apps/pkg-core/src/modules/activity/activity-member.service.ts`)
 
-3. **Добавление новых полей в entities**
+3. **Добавление новых полей в entities** -- Done
    ```sql
    ALTER TABLE activity
    ADD COLUMN short_name VARCHAR(100),
    ADD COLUMN metadata JSONB DEFAULT '{}';
    ```
 
-4. **Unit тесты для новых сервисов**
+4. **Unit тесты для новых сервисов** -- Done
 
 ### Phase 2: Incremental Rollout (Week 2-3)
 

@@ -20,7 +20,7 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 📋 Planned |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
 
 ---
@@ -50,7 +50,7 @@
 - Approval Flow через Telegram
 - Proactive action buttons
 
-### Phase D: Jarvis Foundation 📋
+### Phase D: Jarvis Foundation 🔄
 **Цель:** Полноценный проактивный ассистент
 
 - **Activity entity** — иерархическая модель всех дел (AREA → BUSINESS → PROJECT → TASK)
@@ -59,6 +59,19 @@
 - **Trigger System** — time/event/context-based уведомления
 - **Action Engine** — автономные действия с approval flow
 - **External Knowledge** — интеграция с web search
+
+#### Foundation Services (Phase 1) -- Completed
+
+Фундаментальные сервисы, созданные для устранения разрыва между моделью данных и её фактическим использованием. Подготовка к интеграции в extraction pipeline.
+
+| Сервис | Описание | Файл |
+|--------|----------|------|
+| **ProjectMatchingService** | Fuzzy matching для предотвращения дубликатов проектов | `apps/pkg-core/src/modules/extraction/project-matching.service.ts` |
+| **ClientResolutionService** | 3-стратегийное определение клиента для Activity | `apps/pkg-core/src/modules/extraction/client-resolution.service.ts` |
+| **ActivityValidationService** | Валидация иерархии типов Activity (HIERARCHY_RULES) | `apps/pkg-core/src/modules/activity/activity-validation.service.ts` |
+| **ActivityMemberService** | Управление участниками: resolve names → Entity → ActivityMember | `apps/pkg-core/src/modules/activity/activity-member.service.ts` |
+
+Детали: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](../plans/2025-02-05-project-creation-improvements-plan.md) -- Phase 1: Preparation
 
 ### Phase E: Knowledge Packing 📋
 **Цель:** Сегментация обсуждений по темам и ретроспективная упаковка знаний
