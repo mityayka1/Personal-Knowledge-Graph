@@ -5,6 +5,7 @@ import { usePendingApprovalStore } from '@/stores/pending-approval'
 import { useBackButton } from '@/composables/useTelegram'
 import { useSmartHaptics } from '@/composables/useSmartHaptics'
 import { usePopup } from '@/composables/useTelegram'
+import { api } from '@/api/client'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 
@@ -24,7 +25,18 @@ const editForm = ref({
   description: '',
   priority: '',
   deadline: '',
+  clientEntityId: '' as string | null,
+  assignee: '' as string | null,
 })
+
+// Entities for dropdowns
+interface EntityOption {
+  id: string
+  name: string
+  type: 'person' | 'organization'
+}
+const entities = ref<EntityOption[]>([])
+const entitiesLoading = ref(false)
 
 // Initialize edit form when item changes
 watch(() => store.currentItem, (item) => {
@@ -36,15 +48,30 @@ watch(() => store.currentItem, (item) => {
     const description: string = target.description || ''
     const priority: string = typeof priorityValue === 'string' ? priorityValue : ''
     const deadline: string = dueDateValue ? (String(dueDateValue).split('T')[0] ?? '') : ''
-    editForm.value = { name, description, priority, deadline }
+    const clientEntityId: string | null = target.clientEntity?.id || null
+    const assignee: string | null = target.assignee || null
+    editForm.value = { name, description, priority, deadline, clientEntityId, assignee }
   }
   // Close edit mode when navigating to different item
   isEditing.value = false
 }, { immediate: true })
 
-function startEditing() {
+async function startEditing() {
   haptics.selection()
   isEditing.value = true
+
+  // Load entities for dropdowns if not already loaded (only for tasks)
+  if (store.currentItem?.itemType === 'task' && entities.value.length === 0) {
+    entitiesLoading.value = true
+    try {
+      const response = await api.getEntities({ limit: 100 })
+      entities.value = response.items
+    } catch (e) {
+      console.error('Failed to load entities:', e)
+    } finally {
+      entitiesLoading.value = false
+    }
+  }
 }
 
 function cancelEditing() {
@@ -58,7 +85,9 @@ function cancelEditing() {
   const description: string = target.description || ''
   const priority: string = typeof priorityValue === 'string' ? priorityValue : ''
   const deadline: string = dueDateValue ? (String(dueDateValue).split('T')[0] ?? '') : ''
-  editForm.value = { name, description, priority, deadline }
+  const clientEntityId: string | null = target.clientEntity?.id || null
+  const assignee: string | null = target.assignee || null
+  editForm.value = { name, description, priority, deadline, clientEntityId, assignee }
 }
 
 async function saveEdits() {
@@ -72,6 +101,8 @@ async function saveEdits() {
   const originalDescription = target.description || ''
   const originalPriority = typeof target.priority === 'string' ? target.priority : ''
   const originalDeadline = target.dueDate ? target.dueDate.split('T')[0] : ''
+  const originalClientEntityId = target.clientEntity?.id || null
+  const originalAssignee = target.assignee || null
 
   if (editForm.value.name !== originalName) {
     updates.name = editForm.value.name
@@ -87,6 +118,15 @@ async function saveEdits() {
     updates.deadline = editForm.value.deadline
       ? new Date(editForm.value.deadline).toISOString()
       : null
+  }
+  // Task-specific fields
+  if (store.currentItem?.itemType === 'task') {
+    if (editForm.value.clientEntityId !== originalClientEntityId) {
+      updates.clientEntityId = editForm.value.clientEntityId || null
+    }
+    if (editForm.value.assignee !== originalAssignee) {
+      updates.assignee = editForm.value.assignee || null
+    }
   }
 
   if (Object.keys(updates).length === 0) {
@@ -529,6 +569,42 @@ onUnmounted(() => {
                   class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
                 />
               </div>
+
+              <!-- Task-specific: От кого / Кому -->
+              <template v-if="store.currentItem?.itemType === 'task'">
+                <!-- От кого (clientEntity) -->
+                <div>
+                  <label class="block text-xs text-tg-hint mb-1">От кого</label>
+                  <select
+                    v-model="editForm.clientEntityId"
+                    class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
+                    :disabled="entitiesLoading"
+                  >
+                    <option :value="null">Не указан</option>
+                    <option v-for="entity in entities" :key="entity.id" :value="entity.id">
+                      {{ entity.name }}
+                    </option>
+                  </select>
+                  <p v-if="entitiesLoading" class="text-xs text-tg-hint mt-1">Загрузка контактов...</p>
+                </div>
+
+                <!-- Кому (assignee) -->
+                <div>
+                  <label class="block text-xs text-tg-hint mb-1">Кому</label>
+                  <select
+                    v-model="editForm.assignee"
+                    class="w-full px-3 py-2 rounded-lg bg-tg-secondary-bg text-tg-text border border-transparent focus:border-tg-button focus:outline-none"
+                    :disabled="entitiesLoading"
+                  >
+                    <option :value="null">Не указан</option>
+                    <option value="self">Себе</option>
+                    <option v-for="entity in entities" :key="entity.id" :value="entity.id">
+                      {{ entity.name }}
+                    </option>
+                  </select>
+                  <p v-if="entitiesLoading" class="text-xs text-tg-hint mt-1">Загрузка контактов...</p>
+                </div>
+              </template>
 
               <!-- Edit actions -->
               <div class="flex gap-2 pt-2">

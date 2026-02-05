@@ -154,6 +154,21 @@ class ApiClient {
     }>(`/entity/${entityId}`)
   }
 
+  // Entity List (for dropdowns)
+  async getEntities(params?: { search?: string; limit?: number }) {
+    const query = new URLSearchParams()
+    if (params?.search) query.set('search', params.search)
+    if (params?.limit) query.set('limit', String(params.limit))
+    const queryString = query.toString()
+    return this.request<{
+      items: Array<{
+        id: string
+        name: string
+        type: 'person' | 'organization'
+      }>
+    }>(`/entities${queryString ? `?${queryString}` : ''}`)
+  }
+
   // Pending Approvals
   async getPendingApprovals(params?: { batchId?: string; status?: string; limit?: number; offset?: number }) {
     const query = new URLSearchParams()
@@ -272,6 +287,8 @@ class ApiClient {
       priority?: string
       deadline?: string | null
       parentId?: string | null
+      clientEntityId?: string | null
+      assignee?: string | null
     }
   ) {
     return this.request<{

@@ -11,6 +11,7 @@ import {
   PendingApproval,
   PendingApprovalItemType,
   PendingApprovalStatus,
+  Activity,
 } from '@pkg/entities';
 import {
   activateTarget,
@@ -67,6 +68,8 @@ export interface UpdateTargetInput {
   // Activity/Task fields
   deadline?: Date | null;
   parentId?: string | null;
+  clientEntityId?: string | null; // "от кого" - requester entity
+  assignee?: string | null; // "кому" - 'self' or entity ID
 
   // Commitment fields
   dueDate?: Date | null;
@@ -292,12 +295,28 @@ export class PendingApprovalService {
         approval.itemType === PendingApprovalItemType.TASK ||
         approval.itemType === PendingApprovalItemType.PROJECT
       ) {
-        // Activity entity updates
+        // Activity entity updates (direct columns)
         if (updates.name !== undefined) targetUpdates.name = updates.name;
         if (updates.description !== undefined) targetUpdates.description = updates.description;
         if (updates.priority !== undefined) targetUpdates.priority = updates.priority;
         if (updates.deadline !== undefined) targetUpdates.deadline = updates.deadline;
         if (updates.parentId !== undefined) targetUpdates.parentId = updates.parentId;
+        if (updates.clientEntityId !== undefined) targetUpdates.clientEntityId = updates.clientEntityId;
+
+        // assignee is stored in metadata.assignee (JSONB), needs special handling
+        if (updates.assignee !== undefined) {
+          const activity = await manager.findOne(Activity, {
+            where: { id: approval.targetId },
+            select: ['id', 'metadata'],
+          });
+          if (activity) {
+            const currentMetadata = (activity.metadata as Record<string, unknown>) || {};
+            targetUpdates.metadata = {
+              ...currentMetadata,
+              assignee: updates.assignee,
+            };
+          }
+        }
       } else if (approval.itemType === PendingApprovalItemType.COMMITMENT) {
         // Commitment entity updates (field name mapping)
         if (updates.name !== undefined) targetUpdates.title = updates.name;

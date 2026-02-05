@@ -287,6 +287,8 @@ export const usePendingApprovalStore = defineStore('pendingApproval', () => {
     priority?: string
     deadline?: string | null
     parentId?: string | null
+    clientEntityId?: string | null
+    assignee?: string | null
   }) {
     const item = currentItem.value
     if (!item || isProcessing.value) return
