@@ -3779,47 +3779,47 @@ Scenario: Activity created with enriched fields
 
 4. **Unit тесты для новых сервисов** -- Done
 
-### Phase 2: Incremental Rollout (Week 2-3)
+### Phase 2: Extraction Improvements (Week 2-3) -- COMPLETED
 
-1. **Enable improved project matching** (за feature flag)
-   ```typescript
-   const USE_NEW_MATCHING = process.env.ENABLE_IMPROVED_MATCHING === 'true';
-   ```
+> **Завершено:** 2025-02-06. Foundation Services интегрированы в extraction pipeline. ProjectIndicators фильтруют некачественные проекты, ProjectMatching предотвращает дубликаты, ClientResolution определяет клиентов. ActivityMember wiring и Commitment.activityId линковка реализованы. 25+ новых тестов, 404 теста проходят.
 
-2. **A/B тестирование на production**
-   - 10% запросов через новый алгоритм
-   - Логировать differences между old/new
-   - Постепенно увеличивать до 100%
+1. **ProjectIndicators + filterLowQualityProjects** -- Done
+   - 5 boolean индикаторов качества проектов (duration, structure, deliverable, team, explicit context)
+   - Автоматическая фильтрация некачественных проектов перед персистенцией
 
-3. **Enable improved client resolution** (feature flag)
+2. **ProjectMatching Integration** -- Done
+   - ProjectMatchingService интегрирован в DraftExtractionService
+   - Fuzzy deduplication с Levenshtein distance (порог 0.8)
 
-4. **Enable improved deduplication**
+3. **ClientResolution Integration** -- Done
+   - ClientResolutionService интегрирован в оба extraction сервиса
+   - 3-strategy: explicit mention → participant_org → name_search
+
+4. **ActivityMember Wiring** -- Done
+   - ActivityMemberService создаёт записи участников при extraction
+   - Resolve names → Entity → ActivityMember с ролями
+
+5. **Commitment → Activity линковка** -- Done
+   - Commitment.activityId заполняется через projectMap
+   - Обязательства привязываются к соответствующим проектам
+
+6. **Activity Enrichment** -- Done
+   - description и tags заполняются при extraction
 
 ### Phase 3: Entity Wiring — подключение "спящих" entity (Week 4)
 
-> Эта фаза закрывает разрыв между моделью данных и её использованием (Проблема 8).
+> Основная часть entity wiring выполнена в Phase 2. Оставшиеся задачи:
 
-1. **ActivityMember wiring**
-   - Создать ActivityMemberService
-   - Интегрировать в extraction-persistence.service.ts
-   - Миграция: извлечь metadata.participants → ActivityMember записи
-   - Тесты: создание, резолвинг участников, дубли
+1. ~~**ActivityMember wiring**~~ -- ✅ Done (Phase 2)
 
-2. **Commitment → Activity линковка**
-   - Обогатить extraction prompt (projectName в commitments)
-   - Добавить activityId маппинг в extraction-persistence.service.ts
-   - Миграция: попытка привязать existing commitments к activities по контексту
+2. ~~**Commitment → Activity линковка**~~ -- ✅ Done (Phase 2)
 
-3. **InferredRelations persistence**
+3. **InferredRelations persistence** -- Pending
    - Добавить persistInferredRelations в extraction-persistence.service.ts
    - Создать draft EntityRelation + EntityRelationMembers с approval flow
    - Тесты: дедупликация, confidence threshold, N-ary relations
 
-4. **Activity fields enrichment**
-   - Обогатить ExtractedProject тип (description, priority, deadline, tags)
-   - Обновить extraction prompt для извлечения дополнительных полей
-   - Обновить маппинг в extraction-persistence.service.ts
-   - Тесты: заполненность полей, парсинг дат
+4. ~~**Activity fields enrichment**~~ -- ✅ Done (Phase 2)
 
 ### Phase 4: REST API (Week 5)
 

@@ -20,7 +20,7 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2 Completed) |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
 
 ---
@@ -72,6 +72,21 @@
 | **ActivityMemberService** | Управление участниками: resolve names → Entity → ActivityMember | `apps/pkg-core/src/modules/activity/activity-member.service.ts` |
 
 Детали: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](../plans/2025-02-05-project-creation-improvements-plan.md) -- Phase 1: Preparation
+
+#### Extraction Improvements (Phase 2) -- Completed
+
+Интеграция Foundation Services в extraction pipeline, улучшение критериев извлечения и entity wiring.
+
+| Улучшение | Описание |
+|-----------|----------|
+| **ProjectIndicators** | 5 boolean индикаторов (duration, structure, deliverable, team, explicit context) + filterLowQualityProjects |
+| **ProjectMatching Integration** | Fuzzy deduplication в DraftExtractionService (Levenshtein 0.8) |
+| **ClientResolution Integration** | 3-strategy определение клиента в обоих extraction сервисах |
+| **ActivityMember Wiring** | Участники из extraction автоматически создаются как ActivityMember записи |
+| **Commitment.activityId** | Обязательства связываются с проектами через projectMap |
+| **Activity Enrichment** | description и tags заполняются при extraction |
+
+Детали: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](../plans/2025-02-05-project-creation-improvements-plan.md) -- Phase 2: Extraction Improvements
 
 ### Phase E: Knowledge Packing 📋
 **Цель:** Сегментация обсуждений по темам и ретроспективная упаковка знаний
