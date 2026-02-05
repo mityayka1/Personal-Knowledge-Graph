@@ -20,7 +20,7 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2 Completed) |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2, REST API Completed) |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
 
 ---
@@ -87,6 +87,23 @@
 | **Activity Enrichment** | description и tags заполняются при extraction |
 
 Детали: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](../plans/2025-02-05-project-creation-improvements-plan.md) -- Phase 2: Extraction Improvements
+
+#### REST API (Phase 4) -- Completed
+
+Полноценный REST API для Activity CRUD с валидацией, пагинацией и управлением участниками.
+
+| Endpoint | Описание |
+|----------|----------|
+| `POST /activities` | Создание Activity с валидацией иерархии типов |
+| `GET /activities` | Список с фильтрами (type, status, context, owner, client, search) и пагинацией |
+| `GET /activities/:id` | Детали с relations, members и childrenCount |
+| `PATCH /activities/:id` | Обновление с валидацией циклов в иерархии |
+| `DELETE /activities/:id` | Soft delete (status = ARCHIVED) |
+| `GET /activities/:id/tree` | Поддерево (children + descendants) |
+| `POST /activities/:id/members` | Добавление участников (дедупликация по entityId + role) |
+| `GET /activities/:id/members` | Список участников |
+
+Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Activity API section
 
 ### Phase E: Knowledge Packing 📋
 **Цель:** Сегментация обсуждений по темам и ретроспективная упаковка знаний

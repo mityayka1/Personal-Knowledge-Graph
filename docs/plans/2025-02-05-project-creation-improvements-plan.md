@@ -1,9 +1,9 @@
 # План улучшений системы создания проектов
 
 > **Дата:** 2025-02-05
-> **Статус:** In Progress (Phase 1 Completed)
+> **Статус:** In Progress (Phase 1-2 Completed, Phase 4 REST API Completed)
 > **Автор:** Claude (Tech Lead)
-> **Обновлено:** 2025-02-06 -- Phase 1 (Foundation Services) завершена
+> **Обновлено:** 2025-02-06 -- Phase 4 (REST API) завершена
 
 ## Executive Summary
 
@@ -3821,11 +3821,21 @@ Scenario: Activity created with enriched fields
 
 4. ~~**Activity fields enrichment**~~ -- ✅ Done (Phase 2)
 
-### Phase 4: REST API (Week 5)
+### Phase 4: REST API (Week 5) -- ✅ Completed
 
-1. **Deploy ProjectController**
-2. **Update Mini App** для использования API
-3. **Documentation** для API endpoints
+1. **Deploy ActivityController** -- ✅ Done
+   - POST /activities — создание с валидацией иерархии
+   - GET /activities — список с фильтрами и пагинацией
+   - GET /activities/:id — детали с members и childrenCount
+   - PATCH /activities/:id — обновление с валидацией циклов
+   - DELETE /activities/:id — soft delete (status = ARCHIVED)
+   - GET /activities/:id/tree — поддерево (children + descendants)
+   - POST /activities/:id/members — добавление участников
+   - GET /activities/:id/members — список участников
+2. **DTO Validation** -- ✅ Done
+   - CreateActivityDto, UpdateActivityDto, ActivityQueryDto, AddMembersDto
+3. **Documentation** -- ✅ Done
+   - API контракты добавлены в docs/API_CONTRACTS.md
 
 ### Phase 5: Cleanup (Week 6)
 
