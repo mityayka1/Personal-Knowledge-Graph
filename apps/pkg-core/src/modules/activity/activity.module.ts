@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Activity, ActivityMember, Commitment } from '@pkg/entities';
 import { ActivityService } from './activity.service';
+import { ActivityValidationService } from './activity-validation.service';
 import { CommitmentService } from './commitment.service';
 
 /**
@@ -20,7 +21,7 @@ import { CommitmentService } from './commitment.service';
   imports: [
     TypeOrmModule.forFeature([Activity, ActivityMember, Commitment]),
   ],
-  providers: [ActivityService, CommitmentService],
-  exports: [ActivityService, CommitmentService],
+  providers: [ActivityService, ActivityValidationService, CommitmentService],
+  exports: [ActivityService, ActivityValidationService, CommitmentService],
 })
 export class ActivityModule {}
