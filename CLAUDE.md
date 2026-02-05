@@ -54,6 +54,7 @@ docker compose logs -f telegram-adapter
 |----------|----------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Архитектура сервисов, sequence diagrams, deployment |
 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | Модель данных, ER-диаграмма, описание таблиц |
+| [docs/KNOWLEDGE_GRAPH.md](docs/KNOWLEDGE_GRAPH.md) | Граф знаний — концептуальная модель сущностей |
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | REST API контракты между сервисами |
 | [docs/PROCESSES.md](docs/PROCESSES.md) | Детальные бизнес-процессы с flow diagrams |
 | [docs/USER_STORIES.md](docs/USER_STORIES.md) | User Stories для MVP и Post-MVP |
