@@ -29,7 +29,7 @@ import { MergeActivitiesDto } from './dto/merge-activities.dto';
  * - POST   /api/v1/data-quality/merge               -- merge duplicate activities
  */
 @ApiTags('data-quality')
-@Controller('api/v1/data-quality')
+@Controller('data-quality')
 export class DataQualityController {
   private readonly logger = new Logger(DataQualityController.name);
 
