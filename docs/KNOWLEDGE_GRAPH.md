@@ -15,7 +15,7 @@
 - [Рёбра графа (Edges)](#рёбра-графа-edges)
   - [EntityRelation](#entityrelation) 🟡
   - [Commitment](#commitment) 🟡
-  - [ActivityMember](#activitymember) 🔴
+  - [ActivityMember](#activitymember) 🟢
 - [Агрегированные знания (Summaries)](#агрегированные-знания-summaries)
   - [EntityRelationshipProfile](#entityrelationshipprofile) 🟢
   - [InteractionSummary](#interactionsummary) 🟢
@@ -26,6 +26,8 @@
 - [Планируемые сущности (Phase E)](#планируемые-сущности-phase-e)
   - [TopicalSegment](#topicalsegment) ⚪
   - [KnowledgePack](#knowledgepack) ⚪
+- [Системные сервисы (System)](#системные-сервисы-system)
+  - [DataQualityReport](#dataqualityreport) 🟢
 - [**Системные проблемы и план устранения**](#системные-проблемы-и-план-устранения)
 - [Визуальные схемы](#визуальные-схемы)
 - [Сводная таблица](#сводная-таблица)
@@ -70,7 +72,7 @@ PKG Knowledge Graph — это граф знаний, где:
 
 ## Статус реализации
 
-> **Обновлено:** 2025-02-06 после завершения Phase 2 (Extraction Improvements). Каждая entity оценена по трём параметрам: определена ли в коде, подключена ли к extraction pipeline, и реально ли создаются записи в production.
+> **Обновлено:** 2026-02-06 после завершения Phase 5 (Final Reconciliation, Phases 1-5 done). Каждая entity оценена по трём параметрам: определена ли в коде, подключена ли к extraction pipeline, и реально ли создаются записи в production.
 
 ### Условные обозначения
 
@@ -92,7 +94,8 @@ PKG Knowledge Graph — это граф знаний, где:
 | EntityRelation | ✅ | ✅ | ❌ | ⚠️ manual only | 🟡 PARTIAL — extraction не персистит InferredRelations |
 | EntityRelationMember | ✅ | ✅ | ❌ | ⚠️ manual only | 🟡 PARTIAL — зависит от EntityRelation |
 | Commitment | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — `activityId` заполняется через projectMap (Phase 2) |
-| ActivityMember | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — ActivityMemberService создаёт записи при extraction (Phase 2) |
+| ActivityMember | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — extraction + backfill migration (21 записей), REST API (Phase 3) |
+| DataQualityReport | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — agent tools + REST API (Phase 4) |
 | EntityRelationshipProfile | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
 | InteractionSummary | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
 | Interaction | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
@@ -801,6 +804,56 @@ EntityRelation { type: PARENTHOOD }
 
 ---
 
+## Системные сервисы (System)
+
+### DataQualityReport
+
+> 🟢 **PRODUCTION** — создаётся при аудите качества данных, доступен через REST API и Agent Tools (Phase 4)
+
+**Отчёт о качестве данных** — метрики, обнаруженные проблемы (дубликаты, orphans, пустые поля) и их разрешения.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | uuid | Уникальный идентификатор |
+| `reportDate` | timestamp | Дата создания отчёта |
+| `metrics` | jsonb | Метрики качества (totalActivities, duplicateGroups, orphanedTasks и др.) |
+| `issues` | jsonb | Массив обнаруженных проблем (type, severity, activityId, description, suggestedAction) |
+| `resolutions` | jsonb? | Записи о разрешении проблем |
+| `status` | enum | `PENDING` \| `REVIEWED` \| `RESOLVED` |
+
+**Файл:** `packages/entities/src/data-quality-report.entity.ts:85`
+
+**DataQualityIssueType:**
+
+| Тип | Описание |
+|-----|----------|
+| `DUPLICATE` | Дубликаты Activity (похожие названия) |
+| `ORPHAN` | Task без родительского проекта |
+| `MISSING_CLIENT` | Activity без client entity |
+| `MISSING_MEMBERS` | Activity без ActivityMember записей |
+| `UNLINKED_COMMITMENT` | Commitment без привязки к Activity |
+| `EMPTY_FIELDS` | Activity с незаполненными description/tags |
+
+**DataQualityMetrics:**
+```typescript
+{
+  totalActivities: number;
+  duplicateGroups: number;
+  orphanedTasks: number;
+  missingClientEntity: number;
+  activityMemberCoverage: number;   // 0.0-1.0
+  commitmentLinkageRate: number;    // 0.0-1.0
+  inferredRelationsCount: number;
+  fieldFillRate: number;            // 0.0-1.0
+}
+```
+
+**Доступ:**
+- REST API: `POST /data-quality/run-audit`, `GET /data-quality/reports`, `GET /data-quality/reports/:id`
+- Agent Tools: `run_data_quality_audit`, `get_data_quality_summary`
+
+---
+
 ## Системные проблемы и план устранения
 
 > Выявлено 2025-02-05 при аудите расхождений между этим документом и реальным состоянием кода. Детальный план устранения: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](./plans/2025-02-05-project-creation-improvements-plan.md)
@@ -864,7 +917,7 @@ EntityRelation { type: PARENTHOOD }
 | Приоритет | Что | Когда | Ссылка | Статус |
 |-----------|-----|-------|--------|--------|
 | 🔴 P0 | ActivityMember wiring | Phase 2 | Проблема 8.1 | ✅ Completed (Phase 2) |
-| 🔴 P0 | InferredRelations persistence | Phase 3 (Week 4) плана | Проблема 8.3 | Ожидает Phase 3 |
+| 🔴 P0 | InferredRelations persistence | Future phase | Проблема 8.3 | Ожидает (не входит в текущий scope) |
 | 🟡 P1 | Commitment → Activity linking | Phase 2 | Проблема 8.2 | ✅ Completed (Phase 2) |
 | 🟡 P1 | Activity fields enrichment | Phase 2 | Проблема 8.4 | ✅ Completed (Phase 2, description/tags) |
 | 🟢 P2 | Убрать избыточные tree patterns | После Phase 7 | Проблема 2 | Ожидает |
@@ -874,11 +927,11 @@ EntityRelation { type: PARENTHOOD }
 
 ## Foundation Services (Phase D, Phase 1)
 
-> **Обновлено:** 2025-02-06. Phase 1 создала фундаментальные сервисы. Phase 2 (Extraction Improvements) интегрировала их в extraction pipeline -- см. [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](./plans/2025-02-05-project-creation-improvements-plan.md).
+> **Обновлено:** 2026-02-06. Phase 1 создала фундаментальные сервисы. Phase 2 интегрировала их в extraction pipeline. Phase 3 добавила REST API с ActivityValidationService. Phase 4 — Data Quality system. Phase 5 — cleanup и backfill. См. [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](./plans/2025-02-05-project-creation-improvements-plan.md).
 
 ### Обзор
 
-Phase 1 создала четыре фундаментальных сервиса. Phase 2 интегрировала их в extraction pipeline: ProjectMatchingService предотвращает дубликаты проектов, ClientResolutionService определяет клиентов, ActivityMemberService создаёт структурированные записи участников, Commitment.activityId связывает обязательства с проектами.
+Phase 1 создала четыре фундаментальных сервиса. Phase 2 интегрировала их в extraction pipeline: ProjectMatchingService предотвращает дубликаты проектов, ClientResolutionService определяет клиентов, ActivityMemberService создаёт структурированные записи участников, Commitment.activityId связывает обязательства с проектами. Phase 3 интегрировала ActivityValidationService в REST API для валидации CRUD-операций с Activity.
 
 ### ProjectMatchingService
 
@@ -942,7 +995,7 @@ Phase 1 создала четыре фундаментальных сервис�
 |----------|-------------------|--------|
 | Дубликаты проектов | ProjectMatchingService | ✅ Интегрирован в DraftExtractionService (Phase 2) |
 | Неправильный клиент | ClientResolutionService | ✅ Интегрирован в оба extraction сервиса (Phase 2) |
-| Нет контроля иерархии | ActivityValidationService | Сервис создан, ожидает интеграции |
+| Нет контроля иерархии | ActivityValidationService | ✅ Интегрирован в Activity REST API (Phase 3) |
 | ActivityMember dormant | ActivityMemberService | ✅ Интегрирован в extraction pipeline (Phase 2) |
 
 ---
@@ -1043,6 +1096,8 @@ Phase 1 создала четыре фундаментальных сервис�
 | Message | Raw Data | 🟢 PRODUCTION | `packages/entities/src/message.entity.ts` | — |
 | TranscriptSegment | Raw Data | 🟢 PRODUCTION | `packages/entities/src/transcript-segment.entity.ts` | — |
 | InteractionParticipant | Raw Data | 🟢 PRODUCTION | `packages/entities/src/interaction-participant.entity.ts` | — |
+| **Системные** | | | | |
+| DataQualityReport | System | 🟢 PRODUCTION | `packages/entities/src/data-quality-report.entity.ts` | — |
 | **Планируемые (Phase E)** | | | | |
 | TopicalSegment | Planned | ⚪ PLANNED | `docs/second-brain/06-PHASE-E-KNOWLEDGE-PACKING.md` | — |
 | KnowledgePack | Planned | ⚪ PLANNED | `docs/second-brain/06-PHASE-E-KNOWLEDGE-PACKING.md` | — |
