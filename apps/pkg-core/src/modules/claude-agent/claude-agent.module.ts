@@ -14,6 +14,7 @@ import {
   ContextToolsProvider,
   ActionToolsProvider,
   ActivityToolsProvider,
+  DataQualityToolsProvider,
 } from './tools';
 import { SearchModule } from '../search/search.module';
 import { ContextModule } from '../context/context.module';
@@ -21,6 +22,7 @@ import { EntityEventModule } from '../entity-event/entity-event.module';
 import { EntityModule } from '../entity/entity.module';
 import { NotificationModule } from '../notification/notification.module';
 import { ActivityModule } from '../activity/activity.module';
+import { DataQualityModule } from '../data-quality/data-quality.module';
 import { ExtractionModule } from '../extraction/extraction.module';
 
 /**
@@ -53,6 +55,8 @@ import { ExtractionModule } from '../extraction/extraction.module';
     forwardRef(() => NotificationModule),
     // ActivityModule for ActivityToolsProvider
     forwardRef(() => ActivityModule),
+    // DataQualityModule for DataQualityToolsProvider
+    forwardRef(() => DataQualityModule),
     // ExtractionModule for DailySynthesisExtractionService
     forwardRef(() => ExtractionModule),
   ],
@@ -70,6 +74,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ContextToolsProvider,
     ActionToolsProvider,
     ActivityToolsProvider,
+    DataQualityToolsProvider,
   ],
   exports: [
     ClaudeAgentService,
@@ -83,6 +88,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ContextToolsProvider,
     ActionToolsProvider,
     ActivityToolsProvider,
+    DataQualityToolsProvider,
   ],
 })
 export class ClaudeAgentModule {}
