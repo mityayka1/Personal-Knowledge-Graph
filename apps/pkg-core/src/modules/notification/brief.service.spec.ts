@@ -7,6 +7,8 @@ import {
   ExtractedEvent,
   ExtractedEventStatus,
   EntityFact,
+  Activity,
+  Commitment,
   BriefItem,
   BriefState,
 } from '@pkg/entities';
@@ -71,6 +73,14 @@ describe('BriefService', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
+    const activityRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
+    const commitmentRepo = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BriefService,
@@ -89,6 +99,14 @@ describe('BriefService', () => {
         {
           provide: getRepositoryToken(EntityFact),
           useValue: entityFactRepo,
+        },
+        {
+          provide: getRepositoryToken(Activity),
+          useValue: activityRepo,
+        },
+        {
+          provide: getRepositoryToken(Commitment),
+          useValue: commitmentRepo,
         },
       ],
     }).compile();
