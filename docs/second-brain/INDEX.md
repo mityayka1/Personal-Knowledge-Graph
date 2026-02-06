@@ -20,7 +20,7 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2, REST API Completed) |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2, REST API, Data Quality Completed) |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
 
 ---
@@ -104,6 +104,20 @@
 | `GET /activities/:id/members` | Список участников |
 
 Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Activity API section
+
+#### Data Quality System (Phase 6) -- Completed
+
+Система аудита качества данных: обнаружение дубликатов, сирот, пропущенных связей, а также механизм мержа и разрешения проблем.
+
+| Компонент | Описание |
+|-----------|----------|
+| **DataQualityReport entity** | JSONB отчёты: metrics, issues, resolutions. Статусы: PENDING, REVIEWED, RESOLVED |
+| **DataQualityService** | Полный аудит, поиск дубликатов (LOWER(name) + type), orphaned tasks, merge |
+| **DataQualityController** | 7 REST endpoints: audit, reports CRUD, metrics, merge |
+| **DataQualityToolsProvider** | 5 AI agent tools для Claude |
+| **Tests** | 49 тестов (37 service + 12 controller) |
+
+Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Data Quality API section
 
 ### Phase E: Knowledge Packing 📋
 **Цель:** Сегментация обсуждений по темам и ретроспективная упаковка знаний

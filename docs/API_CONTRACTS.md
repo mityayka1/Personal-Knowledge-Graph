@@ -1575,6 +1575,256 @@ Soft delete — устанавливает `status = ARCHIVED`. Данные с�
 
 ---
 
+## Data Quality API
+
+REST API для аудита качества данных, обнаружения проблем (дубликаты, сироты, пропущенные связи) и их разрешения.
+
+### Enums
+
+**DataQualityReportStatus:**
+| Значение | Описание |
+|----------|----------|
+| `PENDING` | Отчёт создан, проблемы не рассмотрены |
+| `REVIEWED` | Часть проблем разрешена |
+| `RESOLVED` | Все проблемы разрешены |
+
+**DataQualityIssueType:**
+| Значение | Описание |
+|----------|----------|
+| `DUPLICATE` | Дубликат активности (одинаковое имя + тип) |
+| `ORPHAN` | Задача без валидного родителя |
+| `MISSING_CLIENT` | PROJECT/BUSINESS без клиента |
+| `MISSING_MEMBERS` | Активность без участников |
+| `UNLINKED_COMMITMENT` | Обязательство без привязки к Activity |
+| `EMPTY_FIELDS` | Незаполненные ключевые поля |
+
+**DataQualityIssueSeverity:** `HIGH`, `MEDIUM`, `LOW`
+
+---
+
+### POST /data-quality/audit
+
+Запуск полного аудита качества данных. Собирает метрики, обнаруживает проблемы и сохраняет DataQualityReport в БД.
+
+**Response 201:**
+```json
+{
+  "id": "report-uuid",
+  "reportDate": "2025-02-06T10:00:00.000Z",
+  "metrics": {
+    "totalActivities": 42,
+    "duplicateGroups": 3,
+    "orphanedTasks": 5,
+    "missingClientEntity": 8,
+    "activityMemberCoverage": 0.65,
+    "commitmentLinkageRate": 0.72,
+    "inferredRelationsCount": 12,
+    "fieldFillRate": 0.45
+  },
+  "issues": [
+    {
+      "type": "DUPLICATE",
+      "severity": "HIGH",
+      "activityId": "activity-uuid",
+      "activityName": "CRM для Панавто",
+      "description": "Duplicate of \"CRM для Панавто\" (2 total with same name and type \"project\")",
+      "suggestedAction": "Merge with activity original-uuid using merge_activities tool"
+    },
+    {
+      "type": "ORPHAN",
+      "severity": "MEDIUM",
+      "activityId": "task-uuid",
+      "activityName": "Настроить CI/CD",
+      "description": "Task has no valid parent activity",
+      "suggestedAction": "Assign to appropriate parent project or initiative"
+    },
+    {
+      "type": "MISSING_CLIENT",
+      "severity": "LOW",
+      "activityId": "project-uuid",
+      "activityName": "Внутренний портал",
+      "description": "project without client entity",
+      "suggestedAction": "Link to client entity or mark as internal"
+    }
+  ],
+  "resolutions": null,
+  "status": "PENDING",
+  "createdAt": "2025-02-06T10:00:00.000Z",
+  "updatedAt": "2025-02-06T10:00:00.000Z"
+}
+```
+
+---
+
+### GET /data-quality/reports
+
+Список отчётов о качестве данных с пагинацией.
+
+**Query Parameters:**
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `limit` | number | 20 | Макс. записей |
+| `offset` | number | 0 | Смещение для пагинации |
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "id": "report-uuid",
+      "reportDate": "2025-02-06T10:00:00.000Z",
+      "metrics": { "..." },
+      "issues": [ "..." ],
+      "resolutions": null,
+      "status": "PENDING",
+      "createdAt": "2025-02-06T10:00:00.000Z",
+      "updatedAt": "2025-02-06T10:00:00.000Z"
+    }
+  ],
+  "total": 5
+}
+```
+
+---
+
+### GET /data-quality/reports/latest
+
+Получить последний отчёт о качестве данных.
+
+**Response 200:** DataQualityReport (тот же формат, что и POST /data-quality/audit)
+
+**Response 404:** No data quality reports found
+
+---
+
+### GET /data-quality/reports/:id
+
+Получить конкретный отчёт по ID.
+
+**Parameters:**
+- `id` (uuid) -- ID отчёта
+
+**Response 200:** DataQualityReport (тот же формат)
+
+**Response 404:** DataQualityReport not found
+
+---
+
+### PATCH /data-quality/reports/:id/resolve
+
+Разрешить проблему в отчёте. Добавляет запись о разрешении. Если все проблемы разрешены -- статус отчёта меняется на `RESOLVED`.
+
+**Parameters:**
+- `id` (uuid) -- ID отчёта
+
+**Request (ResolveIssueDto):**
+```json
+{
+  "issueIndex": 0,
+  "action": "Merged with original activity via merge_activities"
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `issueIndex` | number | Да | Индекс проблемы в массиве issues (начиная с 0) |
+| `action` | string | Да | Описание предпринятого действия (макс. 500 символов) |
+
+**Response 200:**
+```json
+{
+  "id": "report-uuid",
+  "status": "REVIEWED",
+  "resolutions": [
+    {
+      "issueIndex": 0,
+      "resolvedAt": "2025-02-06T12:00:00.000Z",
+      "resolvedBy": "manual",
+      "action": "Merged with original activity via merge_activities"
+    }
+  ],
+  "..."
+}
+```
+
+**Response 404:** Report not found or issue index out of range
+
+---
+
+### GET /data-quality/metrics
+
+Получить текущие метрики качества данных без сохранения отчёта.
+
+**Response 200:**
+```json
+{
+  "totalActivities": 42,
+  "duplicateGroups": 3,
+  "orphanedTasks": 5,
+  "missingClientEntity": 8,
+  "activityMemberCoverage": 0.65,
+  "commitmentLinkageRate": 0.72,
+  "inferredRelationsCount": 12,
+  "fieldFillRate": 0.45
+}
+```
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `totalActivities` | number | Общее количество активных Activity |
+| `duplicateGroups` | number | Количество групп дубликатов |
+| `orphanedTasks` | number | Количество задач без валидного родителя |
+| `missingClientEntity` | number | PROJECT/BUSINESS без клиента |
+| `activityMemberCoverage` | number | Доля Activity с хотя бы одним участником (0-1) |
+| `commitmentLinkageRate` | number | Доля Commitments с привязкой к Activity (0-1) |
+| `inferredRelationsCount` | number | Количество EntityRelations с source = EXTRACTED/INFERRED |
+| `fieldFillRate` | number | Средняя заполненность ключевых полей (0-1) |
+
+---
+
+### POST /data-quality/merge
+
+Мерж дубликатов активностей в одну. Переносит children, members и commitments на целевую активность, а исходные архивирует.
+
+**Request (MergeActivitiesDto):**
+```json
+{
+  "keepId": "activity-uuid-to-keep",
+  "mergeIds": ["duplicate-uuid-1", "duplicate-uuid-2"]
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `keepId` | uuid | Да | ID активности, которую сохранить |
+| `mergeIds` | uuid[] | Да | ID активностей для слияния (1-20 элементов) |
+
+**Стратегия мержа:**
+1. Перенос children с merged активностей на keepId
+2. Перенос members (пропуск дубликатов по entityId + role)
+3. Перепривязка commitments на keepId
+4. Soft-delete merged активностей (status = ARCHIVED)
+
+**Response 200:** Обновлённая Activity (та, которую сохранили)
+
+**Response 404:** Activity to keep or merge activities not found
+
+---
+
+### AI Agent Tools
+
+Data Quality System предоставляет 5 AI agent tools для Claude:
+
+| Tool | Описание |
+|------|----------|
+| `run_data_quality_audit` | Запуск полного аудита с сохранением отчёта |
+| `find_duplicate_projects` | Поиск дубликатов по нормализованному имени |
+| `merge_activities` | Мерж дубликатов (keepId + mergeIds) |
+| `find_orphaned_tasks` | Поиск задач без валидного родителя |
+| `get_data_quality_report` | Получение последнего или конкретного отчёта |
+
+---
+
 ## Коды ошибок
 
 | HTTP Code | Описание |

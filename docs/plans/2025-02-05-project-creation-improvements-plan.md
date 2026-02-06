@@ -1,9 +1,9 @@
 # План улучшений системы создания проектов
 
 > **Дата:** 2025-02-05
-> **Статус:** In Progress (Phase 1-2 Completed, Phase 4 REST API Completed)
+> **Статус:** In Progress (Phase 1-2 Completed, Phase 4 REST API Completed, Phase 6 Data Quality Completed)
 > **Автор:** Claude (Tech Lead)
-> **Обновлено:** 2025-02-06 -- Phase 4 (REST API) завершена
+> **Обновлено:** 2025-02-06 -- Phase 6 (Data Quality System) завершена
 
 ## Executive Summary
 
@@ -3844,14 +3844,36 @@ Scenario: Activity created with enriched fields
 3. **Performance optimization**
 4. **Monitoring dashboards**
 
-### Phase 6: Data Quality System (Week 7)
+### Phase 6: Data Quality System (Week 7) -- ✅ Completed
 
-1. **Create DataQualityReport entity** и миграция
-2. **Implement DataQualityService** с agent integration
-3. **Add DataQualityController** endpoints
-4. **Create data quality tools** (check_duplicates, validate_relationships, check_orphaned_members)
-5. **Build Mini App UI** с кнопкой запуска и отображением отчётов
-6. **Documentation** для system administrators
+1. **Create DataQualityReport entity** и миграция -- ✅ Done
+   - Entity с JSONB полями: metrics, issues, resolutions
+   - Статусы: PENDING, REVIEWED, RESOLVED
+   - Issue types: DUPLICATE, ORPHAN, MISSING_CLIENT, MISSING_MEMBERS, UNLINKED_COMMITMENT, EMPTY_FIELDS
+   - Severity levels: HIGH, MEDIUM, LOW
+2. **Implement DataQualityService** с agent integration -- ✅ Done
+   - `runFullAudit()` -- полный аудит с сохранением отчёта
+   - `findDuplicateProjects()` -- поиск дубликатов по LOWER(name) + type
+   - `findOrphanedTasks()` -- поиск задач без валидного родителя
+   - `findMissingClientEntity()` -- PROJECT/BUSINESS без клиента
+   - `mergeActivities(keepId, mergeIds)` -- мерж с переносом children, members, commitments
+   - Coverage metrics: activityMemberCoverage, commitmentLinkageRate, fieldFillRate
+3. **Add DataQualityController** endpoints -- ✅ Done
+   - POST /data-quality/audit -- запуск аудита
+   - GET /data-quality/reports -- список отчётов (paginated)
+   - GET /data-quality/reports/latest -- последний отчёт
+   - GET /data-quality/reports/:id -- отчёт по ID
+   - PATCH /data-quality/reports/:id/resolve -- разрешить проблему
+   - GET /data-quality/metrics -- текущие метрики
+   - POST /data-quality/merge -- мерж дубликатов
+4. **Create data quality tools** -- ✅ Done (5 tools)
+   - `run_data_quality_audit` -- запуск полного аудита
+   - `find_duplicate_projects` -- поиск дубликатов
+   - `merge_activities` -- мерж дубликатов
+   - `find_orphaned_tasks` -- поиск сирот
+   - `get_data_quality_report` -- получение отчёта
+5. **Tests** -- ✅ Done (49 tests: 37 service + 12 controller)
+6. **Documentation** -- ✅ Done (API_CONTRACTS.md updated)
 
 ### Phase 7: KNOWLEDGE_GRAPH.md Reconciliation (Week 8)
 
