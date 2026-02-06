@@ -1,4 +1,4 @@
-import { IsNumber, IsString, Min, MaxLength } from 'class-validator';
+import { IsNumber, IsString, IsNotEmpty, Min, MaxLength } from 'class-validator';
 
 export class ResolveIssueDto {
   @IsNumber()
@@ -6,6 +6,7 @@ export class ResolveIssueDto {
   issueIndex: number;
 
   @IsString()
+  @IsNotEmpty()
   @MaxLength(500)
   action: string;
 }

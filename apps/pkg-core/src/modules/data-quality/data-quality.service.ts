@@ -1,6 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, Not } from 'typeorm';
+import { Repository, DataSource, In, IsNull, Not } from 'typeorm';
 import {
   DataQualityReport,
   DataQualityReportStatus,
@@ -86,6 +86,7 @@ export class DataQualityService {
     private readonly commitmentRepo: Repository<Commitment>,
     @InjectRepository(EntityRelation)
     private readonly relationRepo: Repository<EntityRelation>,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ─────────────────────────────────────────────────────────────
@@ -95,12 +96,46 @@ export class DataQualityService {
   /**
    * Run a comprehensive data quality audit.
    * Collects all metrics, detects issues, and persists a DataQualityReport.
+   *
+   * Fetches shared data (duplicates, orphans, missingClients) once
+   * and builds both metrics and issues from it — avoiding double queries.
    */
   async runFullAudit(): Promise<DataQualityReport> {
     this.logger.log('Starting full data quality audit...');
 
-    const metrics = await this.getCurrentMetrics();
-    const issues = await this.detectIssues();
+    // Fetch all data in parallel (each query executed once)
+    const [
+      totalActivities,
+      duplicates,
+      orphanedTasks,
+      missingClient,
+      memberCoverage,
+      commitmentLinkage,
+      inferredRelations,
+      fieldFill,
+    ] = await Promise.all([
+      this.activityRepo.count({ where: { deletedAt: IsNull() } }),
+      this.findDuplicateProjects(),
+      this.findOrphanedTasks(),
+      this.findMissingClientEntity(),
+      this.calculateActivityMemberCoverage(),
+      this.calculateCommitmentLinkageRate(),
+      this.countInferredRelations(),
+      this.calculateFieldFillRate(),
+    ]);
+
+    const metrics: DataQualityMetrics = {
+      totalActivities,
+      duplicateGroups: duplicates.length,
+      orphanedTasks: orphanedTasks.length,
+      missingClientEntity: missingClient.length,
+      activityMemberCoverage: memberCoverage.rate,
+      commitmentLinkageRate: commitmentLinkage.rate,
+      inferredRelationsCount: inferredRelations,
+      fieldFillRate: fieldFill.avgFillRate,
+    };
+
+    const issues = this.buildIssuesFromData(duplicates, orphanedTasks, missingClient);
 
     const report = this.reportRepo.create({
       reportDate: new Date(),
@@ -427,7 +462,7 @@ export class DataQualityService {
     const report = await this.getReportById(reportId);
 
     if (issueIndex < 0 || issueIndex >= report.issues.length) {
-      throw new NotFoundException(
+      throw new BadRequestException(
         `Issue index ${issueIndex} out of range (0-${report.issues.length - 1})`,
       );
     }
@@ -461,7 +496,7 @@ export class DataQualityService {
   /**
    * Merge duplicate activities into one.
    *
-   * Strategy:
+   * Strategy (all within a single transaction):
    * 1. Move children from merged activities to keep activity
    * 2. Move members from merged activities to keep activity (skip duplicates)
    * 3. Reassign commitments from merged activities to keep activity
@@ -471,6 +506,11 @@ export class DataQualityService {
     keepId: string,
     mergeIds: string[],
   ): Promise<Activity> {
+    // R6: Guard against keepId appearing in mergeIds
+    if (mergeIds.includes(keepId)) {
+      throw new BadRequestException('keepId must not appear in mergeIds');
+    }
+
     const keepActivity = await this.activityRepo.findOne({
       where: { id: keepId, deletedAt: IsNull() },
     });
@@ -479,15 +519,15 @@ export class DataQualityService {
       throw new NotFoundException(`Activity to keep (${keepId}) not found`);
     }
 
-    const mergeActivities = await this.activityRepo.find({
+    const activitiesToMerge = await this.activityRepo.find({
       where: {
         id: In(mergeIds),
         deletedAt: IsNull(),
       },
     });
 
-    if (mergeActivities.length !== mergeIds.length) {
-      const foundIds = mergeActivities.map((a) => a.id);
+    if (activitiesToMerge.length !== mergeIds.length) {
+      const foundIds = activitiesToMerge.map((a) => a.id);
       const missingIds = mergeIds.filter((id) => !foundIds.includes(id));
       throw new NotFoundException(
         `Activities to merge not found: ${missingIds.join(', ')}`,
@@ -498,58 +538,71 @@ export class DataQualityService {
       `Merging ${mergeIds.length} activities into ${keepId} (${keepActivity.name})`,
     );
 
-    // 1. Move children to keep activity
-    await this.activityRepo
-      .createQueryBuilder()
-      .update(Activity)
-      .set({ parentId: keepId })
-      .where('parent_id IN (:...ids)', { ids: mergeIds })
-      .andWhere('deleted_at IS NULL')
-      .execute();
+    // C1: All write operations within a single transaction
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    // 2. Move members (skip if already exists with same entity+role)
-    for (const mergeId of mergeIds) {
-      const members = await this.memberRepo.find({
-        where: { activityId: mergeId },
-      });
+    try {
+      // 1. Move children to keep activity
+      await queryRunner.manager
+        .createQueryBuilder()
+        .update(Activity)
+        .set({ parentId: keepId })
+        .where('parent_id IN (:...ids)', { ids: mergeIds })
+        .andWhere('deleted_at IS NULL')
+        .execute();
 
-      for (const member of members) {
-        // Check if keep activity already has this member with same role
-        const existing = await this.memberRepo.findOne({
-          where: {
-            activityId: keepId,
-            entityId: member.entityId,
-            role: member.role,
-          },
+      // 2. Move members (skip if already exists with same entity+role)
+      for (const mergeId of mergeIds) {
+        const members = await queryRunner.manager.find(ActivityMember, {
+          where: { activityId: mergeId },
         });
 
-        if (!existing) {
-          await this.memberRepo
-            .createQueryBuilder()
-            .update(ActivityMember)
-            .set({ activityId: keepId })
-            .where('id = :id', { id: member.id })
-            .execute();
+        for (const member of members) {
+          const existing = await queryRunner.manager.findOne(ActivityMember, {
+            where: {
+              activityId: keepId,
+              entityId: member.entityId,
+              role: member.role,
+            },
+          });
+
+          if (!existing) {
+            await queryRunner.manager
+              .createQueryBuilder()
+              .update(ActivityMember)
+              .set({ activityId: keepId })
+              .where('id = :id', { id: member.id })
+              .execute();
+          }
         }
       }
+
+      // 3. Reassign commitments
+      await queryRunner.manager
+        .createQueryBuilder()
+        .update(Commitment)
+        .set({ activityId: keepId })
+        .where('activity_id IN (:...ids)', { ids: mergeIds })
+        .andWhere('deleted_at IS NULL')
+        .execute();
+
+      // 4. Soft-delete merged activities
+      await queryRunner.manager
+        .createQueryBuilder()
+        .update(Activity)
+        .set({ status: ActivityStatus.ARCHIVED, deletedAt: new Date() })
+        .where('id IN (:...ids)', { ids: mergeIds })
+        .execute();
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
-
-    // 3. Reassign commitments
-    await this.commitmentRepo
-      .createQueryBuilder()
-      .update(Commitment)
-      .set({ activityId: keepId })
-      .where('activity_id IN (:...ids)', { ids: mergeIds })
-      .andWhere('deleted_at IS NULL')
-      .execute();
-
-    // 4. Soft-delete merged activities
-    await this.activityRepo
-      .createQueryBuilder()
-      .update(Activity)
-      .set({ status: ActivityStatus.ARCHIVED, deletedAt: new Date() })
-      .where('id IN (:...ids)', { ids: mergeIds })
-      .execute();
 
     this.logger.log(
       `Merge complete: ${mergeIds.length} activities merged into ${keepId}`,
@@ -566,16 +619,15 @@ export class DataQualityService {
   // ─────────────────────────────────────────────────────────────
 
   /**
-   * Detect all data quality issues for report generation.
+   * Build issue list from pre-fetched data.
+   * Used by runFullAudit to avoid double-querying the same data.
    */
-  private async detectIssues(): Promise<DataQualityIssue[]> {
+  private buildIssuesFromData(
+    duplicates: DuplicateGroup[],
+    orphans: Activity[],
+    missingClients: Activity[],
+  ): DataQualityIssue[] {
     const issues: DataQualityIssue[] = [];
-
-    const [duplicates, orphans, missingClients] = await Promise.all([
-      this.findDuplicateProjects(),
-      this.findOrphanedTasks(),
-      this.findMissingClientEntity(),
-    ]);
 
     // Duplicate issues
     for (const group of duplicates) {

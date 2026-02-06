@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { DataQualityService } from './data-quality.service';
 import {
   DataQualityReport,
@@ -104,6 +105,27 @@ describe('DataQualityService', () => {
   };
 
   // ---------------------------------------------------------------------------
+  // Mock QueryRunner + DataSource (for transactional mergeActivities)
+  // ---------------------------------------------------------------------------
+
+  const mockQueryRunner = {
+    connect: jest.fn(),
+    startTransaction: jest.fn(),
+    commitTransaction: jest.fn(),
+    rollbackTransaction: jest.fn(),
+    release: jest.fn(),
+    manager: {
+      find: jest.fn(),
+      findOne: jest.fn(),
+      createQueryBuilder: jest.fn(),
+    },
+  };
+
+  const mockDataSource = {
+    createQueryRunner: jest.fn().mockReturnValue(mockQueryRunner),
+  };
+
+  // ---------------------------------------------------------------------------
   // Test data constants
   // ---------------------------------------------------------------------------
 
@@ -204,6 +226,7 @@ describe('DataQualityService', () => {
         { provide: getRepositoryToken(ActivityMember), useValue: mockMemberRepo },
         { provide: getRepositoryToken(Commitment), useValue: mockCommitmentRepo },
         { provide: getRepositoryToken(EntityRelation), useValue: mockRelationRepo },
+        { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
 
@@ -685,21 +708,21 @@ describe('DataQualityService', () => {
       expect(result.resolutions).toHaveLength(2);
     });
 
-    it('should throw NotFoundException for invalid issueIndex', async () => {
+    it('should throw BadRequestException for invalid issueIndex', async () => {
       const report = makeReport(); // has 2 issues (index 0 and 1)
       mockReportRepo.findOne.mockResolvedValue(report);
 
       await expect(service.resolveIssue(REPORT_ID, 5, 'Bad index')).rejects.toThrow(
-        NotFoundException,
+        BadRequestException,
       );
     });
 
-    it('should throw NotFoundException for negative issueIndex', async () => {
+    it('should throw BadRequestException for negative issueIndex', async () => {
       const report = makeReport();
       mockReportRepo.findOne.mockResolvedValue(report);
 
       await expect(service.resolveIssue(REPORT_ID, -1, 'Negative')).rejects.toThrow(
-        NotFoundException,
+        BadRequestException,
       );
     });
   });
@@ -709,30 +732,38 @@ describe('DataQualityService', () => {
   // =========================================================================
 
   describe('mergeActivities', () => {
+    it('should throw BadRequestException when keepId appears in mergeIds', async () => {
+      await expect(
+        service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2, KEEP_ID]),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('should move children to keep activity', async () => {
       const keepActivity = makeActivity({ id: KEEP_ID, name: 'Keep Project' });
       const mergeActivity = makeActivity({ id: ACTIVITY_ID_2, name: 'Merge Project' });
 
       mockActivityRepo.findOne.mockResolvedValue(keepActivity);
       mockActivityRepo.find.mockResolvedValue([mergeActivity]);
-      mockMemberRepo.find.mockResolvedValue([]);
+      mockQueryRunner.manager.find.mockResolvedValue([]);
 
-      const updateChildrenQb = createMockQueryBuilder();
-      const reassignCommitmentsQb = createMockQueryBuilder();
+      const childrenQb = createMockQueryBuilder();
+      const commitmentsQb = createMockQueryBuilder();
       const softDeleteQb = createMockQueryBuilder();
 
-      mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(updateChildrenQb)
+      mockQueryRunner.manager.createQueryBuilder
+        .mockReturnValueOnce(childrenQb)
+        .mockReturnValueOnce(commitmentsQb)
         .mockReturnValueOnce(softDeleteQb);
 
-      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(reassignCommitmentsQb);
       mockActivityRepo.findOneOrFail.mockResolvedValue(keepActivity);
 
       await service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2]);
 
-      expect(updateChildrenQb.update).toHaveBeenCalledWith(Activity);
-      expect(updateChildrenQb.set).toHaveBeenCalledWith({ parentId: KEEP_ID });
-      expect(updateChildrenQb.execute).toHaveBeenCalled();
+      expect(childrenQb.update).toHaveBeenCalledWith(Activity);
+      expect(childrenQb.set).toHaveBeenCalledWith({ parentId: KEEP_ID });
+      expect(childrenQb.execute).toHaveBeenCalled();
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
     });
 
     it('should move members (skip duplicates)', async () => {
@@ -748,26 +779,25 @@ describe('DataQualityService', () => {
         entityId: ENTITY_ID_A,
         role: ActivityMemberRole.MEMBER,
       };
-      mockMemberRepo.find.mockResolvedValue([member]);
-      mockMemberRepo.findOne.mockResolvedValue(null); // no duplicate
+      mockQueryRunner.manager.find.mockResolvedValue([member]);
+      mockQueryRunner.manager.findOne.mockResolvedValue(null); // no duplicate
 
+      const childrenQb = createMockQueryBuilder();
       const memberUpdateQb = createMockQueryBuilder();
-      mockMemberRepo.createQueryBuilder.mockReturnValueOnce(memberUpdateQb);
-
-      const updateChildrenQb = createMockQueryBuilder();
-      const reassignCommitmentsQb = createMockQueryBuilder();
+      const commitmentsQb = createMockQueryBuilder();
       const softDeleteQb = createMockQueryBuilder();
 
-      mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(updateChildrenQb)
+      mockQueryRunner.manager.createQueryBuilder
+        .mockReturnValueOnce(childrenQb)
+        .mockReturnValueOnce(memberUpdateQb)
+        .mockReturnValueOnce(commitmentsQb)
         .mockReturnValueOnce(softDeleteQb);
 
-      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(reassignCommitmentsQb);
       mockActivityRepo.findOneOrFail.mockResolvedValue(keepActivity);
 
       await service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2]);
 
-      expect(mockMemberRepo.findOne).toHaveBeenCalledWith({
+      expect(mockQueryRunner.manager.findOne).toHaveBeenCalledWith(ActivityMember, {
         where: {
           activityId: KEEP_ID,
           entityId: ENTITY_ID_A,
@@ -791,30 +821,30 @@ describe('DataQualityService', () => {
         entityId: ENTITY_ID_A,
         role: ActivityMemberRole.MEMBER,
       };
-      mockMemberRepo.find.mockResolvedValue([member]);
+      mockQueryRunner.manager.find.mockResolvedValue([member]);
       // Existing duplicate found
-      mockMemberRepo.findOne.mockResolvedValue({
+      mockQueryRunner.manager.findOne.mockResolvedValue({
         id: 'existing-member',
         activityId: KEEP_ID,
         entityId: ENTITY_ID_A,
         role: ActivityMemberRole.MEMBER,
       });
 
-      const updateChildrenQb = createMockQueryBuilder();
-      const reassignCommitmentsQb = createMockQueryBuilder();
+      const childrenQb = createMockQueryBuilder();
+      const commitmentsQb = createMockQueryBuilder();
       const softDeleteQb = createMockQueryBuilder();
 
-      mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(updateChildrenQb)
+      // Only 3 QBs — no member update since duplicate is skipped
+      mockQueryRunner.manager.createQueryBuilder
+        .mockReturnValueOnce(childrenQb)
+        .mockReturnValueOnce(commitmentsQb)
         .mockReturnValueOnce(softDeleteQb);
 
-      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(reassignCommitmentsQb);
       mockActivityRepo.findOneOrFail.mockResolvedValue(keepActivity);
 
       await service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2]);
 
-      // Should NOT create a QueryBuilder to move this member
-      expect(mockMemberRepo.createQueryBuilder).not.toHaveBeenCalled();
+      expect(mockQueryRunner.manager.createQueryBuilder).toHaveBeenCalledTimes(3);
     });
 
     it('should reassign commitments', async () => {
@@ -823,24 +853,24 @@ describe('DataQualityService', () => {
 
       mockActivityRepo.findOne.mockResolvedValue(keepActivity);
       mockActivityRepo.find.mockResolvedValue([mergeActivity]);
-      mockMemberRepo.find.mockResolvedValue([]);
+      mockQueryRunner.manager.find.mockResolvedValue([]);
 
-      const updateChildrenQb = createMockQueryBuilder();
-      const reassignCommitmentsQb = createMockQueryBuilder();
+      const childrenQb = createMockQueryBuilder();
+      const commitmentsQb = createMockQueryBuilder();
       const softDeleteQb = createMockQueryBuilder();
 
-      mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(updateChildrenQb)
+      mockQueryRunner.manager.createQueryBuilder
+        .mockReturnValueOnce(childrenQb)
+        .mockReturnValueOnce(commitmentsQb)
         .mockReturnValueOnce(softDeleteQb);
 
-      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(reassignCommitmentsQb);
       mockActivityRepo.findOneOrFail.mockResolvedValue(keepActivity);
 
       await service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2]);
 
-      expect(reassignCommitmentsQb.update).toHaveBeenCalledWith(Commitment);
-      expect(reassignCommitmentsQb.set).toHaveBeenCalledWith({ activityId: KEEP_ID });
-      expect(reassignCommitmentsQb.execute).toHaveBeenCalled();
+      expect(commitmentsQb.update).toHaveBeenCalledWith(Commitment);
+      expect(commitmentsQb.set).toHaveBeenCalledWith({ activityId: KEEP_ID });
+      expect(commitmentsQb.execute).toHaveBeenCalled();
     });
 
     it('should soft-delete merged activities (ARCHIVED + deletedAt)', async () => {
@@ -849,17 +879,17 @@ describe('DataQualityService', () => {
 
       mockActivityRepo.findOne.mockResolvedValue(keepActivity);
       mockActivityRepo.find.mockResolvedValue([mergeActivity]);
-      mockMemberRepo.find.mockResolvedValue([]);
+      mockQueryRunner.manager.find.mockResolvedValue([]);
 
-      const updateChildrenQb = createMockQueryBuilder();
-      const reassignCommitmentsQb = createMockQueryBuilder();
+      const childrenQb = createMockQueryBuilder();
+      const commitmentsQb = createMockQueryBuilder();
       const softDeleteQb = createMockQueryBuilder();
 
-      mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(updateChildrenQb)
+      mockQueryRunner.manager.createQueryBuilder
+        .mockReturnValueOnce(childrenQb)
+        .mockReturnValueOnce(commitmentsQb)
         .mockReturnValueOnce(softDeleteQb);
 
-      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(reassignCommitmentsQb);
       mockActivityRepo.findOneOrFail.mockResolvedValue(keepActivity);
 
       await service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2]);
@@ -897,13 +927,10 @@ describe('DataQualityService', () => {
 
       mockActivityRepo.findOne.mockResolvedValue(keepActivity);
       mockActivityRepo.find.mockResolvedValue([mergeActivity]);
-      mockMemberRepo.find.mockResolvedValue([]);
+      mockQueryRunner.manager.find.mockResolvedValue([]);
 
-      mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(createMockQueryBuilder())
-        .mockReturnValueOnce(createMockQueryBuilder());
-
-      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(createMockQueryBuilder());
+      mockQueryRunner.manager.createQueryBuilder
+        .mockReturnValue(createMockQueryBuilder());
 
       const updatedKeep = makeActivity({ id: KEEP_ID, name: 'Keep Project' });
       mockActivityRepo.findOneOrFail.mockResolvedValue(updatedKeep);
@@ -915,6 +942,27 @@ describe('DataQualityService', () => {
         where: { id: KEEP_ID },
       });
     });
+
+    it('should rollback transaction on error', async () => {
+      const keepActivity = makeActivity({ id: KEEP_ID });
+      const mergeActivity = makeActivity({ id: ACTIVITY_ID_2 });
+
+      mockActivityRepo.findOne.mockResolvedValue(keepActivity);
+      mockActivityRepo.find.mockResolvedValue([mergeActivity]);
+
+      mockQueryRunner.manager.createQueryBuilder.mockReturnValueOnce(
+        createMockQueryBuilder({
+          execute: jest.fn().mockRejectedValue(new Error('DB error')),
+        }),
+      );
+
+      await expect(
+        service.mergeActivities(KEEP_ID, [ACTIVITY_ID_2]),
+      ).rejects.toThrow('DB error');
+
+      expect(mockQueryRunner.rollbackTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
+    });
   });
 
   // =========================================================================
@@ -923,13 +971,12 @@ describe('DataQualityService', () => {
 
   describe('runFullAudit', () => {
     it('should create report with metrics and issues, status PENDING', async () => {
-      // Setup mocks for getCurrentMetrics + detectIssues
-      // Both call findDuplicateProjects, findOrphanedTasks, findMissingClientEntity
+      // Setup mocks for runFullAudit — data fetched once via Promise.all
 
       // activityRepo.count (for totalActivities + member coverage)
       mockActivityRepo.count.mockResolvedValue(0);
 
-      // findDuplicateProjects (called twice: getCurrentMetrics + detectIssues)
+      // findDuplicateProjects
       const emptyGroupsQb = createMockQueryBuilder({
         getRawMany: jest.fn().mockResolvedValue([]),
       });

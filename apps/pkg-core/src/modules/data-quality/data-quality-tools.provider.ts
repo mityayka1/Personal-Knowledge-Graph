@@ -87,16 +87,7 @@ The report is saved to the database for future reference.`,
         `Find activities with similar or identical names (case-insensitive) and same type.
 Uses exact normalized name matching (LOWER). Returns groups of duplicates with their IDs for merging.
 Use merge_activities tool to resolve found duplicates.`,
-        {
-          threshold: z
-            .number()
-            .min(0)
-            .max(1)
-            .default(0.8)
-            .describe(
-              'Similarity threshold 0-1 (currently uses exact match after normalization, reserved for future fuzzy matching)',
-            ),
-        },
+        {},
         async () => {
           try {
             const groups = await this.dataQualityService.findDuplicateProjects();
