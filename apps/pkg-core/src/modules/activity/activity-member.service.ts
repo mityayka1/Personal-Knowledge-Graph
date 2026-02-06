@@ -255,9 +255,11 @@ export class ActivityMemberService {
   private async findEntityByName(
     name: string,
   ): Promise<EntityRecord | null> {
+    // Escape ILIKE special characters to prevent pattern injection
+    const escaped = name.replace(/[%_\\]/g, '\\$&');
     return this.entityRepo
       .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${name}%` })
+      .where('e.name ILIKE :pattern', { pattern: `%${escaped}%` })
       .orderBy('e.updatedAt', 'DESC')
       .getOne();
   }

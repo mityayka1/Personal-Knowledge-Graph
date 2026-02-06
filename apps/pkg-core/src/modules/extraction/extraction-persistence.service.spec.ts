@@ -11,8 +11,6 @@ import {
   Activity,
   ActivityType,
   ActivityStatus,
-  CommitmentType,
-  CommitmentPriority,
 } from '@pkg/entities';
 
 describe('ExtractionPersistenceService', () => {

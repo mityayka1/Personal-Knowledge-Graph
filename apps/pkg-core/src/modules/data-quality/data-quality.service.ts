@@ -60,6 +60,21 @@ export interface FieldFillRate {
 }
 
 /**
+ * Raw data collected for metrics calculation.
+ * Used by both runFullAudit() and getCurrentMetrics() to avoid duplicate queries.
+ */
+interface MetricsData {
+  totalActivities: number;
+  duplicates: DuplicateGroup[];
+  orphanedTasks: Activity[];
+  missingClient: Activity[];
+  memberCoverage: MemberCoverage;
+  commitmentLinkage: CommitmentLinkage;
+  inferredRelations: number;
+  fieldFill: FieldFillRate;
+}
+
+/**
  * DataQualityService — runs data quality audits, detects issues,
  * and provides merge/resolution capabilities.
  *
@@ -103,39 +118,9 @@ export class DataQualityService {
   async runFullAudit(): Promise<DataQualityReport> {
     this.logger.log('Starting full data quality audit...');
 
-    // Fetch all data in parallel (each query executed once)
-    const [
-      totalActivities,
-      duplicates,
-      orphanedTasks,
-      missingClient,
-      memberCoverage,
-      commitmentLinkage,
-      inferredRelations,
-      fieldFill,
-    ] = await Promise.all([
-      this.activityRepo.count({ where: { deletedAt: IsNull() } }),
-      this.findDuplicateProjects(),
-      this.findOrphanedTasks(),
-      this.findMissingClientEntity(),
-      this.calculateActivityMemberCoverage(),
-      this.calculateCommitmentLinkageRate(),
-      this.countInferredRelations(),
-      this.calculateFieldFillRate(),
-    ]);
-
-    const metrics: DataQualityMetrics = {
-      totalActivities,
-      duplicateGroups: duplicates.length,
-      orphanedTasks: orphanedTasks.length,
-      missingClientEntity: missingClient.length,
-      activityMemberCoverage: memberCoverage.rate,
-      commitmentLinkageRate: commitmentLinkage.rate,
-      inferredRelationsCount: inferredRelations,
-      fieldFillRate: fieldFill.avgFillRate,
-    };
-
-    const issues = this.buildIssuesFromData(duplicates, orphanedTasks, missingClient);
+    const data = await this.collectMetricsData();
+    const metrics = this.buildMetrics(data);
+    const issues = this.buildIssuesFromData(data.duplicates, data.orphanedTasks, data.missingClient);
 
     const report = this.reportRepo.create({
       reportDate: new Date(),
@@ -374,36 +359,8 @@ export class DataQualityService {
    * Collect all metrics without creating a report.
    */
   async getCurrentMetrics(): Promise<DataQualityMetrics> {
-    const [
-      totalActivities,
-      duplicates,
-      orphanedTasks,
-      missingClient,
-      memberCoverage,
-      commitmentLinkage,
-      inferredRelations,
-      fieldFill,
-    ] = await Promise.all([
-      this.activityRepo.count({ where: { deletedAt: IsNull() } }),
-      this.findDuplicateProjects(),
-      this.findOrphanedTasks(),
-      this.findMissingClientEntity(),
-      this.calculateActivityMemberCoverage(),
-      this.calculateCommitmentLinkageRate(),
-      this.countInferredRelations(),
-      this.calculateFieldFillRate(),
-    ]);
-
-    return {
-      totalActivities,
-      duplicateGroups: duplicates.length,
-      orphanedTasks: orphanedTasks.length,
-      missingClientEntity: missingClient.length,
-      activityMemberCoverage: memberCoverage.rate,
-      commitmentLinkageRate: commitmentLinkage.rate,
-      inferredRelationsCount: inferredRelations,
-      fieldFillRate: fieldFill.avgFillRate,
-    };
+    const data = await this.collectMetricsData();
+    return this.buildMetrics(data);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -553,6 +510,27 @@ export class DataQualityService {
         .andWhere('deleted_at IS NULL')
         .execute();
 
+      // 1a. Cascade materializedPath and depth for moved children + descendants
+      const keepFullPath = keepActivity.materializedPath
+        ? `${keepActivity.materializedPath}/${keepId}`
+        : keepId;
+
+      for (const merged of activitiesToMerge) {
+        const oldPrefix = merged.materializedPath
+          ? `${merged.materializedPath}/${merged.id}`
+          : merged.id;
+        const depthDelta = keepActivity.depth - merged.depth;
+
+        await queryRunner.query(
+          `UPDATE activities
+           SET materialized_path = $1 || SUBSTRING(materialized_path FROM $2),
+               depth = depth + $3
+           WHERE materialized_path LIKE $4
+             AND deleted_at IS NULL`,
+          [keepFullPath, oldPrefix.length + 1, depthDelta, `${oldPrefix}%`],
+        );
+      }
+
       // 2. Move members (skip if already exists with same entity+role)
       for (const mergeId of mergeIds) {
         const members = await queryRunner.manager.find(ActivityMember, {
@@ -612,6 +590,63 @@ export class DataQualityService {
     return this.activityRepo.findOneOrFail({
       where: { id: keepId },
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: Metrics Collection
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Collect all raw metrics data in parallel.
+   * Shared by runFullAudit() and getCurrentMetrics() to avoid duplicate queries.
+   */
+  private async collectMetricsData(): Promise<MetricsData> {
+    const [
+      totalActivities,
+      duplicates,
+      orphanedTasks,
+      missingClient,
+      memberCoverage,
+      commitmentLinkage,
+      inferredRelations,
+      fieldFill,
+    ] = await Promise.all([
+      this.activityRepo.count({ where: { deletedAt: IsNull() } }),
+      this.findDuplicateProjects(),
+      this.findOrphanedTasks(),
+      this.findMissingClientEntity(),
+      this.calculateActivityMemberCoverage(),
+      this.calculateCommitmentLinkageRate(),
+      this.countInferredRelations(),
+      this.calculateFieldFillRate(),
+    ]);
+
+    return {
+      totalActivities,
+      duplicates,
+      orphanedTasks,
+      missingClient,
+      memberCoverage,
+      commitmentLinkage,
+      inferredRelations,
+      fieldFill,
+    };
+  }
+
+  /**
+   * Build DataQualityMetrics from raw collected data.
+   */
+  private buildMetrics(data: MetricsData): DataQualityMetrics {
+    return {
+      totalActivities: data.totalActivities,
+      duplicateGroups: data.duplicates.length,
+      orphanedTasks: data.orphanedTasks.length,
+      missingClientEntity: data.missingClient.length,
+      activityMemberCoverage: data.memberCoverage.rate,
+      commitmentLinkageRate: data.commitmentLinkage.rate,
+      inferredRelationsCount: data.inferredRelations,
+      fieldFillRate: data.fieldFill.avgFillRate,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────

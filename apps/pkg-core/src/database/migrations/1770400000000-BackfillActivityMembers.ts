@@ -51,7 +51,7 @@ export class BackfillActivityMembers1770400000000 implements MigrationInterface 
     let skipped = 0;
 
     for (const row of activities) {
-      const { activity_id, owner_entity_id, client_entity_id, participant } = row;
+      const { activity_id, client_entity_id, participant } = row;
 
       // Determine entity_id and role
       let entityId: string | null = null;

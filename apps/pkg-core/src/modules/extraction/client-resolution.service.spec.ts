@@ -375,7 +375,7 @@ describe('ClientResolutionService', () => {
         findEntityByNameSpy.mockResolvedValueOnce(null);
         findEntityByNameSpy.mockResolvedValueOnce(null);
 
-        const result = await service.resolveClient({
+        await service.resolveClient({
           clientName: 'My Company',
           participants: ['Alice'],
           ownerEntityId: OWNER_ENTITY_ID,
@@ -392,7 +392,7 @@ describe('ClientResolutionService', () => {
         // Strategy 3 - also no match
         findEntityByNameSpy.mockResolvedValueOnce(null);
 
-        const result = await service.resolveClient({
+        await service.resolveClient({
           clientName: 'UnknownCo',
           participants: ['Alice'],
           ownerEntityId: OWNER_ENTITY_ID,
@@ -478,11 +478,11 @@ describe('ClientResolutionService', () => {
 
       it('should fall through to strategy 3 when no organizations found', async () => {
         findOrganizationsAmongSpy.mockResolvedValueOnce([]);
-        const person = makeEntity({ id: 'person-uuid', name: 'Alice' });
-        findEntityByNameSpy.mockResolvedValueOnce(person);
+        const org = makeOrganization({ id: 'org-fallback', name: 'AliceCo' });
+        findEntityByNameSpy.mockResolvedValueOnce(org);
 
         const result = await service.resolveClient({
-          participants: ['Alice'],
+          participants: ['AliceCo'],
           ownerEntityId: OWNER_ENTITY_ID,
         });
 
@@ -495,63 +495,82 @@ describe('ClientResolutionService', () => {
     // -----------------------------------------------------------------------
 
     describe('Strategy 3: name search fallback', () => {
-      it('should resolve via name search when strategies 1 and 2 fail', async () => {
-        const person = makeEntity({ id: 'person-uuid', name: 'Alice Smith' });
+      it('should resolve via name search when strategies 1 and 2 fail (organization only)', async () => {
+        const org = makeOrganization({ id: 'org-uuid', name: 'Smith Corp' });
         // Strategy 2: no orgs
         findOrganizationsAmongSpy.mockResolvedValueOnce([]);
-        // Strategy 3: first participant matches
-        findEntityByNameSpy.mockResolvedValueOnce(person);
+        // Strategy 3: first participant matches (organization)
+        findEntityByNameSpy.mockResolvedValueOnce(org);
 
         const result = await service.resolveClient({
-          participants: ['Alice Smith'],
+          participants: ['Smith Corp'],
           ownerEntityId: OWNER_ENTITY_ID,
         });
 
         expect(result).toEqual<ClientResolutionResult>({
-          entityId: 'person-uuid',
-          entityName: 'Alice Smith',
+          entityId: 'org-uuid',
+          entityName: 'Smith Corp',
           method: 'name_search',
         });
       });
 
-      it('should try each participant name until one matches', async () => {
-        const bob = makeEntity({ id: 'bob-uuid', name: 'Bob' });
+      it('should skip PERSON entities and match only ORGANIZATION', async () => {
+        const person = makeEntity({ id: 'person-uuid', name: 'Alice', type: EntityType.PERSON });
+        const org = makeOrganization({ id: 'org-uuid', name: 'BobCo' });
+        // Strategy 2: no orgs
+        findOrganizationsAmongSpy.mockResolvedValueOnce([]);
+        // Strategy 3: first name is a person (skipped), second is org (matched)
+        findEntityByNameSpy.mockResolvedValueOnce(person);
+        findEntityByNameSpy.mockResolvedValueOnce(org);
+
+        const result = await service.resolveClient({
+          participants: ['Alice', 'BobCo'],
+          ownerEntityId: OWNER_ENTITY_ID,
+        });
+
+        expect(result!.entityId).toBe('org-uuid');
+        expect(result!.method).toBe('name_search');
+        expect(findEntityByNameSpy).toHaveBeenCalledWith('Alice');
+        expect(findEntityByNameSpy).toHaveBeenCalledWith('BobCo');
+      });
+
+      it('should try each participant name until an organization matches', async () => {
+        const org = makeOrganization({ id: 'org-uuid', name: 'BobCo' });
         // Strategy 2: no orgs
         findOrganizationsAmongSpy.mockResolvedValueOnce([]);
         // Strategy 3: first name no match, second matches
         findEntityByNameSpy.mockResolvedValueOnce(null);
-        findEntityByNameSpy.mockResolvedValueOnce(bob);
+        findEntityByNameSpy.mockResolvedValueOnce(org);
 
         const result = await service.resolveClient({
-          participants: ['Unknown Person', 'Bob'],
+          participants: ['Unknown', 'BobCo'],
           ownerEntityId: OWNER_ENTITY_ID,
         });
 
-        expect(result!.entityId).toBe('bob-uuid');
+        expect(result!.entityId).toBe('org-uuid');
         expect(result!.method).toBe('name_search');
-        // findEntityByName called twice for strategy 3
-        expect(findEntityByNameSpy).toHaveBeenCalledWith('Unknown Person');
-        expect(findEntityByNameSpy).toHaveBeenCalledWith('Bob');
+        expect(findEntityByNameSpy).toHaveBeenCalledWith('Unknown');
+        expect(findEntityByNameSpy).toHaveBeenCalledWith('BobCo');
       });
 
       it('should skip participant whose entity id matches ownerEntityId', async () => {
-        const ownerEntity = makeEntity({
+        const ownerOrg = makeOrganization({
           id: OWNER_ENTITY_ID,
-          name: 'Owner',
+          name: 'OwnerOrg',
         });
-        const alice = makeEntity({ id: 'alice-uuid', name: 'Alice' });
+        const otherOrg = makeOrganization({ id: 'other-org-uuid', name: 'OtherOrg' });
         // Strategy 2: no orgs
         findOrganizationsAmongSpy.mockResolvedValueOnce([]);
-        // Strategy 3: first participant is owner, second is real match
-        findEntityByNameSpy.mockResolvedValueOnce(ownerEntity);
-        findEntityByNameSpy.mockResolvedValueOnce(alice);
+        // Strategy 3: first participant is owner org, second is real match
+        findEntityByNameSpy.mockResolvedValueOnce(ownerOrg);
+        findEntityByNameSpy.mockResolvedValueOnce(otherOrg);
 
         const result = await service.resolveClient({
-          participants: ['Owner', 'Alice'],
+          participants: ['OwnerOrg', 'OtherOrg'],
           ownerEntityId: OWNER_ENTITY_ID,
         });
 
-        expect(result!.entityId).toBe('alice-uuid');
+        expect(result!.entityId).toBe('other-org-uuid');
         expect(result!.method).toBe('name_search');
       });
 
@@ -570,18 +589,33 @@ describe('ClientResolutionService', () => {
         expect(result).toBeNull();
       });
 
+      it('should return null when all participants are persons (not organizations)', async () => {
+        const person = makeEntity({ id: 'person-uuid', name: 'Alice', type: EntityType.PERSON });
+        // Strategy 2: no orgs
+        findOrganizationsAmongSpy.mockResolvedValueOnce([]);
+        // Strategy 3: matches a person, but persons are skipped
+        findEntityByNameSpy.mockResolvedValueOnce(person);
+
+        const result = await service.resolveClient({
+          participants: ['Alice'],
+          ownerEntityId: OWNER_ENTITY_ID,
+        });
+
+        expect(result).toBeNull();
+      });
+
       it('should return null when all participants match ownerEntityId', async () => {
-        const ownerEntity = makeEntity({
+        const ownerOrg = makeOrganization({
           id: OWNER_ENTITY_ID,
-          name: 'Owner',
+          name: 'OwnerOrg',
         });
         // Strategy 2: no orgs
         findOrganizationsAmongSpy.mockResolvedValueOnce([]);
         // Strategy 3: all matches are owner
-        findEntityByNameSpy.mockResolvedValueOnce(ownerEntity);
+        findEntityByNameSpy.mockResolvedValueOnce(ownerOrg);
 
         const result = await service.resolveClient({
-          participants: ['Owner'],
+          participants: ['OwnerOrg'],
           ownerEntityId: OWNER_ENTITY_ID,
         });
 
@@ -702,20 +736,20 @@ describe('ClientResolutionService', () => {
         expect(findEntityByNameSpy).not.toHaveBeenCalled();
       });
 
-      it('should short-circuit at first matching participant in strategy 3', async () => {
-        const alice = makeEntity({ id: 'alice-uuid', name: 'Alice' });
+      it('should short-circuit at first matching organization in strategy 3', async () => {
+        const org = makeOrganization({ id: 'org-uuid', name: 'AliceCo' });
         // Strategy 2: no orgs
         findOrganizationsAmongSpy.mockResolvedValueOnce([]);
-        // Strategy 3: first participant matches
-        findEntityByNameSpy.mockResolvedValueOnce(alice);
+        // Strategy 3: first participant matches (organization)
+        findEntityByNameSpy.mockResolvedValueOnce(org);
 
         const result = await service.resolveClient({
-          participants: ['Alice', 'Bob', 'Charlie'],
+          participants: ['AliceCo', 'Bob', 'Charlie'],
           ownerEntityId: OWNER_ENTITY_ID,
         });
 
-        expect(result!.entityId).toBe('alice-uuid');
-        // findEntityByName should only be called once (for 'Alice')
+        expect(result!.entityId).toBe('org-uuid');
+        // findEntityByName should only be called once (for 'AliceCo')
         expect(findEntityByNameSpy).toHaveBeenCalledTimes(1);
         expect(findEntityByNameSpy).not.toHaveBeenCalledWith('Bob');
         expect(findEntityByNameSpy).not.toHaveBeenCalledWith('Charlie');

@@ -2,11 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Activity, ActivityType, ActivityStatus } from '@pkg/entities';
-import {
-  ProjectMatchingService,
-  ProjectMatchResult,
-  ProjectCandidate,
-} from './project-matching.service';
+import { ProjectMatchingService } from './project-matching.service';
 
 // ---------------------------------------------------------------------------
 // Factories

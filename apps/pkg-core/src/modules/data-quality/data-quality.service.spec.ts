@@ -114,6 +114,7 @@ describe('DataQualityService', () => {
     commitTransaction: jest.fn(),
     rollbackTransaction: jest.fn(),
     release: jest.fn(),
+    query: jest.fn().mockResolvedValue([]),
     manager: {
       find: jest.fn(),
       findOne: jest.fn(),

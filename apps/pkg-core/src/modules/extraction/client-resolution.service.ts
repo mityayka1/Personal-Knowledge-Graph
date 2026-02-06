@@ -33,6 +33,13 @@ export interface ResolveClientParams {
 }
 
 /**
+ * Escape special ILIKE characters (% and _) to prevent pattern injection.
+ */
+function escapeIlike(value: string): string {
+  return value.replace(/[%_\\]/g, '\\$&');
+}
+
+/**
  * ClientResolutionService — determines the client entity for a project
  * using multiple resolution strategies in priority order.
  *
@@ -100,11 +107,13 @@ export class ClientResolutionService {
       this.logger.debug('No organizations found among participants');
     }
 
-    // Strategy 3: Fallback — search by participant names (any entity type)
+    // Strategy 3: Fallback — search by participant names (organizations only)
+    // We restrict to organizations to avoid false positives with persons
+    // who are merely participants, not clients.
     if (participants && participants.length > 0) {
       for (const name of participants) {
         const entity = await this.findEntityByName(name);
-        if (entity && entity.id !== ownerEntityId) {
+        if (entity && entity.id !== ownerEntityId && entity.type === EntityType.ORGANIZATION) {
           this.logger.log(
             `Resolved client via participant name search: "${entity.name}" (${entity.id})`,
           );
@@ -151,7 +160,7 @@ export class ClientResolutionService {
     // Fallback to partial match
     return this.entityRepo
       .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${trimmedName}%` })
+      .where('e.name ILIKE :pattern', { pattern: `%${escapeIlike(trimmedName)}%` })
       .orderBy('e.updatedAt', 'DESC')
       .getOne();
   }
@@ -188,7 +197,7 @@ export class ClientResolutionService {
         .where('e.type = :orgType', { orgType: EntityType.ORGANIZATION })
         .andWhere(
           '(LOWER(e.name) = LOWER(:exactName) OR e.name ILIKE :pattern)',
-          { exactName: trimmedName, pattern: `%${trimmedName}%` },
+          { exactName: trimmedName, pattern: `%${escapeIlike(trimmedName)}%` },
         );
 
       if (excludeEntityId) {

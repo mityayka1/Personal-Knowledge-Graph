@@ -4,7 +4,6 @@ import { z } from 'zod';
 import {
   toolSuccess,
   toolEmptyResult,
-  toolError,
   handleToolError,
   type ToolDefinition,
 } from '../claude-agent/tools/tool.types';
