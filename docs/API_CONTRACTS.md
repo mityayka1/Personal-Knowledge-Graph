@@ -1143,6 +1143,688 @@ API для работы с Recall сессиями — результатами 
 
 ---
 
+## Activity API
+
+REST API для управления активностями (Activity). Активности — иерархическая модель всех "дел" человека: от сфер жизни (AREA) до конкретных задач (TASK).
+
+### Enums
+
+**ActivityType:**
+| Значение | Описание |
+|----------|----------|
+| `area` | Сфера жизни (Работа, Семья, Здоровье) |
+| `business` | Бизнес/организация |
+| `direction` | Направление деятельности внутри бизнеса |
+| `project` | Проект с целью и сроками |
+| `initiative` | Инициатива/эпик внутри проекта |
+| `task` | Конкретная задача |
+| `milestone` | Веха/milestone |
+| `habit` | Повторяющаяся привычка |
+| `learning` | Обучение/курс |
+| `event_series` | Серия событий (еженедельные встречи) |
+
+**ActivityStatus:**
+| Значение | Описание |
+|----------|----------|
+| `draft` | Черновик — ожидает подтверждения |
+| `idea` | Идея, не начата |
+| `active` | Активна, в работе |
+| `paused` | На паузе |
+| `completed` | Завершена успешно |
+| `cancelled` | Отменена |
+| `archived` | В архиве |
+
+**ActivityPriority:** `critical`, `high`, `medium`, `low`, `none`
+
+**ActivityContext:** `work`, `personal`, `any`, `location_based`
+
+**ActivityMemberRole:** `owner`, `member`, `observer`, `assignee`, `reviewer`, `client`, `consultant`
+
+---
+
+### POST /activities
+
+Создать новую Activity. Если передан `parentId` — валидирует иерархию типов. Если передан `participants` — резолвит и создаёт ActivityMember записи.
+
+**Request:**
+```json
+{
+  "name": "Разработка CRM для клиента",
+  "activityType": "project",
+  "description": "Разработка CRM системы с интеграцией Битрикс24",
+  "status": "active",
+  "priority": "high",
+  "context": "work",
+  "parentId": "parent-activity-uuid",
+  "ownerEntityId": "owner-entity-uuid",
+  "clientEntityId": "client-entity-uuid",
+  "deadline": "2025-06-01T00:00:00Z",
+  "startDate": "2025-02-01T00:00:00Z",
+  "recurrenceRule": null,
+  "tags": ["crm", "bitrix"],
+  "progress": 0,
+  "metadata": { "budget": 150000 }
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `name` | string | Да | Название (макс. 500 символов) |
+| `activityType` | ActivityType | Да | Тип активности |
+| `description` | string | Нет | Подробное описание |
+| `status` | ActivityStatus | Нет | Статус (по умолчанию `active`) |
+| `priority` | ActivityPriority | Нет | Приоритет (по умолчанию `medium`) |
+| `context` | ActivityContext | Нет | Контекст (по умолчанию `any`) |
+| `parentId` | uuid | Нет | ID родительской Activity |
+| `ownerEntityId` | uuid | Да | ID владельца (Entity) |
+| `clientEntityId` | uuid | Нет | ID клиента (Entity) |
+| `deadline` | ISO 8601 | Нет | Дедлайн |
+| `startDate` | ISO 8601 | Нет | Дата начала |
+| `recurrenceRule` | string | Нет | Cron-выражение для повторяющихся (макс. 100 символов) |
+| `tags` | string[] | Нет | Теги для фильтрации |
+| `progress` | number | Нет | Прогресс 0-100 |
+| `metadata` | object | Нет | Дополнительные метаданные |
+
+**Response 201:**
+```json
+{
+  "id": "activity-uuid",
+  "name": "Разработка CRM для клиента",
+  "activityType": "project",
+  "description": "Разработка CRM системы с интеграцией Битрикс24",
+  "status": "active",
+  "priority": "high",
+  "context": "work",
+  "parentId": "parent-activity-uuid",
+  "ownerEntityId": "owner-entity-uuid",
+  "clientEntityId": "client-entity-uuid",
+  "deadline": "2025-06-01T00:00:00.000Z",
+  "startDate": "2025-02-01T00:00:00.000Z",
+  "endDate": null,
+  "recurrenceRule": null,
+  "tags": ["crm", "bitrix"],
+  "progress": 0,
+  "metadata": { "budget": 150000 },
+  "depth": 1,
+  "materializedPath": "parent-activity-uuid/activity-uuid",
+  "lastActivityAt": null,
+  "createdAt": "2025-02-06T10:00:00.000Z",
+  "updatedAt": "2025-02-06T10:00:00.000Z",
+  "deletedAt": null
+}
+```
+
+**Response 400:** Невалидные данные (нарушение иерархии типов, неверный parentId)
+
+---
+
+### GET /activities
+
+Список активностей с фильтрами и пагинацией.
+
+**Query Parameters:**
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `activityType` | ActivityType | — | Фильтр по типу |
+| `status` | ActivityStatus | — | Фильтр по статусу |
+| `context` | ActivityContext | — | Фильтр по контексту |
+| `parentId` | uuid | — | Фильтр по родителю |
+| `ownerEntityId` | uuid | — | Фильтр по владельцу |
+| `clientEntityId` | uuid | — | Фильтр по клиенту |
+| `search` | string | — | Поиск по названию (ILIKE, макс. 200 символов) |
+| `limit` | number | 50 | Макс. записей (1-200) |
+| `offset` | number | 0 | Смещение для пагинации |
+
+**Пример:** `GET /activities?activityType=project&status=active&ownerEntityId=uuid&limit=20`
+
+**Response 200:**
+```json
+{
+  "items": [
+    {
+      "id": "activity-uuid",
+      "name": "Разработка CRM для клиента",
+      "activityType": "project",
+      "description": "Разработка CRM системы",
+      "status": "active",
+      "priority": "high",
+      "context": "work",
+      "parentId": null,
+      "ownerEntityId": "owner-entity-uuid",
+      "ownerEntity": { "id": "owner-entity-uuid", "name": "Дмитрий", "type": "person" },
+      "clientEntityId": "client-entity-uuid",
+      "clientEntity": { "id": "client-entity-uuid", "name": "ООО Панавто", "type": "organization" },
+      "deadline": "2025-06-01T00:00:00.000Z",
+      "startDate": "2025-02-01T00:00:00.000Z",
+      "endDate": null,
+      "tags": ["crm", "bitrix"],
+      "progress": 25,
+      "createdAt": "2025-02-06T10:00:00.000Z",
+      "updatedAt": "2025-02-06T12:00:00.000Z"
+    }
+  ],
+  "total": 42
+}
+```
+
+---
+
+### GET /activities/:id
+
+Детали активности по ID. Возвращает Activity с relations (parent, ownerEntity, clientEntity), members и количеством children.
+
+**Parameters:**
+- `id` (uuid) — ID активности
+
+**Response 200:**
+```json
+{
+  "id": "activity-uuid",
+  "name": "Разработка CRM для клиента",
+  "activityType": "project",
+  "description": "Разработка CRM системы с интеграцией Битрикс24",
+  "status": "active",
+  "priority": "high",
+  "context": "work",
+  "parentId": null,
+  "parent": null,
+  "ownerEntityId": "owner-entity-uuid",
+  "ownerEntity": { "id": "owner-entity-uuid", "name": "Дмитрий", "type": "person" },
+  "clientEntityId": "client-entity-uuid",
+  "clientEntity": { "id": "client-entity-uuid", "name": "ООО Панавто", "type": "organization" },
+  "deadline": "2025-06-01T00:00:00.000Z",
+  "startDate": "2025-02-01T00:00:00.000Z",
+  "endDate": null,
+  "recurrenceRule": null,
+  "tags": ["crm", "bitrix"],
+  "progress": 25,
+  "metadata": { "budget": 150000 },
+  "depth": 0,
+  "materializedPath": "activity-uuid",
+  "lastActivityAt": "2025-02-06T12:00:00.000Z",
+  "createdAt": "2025-02-06T10:00:00.000Z",
+  "updatedAt": "2025-02-06T12:00:00.000Z",
+  "deletedAt": null,
+  "childrenCount": 5,
+  "members": [
+    {
+      "id": "member-uuid",
+      "activityId": "activity-uuid",
+      "entityId": "entity-uuid",
+      "entity": { "id": "entity-uuid", "name": "Иван Петров", "type": "person" },
+      "role": "member",
+      "notes": "Backend разработчик",
+      "isActive": true,
+      "joinedAt": "2025-02-06T10:00:00.000Z",
+      "leftAt": null,
+      "metadata": null,
+      "createdAt": "2025-02-06T10:00:00.000Z",
+      "updatedAt": "2025-02-06T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Response 404:** Activity not found
+
+---
+
+### PATCH /activities/:id
+
+Обновить поля активности. Все поля опциональны. Если меняется `parentId` — валидирует иерархию и отсутствие циклов.
+
+**Parameters:**
+- `id` (uuid) — ID активности
+
+**Request:**
+```json
+{
+  "name": "CRM для Панавто v2",
+  "status": "paused",
+  "priority": "critical",
+  "progress": 50,
+  "deadline": "2025-07-01T00:00:00Z",
+  "tags": ["crm", "bitrix", "urgent"]
+}
+```
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `name` | string | Название (макс. 500 символов) |
+| `activityType` | ActivityType | Тип активности |
+| `description` | string \| null | Описание (null для очистки) |
+| `status` | ActivityStatus | Статус |
+| `priority` | ActivityPriority | Приоритет |
+| `context` | ActivityContext | Контекст |
+| `parentId` | uuid \| null | ID родителя (null для перемещения в корень) |
+| `ownerEntityId` | uuid | ID владельца |
+| `clientEntityId` | uuid \| null | ID клиента (null для очистки) |
+| `deadline` | ISO 8601 \| null | Дедлайн |
+| `startDate` | ISO 8601 \| null | Дата начала |
+| `endDate` | ISO 8601 \| null | Дата завершения |
+| `recurrenceRule` | string \| null | Cron-выражение |
+| `tags` | string[] \| null | Теги |
+| `progress` | number \| null | Прогресс 0-100 |
+| `metadata` | object \| null | Метаданные |
+
+**Response 200:** Обновлённая Activity (тот же формат, что и GET /activities/:id, без members/childrenCount)
+
+**Response 400:** Невалидные данные или нарушение иерархии
+**Response 404:** Activity not found
+
+---
+
+### DELETE /activities/:id
+
+Soft delete — устанавливает `status = ARCHIVED`. Данные сохраняются, активность скрывается из активных списков.
+
+**Parameters:**
+- `id` (uuid) — ID активности
+
+**Response 200:**
+```json
+{
+  "id": "activity-uuid",
+  "status": "archived",
+  "message": "Activity archived successfully"
+}
+```
+
+**Response 404:** Activity not found
+
+---
+
+### GET /activities/:id/tree
+
+Получить поддерево активности (children + all descendants).
+
+**Parameters:**
+- `id` (uuid) — ID корневой активности
+
+**Response 200:**
+```json
+[
+  {
+    "id": "child-uuid-1",
+    "name": "Этап 1: Анализ",
+    "activityType": "initiative",
+    "status": "completed",
+    "parentId": "activity-uuid",
+    "depth": 1,
+    "children": [
+      {
+        "id": "grandchild-uuid-1",
+        "name": "Провести интервью",
+        "activityType": "task",
+        "status": "completed",
+        "parentId": "child-uuid-1",
+        "depth": 2,
+        "children": []
+      }
+    ]
+  },
+  {
+    "id": "child-uuid-2",
+    "name": "Этап 2: Разработка",
+    "activityType": "initiative",
+    "status": "active",
+    "parentId": "activity-uuid",
+    "depth": 1,
+    "children": []
+  }
+]
+```
+
+**Response 404:** Activity not found
+
+---
+
+### POST /activities/:id/members
+
+Добавить участников к активности. Дубликаты (по entityId + role) пропускаются.
+
+**Parameters:**
+- `id` (uuid) — ID активности
+
+**Request:**
+```json
+{
+  "members": [
+    {
+      "entityId": "entity-uuid-1",
+      "role": "member",
+      "notes": "Backend разработчик"
+    },
+    {
+      "entityId": "entity-uuid-2",
+      "role": "reviewer"
+    }
+  ]
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `members` | array | Да | Массив участников (1-50 элементов) |
+| `members[].entityId` | uuid | Да | ID сущности (Entity) |
+| `members[].role` | ActivityMemberRole | Нет | Роль (по умолчанию `member`) |
+| `members[].notes` | string | Нет | Заметки о роли |
+
+**Response 201:**
+```json
+{
+  "added": 2,
+  "skipped": 0,
+  "members": [
+    {
+      "id": "member-uuid-1",
+      "activityId": "activity-uuid",
+      "entityId": "entity-uuid-1",
+      "role": "member",
+      "notes": "Backend разработчик",
+      "isActive": true,
+      "joinedAt": "2025-02-06T10:00:00.000Z",
+      "createdAt": "2025-02-06T10:00:00.000Z"
+    },
+    {
+      "id": "member-uuid-2",
+      "activityId": "activity-uuid",
+      "entityId": "entity-uuid-2",
+      "role": "reviewer",
+      "notes": null,
+      "isActive": true,
+      "joinedAt": "2025-02-06T10:00:00.000Z",
+      "createdAt": "2025-02-06T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Response 404:** Activity not found
+
+---
+
+### GET /activities/:id/members
+
+Получить участников активности (только активных, отсортированных по роли и дате вступления).
+
+**Parameters:**
+- `id` (uuid) — ID активности
+
+**Response 200:**
+```json
+[
+  {
+    "id": "member-uuid",
+    "activityId": "activity-uuid",
+    "entityId": "entity-uuid",
+    "entity": { "id": "entity-uuid", "name": "Иван Петров", "type": "person" },
+    "role": "member",
+    "notes": "Backend разработчик",
+    "isActive": true,
+    "joinedAt": "2025-02-06T10:00:00.000Z",
+    "leftAt": null,
+    "metadata": null,
+    "createdAt": "2025-02-06T10:00:00.000Z",
+    "updatedAt": "2025-02-06T10:00:00.000Z"
+  }
+]
+```
+
+**Response 404:** Activity not found
+
+---
+
+## Data Quality API
+
+REST API для аудита качества данных, обнаружения проблем (дубликаты, сироты, пропущенные связи) и их разрешения.
+
+### Enums
+
+**DataQualityReportStatus:**
+| Значение | Описание |
+|----------|----------|
+| `PENDING` | Отчёт создан, проблемы не рассмотрены |
+| `REVIEWED` | Часть проблем разрешена |
+| `RESOLVED` | Все проблемы разрешены |
+
+**DataQualityIssueType:**
+| Значение | Описание |
+|----------|----------|
+| `DUPLICATE` | Дубликат активности (одинаковое имя + тип) |
+| `ORPHAN` | Задача без валидного родителя |
+| `MISSING_CLIENT` | PROJECT/BUSINESS без клиента |
+| `MISSING_MEMBERS` | Активность без участников |
+| `UNLINKED_COMMITMENT` | Обязательство без привязки к Activity |
+| `EMPTY_FIELDS` | Незаполненные ключевые поля |
+
+**DataQualityIssueSeverity:** `HIGH`, `MEDIUM`, `LOW`
+
+---
+
+### POST /data-quality/audit
+
+Запуск полного аудита качества данных. Собирает метрики, обнаруживает проблемы и сохраняет DataQualityReport в БД.
+
+**Response 201:**
+```json
+{
+  "id": "report-uuid",
+  "reportDate": "2025-02-06T10:00:00.000Z",
+  "metrics": {
+    "totalActivities": 42,
+    "duplicateGroups": 3,
+    "orphanedTasks": 5,
+    "missingClientEntity": 8,
+    "activityMemberCoverage": 0.65,
+    "commitmentLinkageRate": 0.72,
+    "inferredRelationsCount": 12,
+    "fieldFillRate": 0.45
+  },
+  "issues": [
+    {
+      "type": "DUPLICATE",
+      "severity": "HIGH",
+      "activityId": "activity-uuid",
+      "activityName": "CRM для Панавто",
+      "description": "Duplicate of \"CRM для Панавто\" (2 total with same name and type \"project\")",
+      "suggestedAction": "Merge with activity original-uuid using merge_activities tool"
+    },
+    {
+      "type": "ORPHAN",
+      "severity": "MEDIUM",
+      "activityId": "task-uuid",
+      "activityName": "Настроить CI/CD",
+      "description": "Task has no valid parent activity",
+      "suggestedAction": "Assign to appropriate parent project or initiative"
+    },
+    {
+      "type": "MISSING_CLIENT",
+      "severity": "LOW",
+      "activityId": "project-uuid",
+      "activityName": "Внутренний портал",
+      "description": "project without client entity",
+      "suggestedAction": "Link to client entity or mark as internal"
+    }
+  ],
+  "resolutions": null,
+  "status": "PENDING",
+  "createdAt": "2025-02-06T10:00:00.000Z",
+  "updatedAt": "2025-02-06T10:00:00.000Z"
+}
+```
+
+---
+
+### GET /data-quality/reports
+
+Список отчётов о качестве данных с пагинацией.
+
+**Query Parameters:**
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `limit` | number | 20 | Макс. записей |
+| `offset` | number | 0 | Смещение для пагинации |
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "id": "report-uuid",
+      "reportDate": "2025-02-06T10:00:00.000Z",
+      "metrics": { "..." },
+      "issues": [ "..." ],
+      "resolutions": null,
+      "status": "PENDING",
+      "createdAt": "2025-02-06T10:00:00.000Z",
+      "updatedAt": "2025-02-06T10:00:00.000Z"
+    }
+  ],
+  "total": 5
+}
+```
+
+---
+
+### GET /data-quality/reports/latest
+
+Получить последний отчёт о качестве данных.
+
+**Response 200:** DataQualityReport (тот же формат, что и POST /data-quality/audit)
+
+**Response 404:** No data quality reports found
+
+---
+
+### GET /data-quality/reports/:id
+
+Получить конкретный отчёт по ID.
+
+**Parameters:**
+- `id` (uuid) -- ID отчёта
+
+**Response 200:** DataQualityReport (тот же формат)
+
+**Response 404:** DataQualityReport not found
+
+---
+
+### PATCH /data-quality/reports/:id/resolve
+
+Разрешить проблему в отчёте. Добавляет запись о разрешении. Если все проблемы разрешены -- статус отчёта меняется на `RESOLVED`.
+
+**Parameters:**
+- `id` (uuid) -- ID отчёта
+
+**Request (ResolveIssueDto):**
+```json
+{
+  "issueIndex": 0,
+  "action": "Merged with original activity via merge_activities"
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `issueIndex` | number | Да | Индекс проблемы в массиве issues (начиная с 0) |
+| `action` | string | Да | Описание предпринятого действия (макс. 500 символов) |
+
+**Response 200:**
+```json
+{
+  "id": "report-uuid",
+  "status": "REVIEWED",
+  "resolutions": [
+    {
+      "issueIndex": 0,
+      "resolvedAt": "2025-02-06T12:00:00.000Z",
+      "resolvedBy": "manual",
+      "action": "Merged with original activity via merge_activities"
+    }
+  ],
+  "..."
+}
+```
+
+**Response 404:** Report not found or issue index out of range
+
+---
+
+### GET /data-quality/metrics
+
+Получить текущие метрики качества данных без сохранения отчёта.
+
+**Response 200:**
+```json
+{
+  "totalActivities": 42,
+  "duplicateGroups": 3,
+  "orphanedTasks": 5,
+  "missingClientEntity": 8,
+  "activityMemberCoverage": 0.65,
+  "commitmentLinkageRate": 0.72,
+  "inferredRelationsCount": 12,
+  "fieldFillRate": 0.45
+}
+```
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `totalActivities` | number | Общее количество активных Activity |
+| `duplicateGroups` | number | Количество групп дубликатов |
+| `orphanedTasks` | number | Количество задач без валидного родителя |
+| `missingClientEntity` | number | PROJECT/BUSINESS без клиента |
+| `activityMemberCoverage` | number | Доля Activity с хотя бы одним участником (0-1) |
+| `commitmentLinkageRate` | number | Доля Commitments с привязкой к Activity (0-1) |
+| `inferredRelationsCount` | number | Количество EntityRelations с source = EXTRACTED/INFERRED |
+| `fieldFillRate` | number | Средняя заполненность ключевых полей (0-1) |
+
+---
+
+### POST /data-quality/merge
+
+Мерж дубликатов активностей в одну. Переносит children, members и commitments на целевую активность, а исходные архивирует.
+
+**Request (MergeActivitiesDto):**
+```json
+{
+  "keepId": "activity-uuid-to-keep",
+  "mergeIds": ["duplicate-uuid-1", "duplicate-uuid-2"]
+}
+```
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `keepId` | uuid | Да | ID активности, которую сохранить |
+| `mergeIds` | uuid[] | Да | ID активностей для слияния (1-20 элементов) |
+
+**Стратегия мержа:**
+1. Перенос children с merged активностей на keepId
+2. Перенос members (пропуск дубликатов по entityId + role)
+3. Перепривязка commitments на keepId
+4. Soft-delete merged активностей (status = ARCHIVED)
+
+**Response 200:** Обновлённая Activity (та, которую сохранили)
+
+**Response 404:** Activity to keep or merge activities not found
+
+---
+
+### AI Agent Tools
+
+Data Quality System предоставляет 5 AI agent tools для Claude:
+
+| Tool | Описание |
+|------|----------|
+| `run_data_quality_audit` | Запуск полного аудита с сохранением отчёта |
+| `find_duplicate_projects` | Поиск дубликатов по нормализованному имени |
+| `merge_activities` | Мерж дубликатов (keepId + mergeIds) |
+| `find_orphaned_tasks` | Поиск задач без валидного родителя |
+| `get_data_quality_report` | Получение последнего или конкретного отчёта |
+
+---
+
 ## Коды ошибок
 
 | HTTP Code | Описание |

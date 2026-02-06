@@ -34,6 +34,7 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { InternalProxyModule } from './modules/internal-proxy/internal-proxy.module';
 import { ConfirmationModule } from './modules/confirmation/confirmation.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { DataQualityModule } from './modules/data-quality/data-quality.module';
 import { TelegramMiniAppModule } from './modules/telegram-mini-app/telegram-mini-app.module';
 import { PendingApprovalModule } from './modules/pending-approval/pending-approval.module';
 
@@ -118,6 +119,7 @@ import { PendingApprovalModule } from './modules/pending-approval/pending-approv
     InternalProxyModule,
     ConfirmationModule,
     ActivityModule,
+    DataQualityModule,
     TelegramMiniAppModule,
     PendingApprovalModule,
   ],

@@ -15,6 +15,9 @@ import {
   EntityRecord,
   EntityFact,
 } from '@pkg/entities';
+import { ProjectMatchingService } from './project-matching.service';
+import { ClientResolutionService } from './client-resolution.service';
+import { ActivityMemberService } from '../activity/activity-member.service';
 
 describe('DraftExtractionService', () => {
   let service: DraftExtractionService;
@@ -22,6 +25,9 @@ describe('DraftExtractionService', () => {
   let commitmentRepo: jest.Mocked<Repository<Commitment>>;
   let approvalRepo: jest.Mocked<Repository<PendingApproval>>;
   let entityRepo: jest.Mocked<Repository<EntityRecord>>;
+  let projectMatchingService: jest.Mocked<ProjectMatchingService>;
+  let clientResolutionService: jest.Mocked<ClientResolutionService>;
+  let activityMemberService: jest.Mocked<ActivityMemberService>;
 
   // Helper to create chainable query builder mock
   const createQueryBuilderMock = (result: unknown = null) => ({
@@ -87,6 +93,29 @@ describe('DraftExtractionService', () => {
             createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
           },
         },
+        {
+          provide: ProjectMatchingService,
+          useValue: {
+            findBestMatch: jest.fn().mockResolvedValue({
+              matched: false,
+              similarity: 0,
+              activity: null,
+            }),
+          },
+        },
+        {
+          provide: ClientResolutionService,
+          useValue: {
+            resolveClient: jest.fn().mockResolvedValue(null),
+            findEntityByName: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: ActivityMemberService,
+          useValue: {
+            resolveAndCreateMembers: jest.fn().mockResolvedValue([]),
+          },
+        },
       ],
     }).compile();
 
@@ -95,6 +124,9 @@ describe('DraftExtractionService', () => {
     commitmentRepo = module.get(getRepositoryToken(Commitment));
     approvalRepo = module.get(getRepositoryToken(PendingApproval));
     entityRepo = module.get(getRepositoryToken(EntityRecord));
+    projectMatchingService = module.get(ProjectMatchingService);
+    clientResolutionService = module.get(ClientResolutionService);
+    activityMemberService = module.get(ActivityMemberService);
   });
 
   afterEach(() => {
@@ -439,6 +471,281 @@ describe('DraftExtractionService', () => {
       expect(result.counts.commitments).toBe(1);
       expect(result.skipped.commitments).toBe(0);
       expect(result.approvals).toHaveLength(1);
+    });
+  });
+
+  describe('Phase 2: project quality criteria', () => {
+    it('should call ActivityMemberService.resolveAndCreateMembers when project has participants', async () => {
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Team Project',
+            isNew: true,
+            participants: ['Alice', 'Bob'],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.projects).toBe(1);
+      expect(activityMemberService.resolveAndCreateMembers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          participants: ['Alice', 'Bob'],
+          ownerEntityId: 'owner-123',
+        }),
+      );
+      // Verify activityId was passed (any UUID string from the mock)
+      expect(activityMemberService.resolveAndCreateMembers).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activityId: expect.any(String),
+        }),
+      );
+    });
+
+    it('should not call ActivityMemberService when project has no participants', async () => {
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Solo Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      await service.createDrafts(input);
+
+      expect(activityMemberService.resolveAndCreateMembers).not.toHaveBeenCalled();
+    });
+
+    it('should continue on ActivityMemberService failure (warn, not throw)', async () => {
+      activityMemberService.resolveAndCreateMembers.mockRejectedValueOnce(
+        new Error('Member resolution failed'),
+      );
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Project with failing members',
+            isNew: true,
+            participants: ['Alice'],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      // Project still created despite member failure
+      expect(result.counts.projects).toBe(1);
+      // Member failure is NOT recorded as a project error
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should resolve commitment activityId from projectMap via projectName', async () => {
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'My Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: 'Deliver report',
+            from: 'self',
+            to: 'self',
+            projectName: 'My Project',
+            confidence: 0.85,
+          },
+        ],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.projects).toBe(1);
+      expect(result.counts.commitments).toBe(1);
+
+      // The commitment should have an activityId matching the project's ID
+      // The project ID is generated via randomUUID in the service, but findOneOrFail
+      // returns it; commitmentRepo.create receives it as activityId
+      expect(commitmentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activityId: expect.any(String),
+        }),
+      );
+      // Ensure activityId is not null (was resolved from projectMap)
+      const createCall = commitmentRepo.create.mock.calls[0][0] as any;
+      expect(createCall.activityId).not.toBeNull();
+    });
+
+    it('should set commitment activityId to null when projectName not found', async () => {
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: 'Orphan commitment',
+            from: 'self',
+            to: 'self',
+            projectName: 'Nonexistent Project',
+            confidence: 0.85,
+          },
+        ],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.commitments).toBe(1);
+      expect(commitmentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activityId: null,
+        }),
+      );
+    });
+
+    it('should set commitment activityId to null when no projectName', async () => {
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: 'Standalone commitment',
+            from: 'self',
+            to: 'self',
+            confidence: 0.85,
+          },
+        ],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.commitments).toBe(1);
+      expect(commitmentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activityId: null,
+        }),
+      );
+    });
+
+    it('should map project description and tags to Activity', async () => {
+      // Create a custom query builder to capture the values() call
+      const valuesQb = createQueryBuilderMock();
+      activityRepo.createQueryBuilder = jest.fn().mockReturnValue(valuesQb);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Detailed Project',
+            isNew: true,
+            participants: [],
+            description: 'My desc',
+            tags: ['backend', 'api'],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.projects).toBe(1);
+
+      // Verify QueryBuilder values() was called with description and tags
+      expect(valuesQb.values).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: 'My desc',
+          tags: ['backend', 'api'],
+        }),
+      );
+    });
+
+    it('should call ClientResolutionService.resolveClient for new projects', async () => {
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Client Project',
+            isNew: true,
+            participants: [],
+            client: 'Acme Corp',
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      await service.createDrafts(input);
+
+      expect(clientResolutionService.resolveClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientName: 'Acme Corp',
+          ownerEntityId: 'owner-123',
+        }),
+      );
+    });
+
+    it('should call ProjectMatchingService.findBestMatch for deduplication', async () => {
+      projectMatchingService.findBestMatch.mockResolvedValueOnce({
+        matched: true,
+        similarity: 0.95,
+        activity: {
+          id: 'existing-id',
+          name: 'Similar Project',
+        } as Activity,
+      });
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Similar Projekt',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.skipped.projects).toBe(1);
+      expect(result.counts.projects).toBe(0);
     });
   });
 });

@@ -26,6 +26,9 @@ import {
   ExtractedCommitment,
   ExtractedFact,
 } from './daily-synthesis-extraction.types';
+import { ProjectMatchingService } from './project-matching.service';
+import { ClientResolutionService } from './client-resolution.service';
+import { ActivityMemberService } from '../activity/activity-member.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -107,6 +110,9 @@ export class DraftExtractionService {
     private readonly entityRepo: Repository<EntityRecord>,
     @InjectRepository(EntityFact)
     private readonly factRepo: Repository<EntityFact>,
+    private readonly projectMatchingService: ProjectMatchingService,
+    private readonly clientResolutionService: ClientResolutionService,
+    private readonly activityMemberService: ActivityMemberService,
   ) {}
 
   /**
@@ -176,18 +182,23 @@ export class DraftExtractionService {
         // Skip if already matched to existing activity
         if (project.existingActivityId) {
           this.logger.debug(`Skipping existing project: ${project.existingActivityId}`);
+          projectMap.set(project.name.toLowerCase(), project.existingActivityId);
           continue;
         }
 
-        // DEDUPLICATION: Check for existing pending project with similar name
-        const existingProject = await this.findExistingPendingProject(project.name);
-        if (existingProject) {
+        // DEDUPLICATION: Enhanced check -- pending approvals + fuzzy match via ProjectMatchingService
+        const existing = await this.findExistingProjectEnhanced(
+          project.name,
+          input.ownerEntityId,
+        );
+        if (existing.found && existing.activityId) {
           this.logger.debug(
             `Skipping duplicate project "${project.name}" - ` +
-              `already pending as ${existingProject.targetId}`,
+              `matched via ${existing.source} (activityId: ${existing.activityId}` +
+              `${existing.similarity != null ? `, similarity: ${existing.similarity.toFixed(3)}` : ''})`,
           );
-          // Add to projectMap so tasks can still reference it
-          projectMap.set(project.name.toLowerCase(), existingProject.targetId);
+          // Add to projectMap so tasks can still reference the existing activity
+          projectMap.set(project.name.toLowerCase(), existing.activityId);
           result.skipped.projects++;
           continue;
         }
@@ -202,6 +213,22 @@ export class DraftExtractionService {
         result.approvals.push(approval);
         result.counts.projects++;
         this.logger.debug(`Created draft project: ${activity.name} (${activity.id})`);
+
+        // Create ActivityMember records for project participants
+        if (project.participants?.length) {
+          try {
+            await this.activityMemberService.resolveAndCreateMembers({
+              activityId: activity.id,
+              participants: project.participants,
+              ownerEntityId: input.ownerEntityId,
+              clientEntityId: activity.clientEntityId ?? undefined,
+            });
+          } catch (memberError) {
+            this.logger.warn(
+              `Failed to create members for project "${project.name}": ${memberError instanceof Error ? memberError.message : 'Unknown'}`,
+            );
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         result.errors.push({ item: `project:${project.name}`, error: message });
@@ -258,10 +285,17 @@ export class DraftExtractionService {
           continue;
         }
 
+        // Resolve activityId from projectMap for commitment
+        let commitmentActivityId: string | undefined;
+        if (commitment.projectName) {
+          commitmentActivityId = projectMap.get(commitment.projectName.toLowerCase());
+        }
+
         const { entity, approval } = await this.createDraftCommitment(
           commitment,
           input,
           batchId,
+          commitmentActivityId,
         );
 
         result.approvals.push(approval);
@@ -349,11 +383,20 @@ export class DraftExtractionService {
     input: DraftExtractionInput,
     batchId: string,
   ): Promise<{ activity: Activity; approval: PendingApproval }> {
-    // Try to resolve client entity
+    // Try to resolve client entity via 3-strategy approach
     let clientEntityId: string | null = null;
-    if (project.client) {
-      const client = await this.findEntityByName(project.client);
-      clientEntityId = client?.id ?? null;
+    let clientResolutionMethod: string | undefined;
+    const clientResult = await this.clientResolutionService.resolveClient({
+      clientName: project.client,
+      participants: project.participants,
+      ownerEntityId: input.ownerEntityId,
+    });
+    if (clientResult) {
+      clientEntityId = clientResult.entityId;
+      clientResolutionMethod = clientResult.method;
+      this.logger.debug(
+        `Resolved client for project "${project.name}": "${clientResult.entityName}" via ${clientResult.method}`,
+      );
     }
 
     // Generate ID manually since QueryBuilder doesn't return the entity
@@ -371,15 +414,18 @@ export class DraftExtractionService {
         status: ActivityStatus.DRAFT,
         ownerEntityId: input.ownerEntityId,
         clientEntityId,
+        description: project.description ?? null,
+        tags: project.tags ?? null,
+        lastActivityAt: new Date(),
         depth: 0,
         materializedPath: null,
         metadata: {
           extractedFrom: 'daily_synthesis',
           synthesisDate: input.synthesisDate,
           focusTopic: input.focusTopic,
-          participants: project.participants,
           sourceQuote: project.sourceQuote,
           confidence: project.confidence,
+          clientResolutionMethod,
           draftBatchId: batchId,
         },
       })
@@ -440,11 +486,14 @@ export class DraftExtractionService {
     // clientEntityId = who requested the task (counterparty)
     let clientEntityId: string | null = null;
     if (task.requestedBy && task.requestedBy !== 'self') {
-      const clientEntity = await this.findEntityByNameOrId(task.requestedBy);
-      if (clientEntity) {
-        clientEntityId = clientEntity.id;
+      if (DraftExtractionService.UUID_PATTERN.test(task.requestedBy)) {
+        const clientEntity = await this.entityRepo.findOne({ where: { id: task.requestedBy } });
+        if (clientEntity) clientEntityId = clientEntity.id;
+        else this.logger.warn(`Could not resolve 'requestedBy' entity by UUID: "${task.requestedBy}"`);
       } else {
-        this.logger.warn(`Could not resolve 'requestedBy' entity: "${task.requestedBy}"`);
+        const clientEntity = await this.clientResolutionService.findEntityByName(task.requestedBy);
+        if (clientEntity) clientEntityId = clientEntity.id;
+        else this.logger.warn(`Could not resolve 'requestedBy' entity: "${task.requestedBy}"`);
       }
     }
 
@@ -511,26 +560,33 @@ export class DraftExtractionService {
     commitment: ExtractedCommitment,
     input: DraftExtractionInput,
     batchId: string,
+    activityId?: string,
   ): Promise<{ entity: Commitment; approval: PendingApproval }> {
     // Resolve from/to entities
     let fromEntityId = input.ownerEntityId;
     let toEntityId = input.ownerEntityId;
 
     if (commitment.from !== 'self') {
-      const fromEntity = await this.findEntityByNameOrId(commitment.from);
-      if (fromEntity) {
-        fromEntityId = fromEntity.id;
+      if (DraftExtractionService.UUID_PATTERN.test(commitment.from)) {
+        const fromEntity = await this.entityRepo.findOne({ where: { id: commitment.from } });
+        if (fromEntity) fromEntityId = fromEntity.id;
+        else this.logger.warn(`Could not resolve 'from' entity by UUID: "${commitment.from}"`);
       } else {
-        this.logger.warn(`Could not resolve 'from' entity: "${commitment.from}"`);
+        const fromEntity = await this.clientResolutionService.findEntityByName(commitment.from);
+        if (fromEntity) fromEntityId = fromEntity.id;
+        else this.logger.warn(`Could not resolve 'from' entity: "${commitment.from}"`);
       }
     }
 
     if (commitment.to !== 'self') {
-      const toEntity = await this.findEntityByNameOrId(commitment.to);
-      if (toEntity) {
-        toEntityId = toEntity.id;
+      if (DraftExtractionService.UUID_PATTERN.test(commitment.to)) {
+        const toEntity = await this.entityRepo.findOne({ where: { id: commitment.to } });
+        if (toEntity) toEntityId = toEntity.id;
+        else this.logger.warn(`Could not resolve 'to' entity by UUID: "${commitment.to}"`);
       } else {
-        this.logger.warn(`Could not resolve 'to' entity: "${commitment.to}"`);
+        const toEntity = await this.clientResolutionService.findEntityByName(commitment.to);
+        if (toEntity) toEntityId = toEntity.id;
+        else this.logger.warn(`Could not resolve 'to' entity: "${commitment.to}"`);
       }
     }
 
@@ -540,6 +596,7 @@ export class DraftExtractionService {
       title: commitment.what,
       fromEntityId,
       toEntityId,
+      activityId: activityId ?? null,
       status: CommitmentStatus.DRAFT,
       priority: this.mapCommitmentPriority(commitment.priority),
       dueDate: commitment.deadline ? new Date(commitment.deadline) : null,
@@ -639,6 +696,52 @@ export class DraftExtractionService {
   }
 
   /**
+   * Enhanced project deduplication check.
+   *
+   * Checks two layers:
+   * 1. Existing pending approvals (exact ILIKE match -- current behavior)
+   * 2. Active/Draft activities via fuzzy Levenshtein matching (ProjectMatchingService)
+   *
+   * Returns the activity ID if a match is found so the caller can skip
+   * creating a new draft and instead reference the existing activity.
+   */
+  private async findExistingProjectEnhanced(
+    projectName: string,
+    ownerEntityId: string,
+  ): Promise<{ found: boolean; activityId?: string; similarity?: number; source?: string }> {
+    // Step 1: Check pending approvals (existing exact ILIKE logic)
+    const pendingMatch = await this.findExistingPendingProject(projectName);
+    if (pendingMatch) {
+      return {
+        found: true,
+        activityId: pendingMatch.targetId,
+        source: 'pending_approval',
+      };
+    }
+
+    // Step 2: Check active activities via ProjectMatchingService (fuzzy Levenshtein)
+    const matchResult = await this.projectMatchingService.findBestMatch({
+      name: projectName,
+      ownerEntityId,
+    });
+
+    if (matchResult.matched && matchResult.activity) {
+      this.logger.log(
+        `Fuzzy matched project "${projectName}" -> "${matchResult.activity.name}" ` +
+          `(similarity: ${matchResult.similarity.toFixed(3)})`,
+      );
+      return {
+        found: true,
+        activityId: matchResult.activity.id,
+        similarity: matchResult.similarity,
+        source: 'fuzzy_match',
+      };
+    }
+
+    return { found: false };
+  }
+
+  /**
    * Find existing pending task with similar title.
    * Returns the PendingApproval if found, null otherwise.
    */
@@ -704,36 +807,6 @@ export class DraftExtractionService {
   private static readonly UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  /**
-   * Find entity by name or ID.
-   * If value looks like a UUID, search by ID directly.
-   * Otherwise, do a fuzzy name search.
-   */
-  private async findEntityByNameOrId(value: string): Promise<EntityRecord | null> {
-    // If it looks like a UUID, search by ID
-    if (DraftExtractionService.UUID_PATTERN.test(value)) {
-      return this.entityRepo.findOne({ where: { id: value } });
-    }
-
-    // Otherwise, fuzzy search by name
-    return this.entityRepo
-      .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${value}%` })
-      .orderBy('e.updatedAt', 'DESC')
-      .getOne();
-  }
-
-  /**
-   * Find entity by name (fuzzy match).
-   * @deprecated Use findEntityByNameOrId instead
-   */
-  private async findEntityByName(name: string): Promise<EntityRecord | null> {
-    return this.entityRepo
-      .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${name}%` })
-      .orderBy('e.updatedAt', 'DESC')
-      .getOne();
-  }
 
   // ─────────────────────────────────────────────────────────────
   // Private: Mapping Functions

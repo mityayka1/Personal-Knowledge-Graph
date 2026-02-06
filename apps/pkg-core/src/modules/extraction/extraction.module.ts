@@ -31,6 +31,8 @@ import { UnifiedExtractionService } from './unified-extraction.service';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
 import { ExtractionPersistenceService } from './extraction-persistence.service';
 import { DraftExtractionService } from './draft-extraction.service';
+import { ClientResolutionService } from './client-resolution.service';
+import { ProjectMatchingService } from './project-matching.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { InteractionModule } from '../interaction/interaction.module';
@@ -96,6 +98,8 @@ import { ActivityModule } from '../activity/activity.module';
     DailySynthesisExtractionService,
     ExtractionPersistenceService,
     DraftExtractionService,
+    ClientResolutionService,
+    ProjectMatchingService,
   ],
   exports: [
     FactExtractionService,
@@ -114,6 +118,8 @@ import { ActivityModule } from '../activity/activity.module';
     DailySynthesisExtractionService,
     ExtractionPersistenceService,
     DraftExtractionService,
+    ClientResolutionService,
+    ProjectMatchingService,
   ],
 })
 export class ExtractionModule {}

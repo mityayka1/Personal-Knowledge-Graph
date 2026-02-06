@@ -20,7 +20,7 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 📋 Planned |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2, REST API, Data Quality Completed) |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
 
 ---
@@ -50,7 +50,7 @@
 - Approval Flow через Telegram
 - Proactive action buttons
 
-### Phase D: Jarvis Foundation 📋
+### Phase D: Jarvis Foundation 🔄
 **Цель:** Полноценный проактивный ассистент
 
 - **Activity entity** — иерархическая модель всех дел (AREA → BUSINESS → PROJECT → TASK)
@@ -59,6 +59,65 @@
 - **Trigger System** — time/event/context-based уведомления
 - **Action Engine** — автономные действия с approval flow
 - **External Knowledge** — интеграция с web search
+
+#### Foundation Services (Phase 1) -- Completed
+
+Фундаментальные сервисы, созданные для устранения разрыва между моделью данных и её фактическим использованием. Подготовка к интеграции в extraction pipeline.
+
+| Сервис | Описание | Файл |
+|--------|----------|------|
+| **ProjectMatchingService** | Fuzzy matching для предотвращения дубликатов проектов | `apps/pkg-core/src/modules/extraction/project-matching.service.ts` |
+| **ClientResolutionService** | 3-стратегийное определение клиента для Activity | `apps/pkg-core/src/modules/extraction/client-resolution.service.ts` |
+| **ActivityValidationService** | Валидация иерархии типов Activity (HIERARCHY_RULES) | `apps/pkg-core/src/modules/activity/activity-validation.service.ts` |
+| **ActivityMemberService** | Управление участниками: resolve names → Entity → ActivityMember | `apps/pkg-core/src/modules/activity/activity-member.service.ts` |
+
+Детали: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](../plans/2025-02-05-project-creation-improvements-plan.md) -- Phase 1: Preparation
+
+#### Extraction Improvements (Phase 2) -- Completed
+
+Интеграция Foundation Services в extraction pipeline, улучшение критериев извлечения и entity wiring.
+
+| Улучшение | Описание |
+|-----------|----------|
+| **ProjectIndicators** | 5 boolean индикаторов (duration, structure, deliverable, team, explicit context) + filterLowQualityProjects |
+| **ProjectMatching Integration** | Fuzzy deduplication в DraftExtractionService (Levenshtein 0.8) |
+| **ClientResolution Integration** | 3-strategy определение клиента в обоих extraction сервисах |
+| **ActivityMember Wiring** | Участники из extraction автоматически создаются как ActivityMember записи |
+| **Commitment.activityId** | Обязательства связываются с проектами через projectMap |
+| **Activity Enrichment** | description и tags заполняются при extraction |
+
+Детали: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](../plans/2025-02-05-project-creation-improvements-plan.md) -- Phase 2: Extraction Improvements
+
+#### REST API (Phase 4) -- Completed
+
+Полноценный REST API для Activity CRUD с валидацией, пагинацией и управлением участниками.
+
+| Endpoint | Описание |
+|----------|----------|
+| `POST /activities` | Создание Activity с валидацией иерархии типов |
+| `GET /activities` | Список с фильтрами (type, status, context, owner, client, search) и пагинацией |
+| `GET /activities/:id` | Детали с relations, members и childrenCount |
+| `PATCH /activities/:id` | Обновление с валидацией циклов в иерархии |
+| `DELETE /activities/:id` | Soft delete (status = ARCHIVED) |
+| `GET /activities/:id/tree` | Поддерево (children + descendants) |
+| `POST /activities/:id/members` | Добавление участников (дедупликация по entityId + role) |
+| `GET /activities/:id/members` | Список участников |
+
+Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Activity API section
+
+#### Data Quality System (Phase 6) -- Completed
+
+Система аудита качества данных: обнаружение дубликатов, сирот, пропущенных связей, а также механизм мержа и разрешения проблем.
+
+| Компонент | Описание |
+|-----------|----------|
+| **DataQualityReport entity** | JSONB отчёты: metrics, issues, resolutions. Статусы: PENDING, REVIEWED, RESOLVED |
+| **DataQualityService** | Полный аудит, поиск дубликатов (LOWER(name) + type), orphaned tasks, merge |
+| **DataQualityController** | 7 REST endpoints: audit, reports CRUD, metrics, merge |
+| **DataQualityToolsProvider** | 5 AI agent tools для Claude |
+| **Tests** | 49 тестов (37 service + 12 controller) |
+
+Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Data Quality API section
 
 ### Phase E: Knowledge Packing 📋
 **Цель:** Сегментация обсуждений по темам и ретроспективная упаковка знаний

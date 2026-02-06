@@ -110,8 +110,3 @@ export function parseDate(dateStr: string): Date {
   return date;
 }
 
-/**
- * Legacy alias for backward compatibility
- * @deprecated Use toolEmptyResult for searches, toolNotFoundError for specific resources
- */
-export const toolNotFound = toolEmptyResult;

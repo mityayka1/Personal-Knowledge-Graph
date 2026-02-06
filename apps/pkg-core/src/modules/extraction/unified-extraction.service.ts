@@ -33,10 +33,7 @@ const UNIFIED_EXTRACTION_SCHEMA = {
 };
 
 /**
- * Unified extraction service — single agent call that replaces 3 separate flows:
- * - FactExtractionService.extractFactsAgentBatch() (agent, 5 tools)
- * - EventExtractionService.extractEventsBatch() (oneshot, legacy)
- * - SecondBrainExtractionService.extractFromMessages() (oneshot, 6 types)
+ * Unified extraction service — single agent call for facts, events, and relations.
  *
  * Uses 6 MCP tools: get_entity_context, find_entity_by_name, create_fact,
  * create_relation, create_pending_entity, create_event

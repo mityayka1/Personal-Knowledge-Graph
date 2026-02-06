@@ -15,7 +15,7 @@
 - [Рёбра графа (Edges)](#рёбра-графа-edges)
   - [EntityRelation](#entityrelation) 🟡
   - [Commitment](#commitment) 🟡
-  - [ActivityMember](#activitymember) 🔴
+  - [ActivityMember](#activitymember) 🟢
 - [Агрегированные знания (Summaries)](#агрегированные-знания-summaries)
   - [EntityRelationshipProfile](#entityrelationshipprofile) 🟢
   - [InteractionSummary](#interactionsummary) 🟢
@@ -26,6 +26,8 @@
 - [Планируемые сущности (Phase E)](#планируемые-сущности-phase-e)
   - [TopicalSegment](#topicalsegment) ⚪
   - [KnowledgePack](#knowledgepack) ⚪
+- [Системные сервисы (System)](#системные-сервисы-system)
+  - [DataQualityReport](#dataqualityreport) 🟢
 - [**Системные проблемы и план устранения**](#системные-проблемы-и-план-устранения)
 - [Визуальные схемы](#визуальные-схемы)
 - [Сводная таблица](#сводная-таблица)
@@ -70,7 +72,7 @@ PKG Knowledge Graph — это граф знаний, где:
 
 ## Статус реализации
 
-> **Обновлено:** 2025-02-05 после аудита кодовой базы. Каждая entity оценена по трём параметрам: определена ли в коде, подключена ли к extraction pipeline, и реально ли создаются записи в production.
+> **Обновлено:** 2026-02-06 после завершения Phase 5 (Final Reconciliation, Phases 1-5 done). Каждая entity оценена по трём параметрам: определена ли в коде, подключена ли к extraction pipeline, и реально ли создаются записи в production.
 
 ### Условные обозначения
 
@@ -86,13 +88,14 @@ PKG Knowledge Graph — это граф знаний, где:
 | Entity | Entity файл | Миграция | Extraction | Записи в БД | Статус |
 |--------|:-----------:|:--------:|:----------:|:------------:|:------:|
 | Entity | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
-| Activity | ✅ | ✅ | ✅ | ✅ | 🟡 PARTIAL — только PROJECT/TASK; 9 полей всегда NULL |
+| Activity | ✅ | ✅ | ✅ | ✅ | 🟡 PARTIAL — только PROJECT/TASK; description/tags заполняются (Phase 2); 7 полей всегда NULL |
 | EntityFact | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
 | EntityIdentifier | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
 | EntityRelation | ✅ | ✅ | ❌ | ⚠️ manual only | 🟡 PARTIAL — extraction не персистит InferredRelations |
 | EntityRelationMember | ✅ | ✅ | ❌ | ⚠️ manual only | 🟡 PARTIAL — зависит от EntityRelation |
-| Commitment | ✅ | ✅ | ✅ | ✅ | 🟡 PARTIAL — `activityId` никогда не заполняется |
-| ActivityMember | ✅ | ✅ | ❌ | ❌ | 🔴 DORMANT — ни один сервис не создаёт записи |
+| Commitment | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — `activityId` заполняется через projectMap (Phase 2) |
+| ActivityMember | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — extraction + backfill migration (21 записей), REST API (Phase 3) |
+| DataQualityReport | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION — agent tools + REST API (Phase 4) |
 | EntityRelationshipProfile | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
 | InteractionSummary | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
 | Interaction | ✅ | ✅ | ✅ | ✅ | 🟢 PRODUCTION |
@@ -106,23 +109,14 @@ PKG Knowledge Graph — это граф знаний, где:
 
 **Activity (🟡 PARTIAL):**
 - Из 10 ActivityTypes реально создаются только `PROJECT` и `TASK`
-- Поля `description`, `priority`, `context`, `deadline`, `startDate`, `endDate`, `tags`, `progress`, `lastActivityAt` всегда NULL при extraction
+- Поля `description` и `tags` заполняются при extraction (Phase 2); `priority`, `context`, `deadline`, `startDate`, `endDate`, `progress`, `lastActivityAt` всё ещё NULL
 - Три паттерна дерева (closure-table + adjacency + materialized path) определены, но closure-table и materialized path фактически не используются
-- Участники хранятся как `metadata.participants: string[]` вместо ActivityMember
+- Участники создаются как ActivityMember записи через ActivityMemberService (Phase 2)
 
 **EntityRelation (🟡 PARTIAL):**
 - Полная N-ary реализация с EntityRelationMember
 - LLM извлекает InferredRelations при daily synthesis, но `extraction-persistence.service.ts` не содержит кода для их сохранения — данные теряются
 - Используется только при ручном создании связей
-
-**Commitment (🟡 PARTIAL):**
-- Извлекается из переписки, записи создаются
-- Поле `activityId` (FK → Activity) определено, но extraction никогда не привязывает commitment к проекту/задаче
-
-**ActivityMember (🔴 DORMANT):**
-- Entity файл создан, миграция выполнена, 7 ролей определены
-- `activity.service.ts` инжектирует репозиторий, но не использует
-- Вместо ActivityMember участники хранятся как строки в `Activity.metadata.participants`
 
 ---
 
@@ -165,7 +159,7 @@ PKG Knowledge Graph — это граф знаний, где:
 
 ### Activity
 
-> 🟡 **PARTIAL** — extraction создаёт только PROJECT и TASK; 9 полей (description, priority, context, deadline, startDate, endDate, tags, progress, lastActivityAt) всегда NULL; участники в metadata вместо ActivityMember
+> 🟡 **PARTIAL** — extraction создаёт только PROJECT и TASK; description и tags заполняются (Phase 2); 7 полей (priority, context, deadline, startDate, endDate, progress, lastActivityAt) всегда NULL; участники создаются как ActivityMember записи (Phase 2)
 
 **Контексты деятельности** — иерархическая структура всех "дел" человека.
 
@@ -407,7 +401,7 @@ EntityRelation { type: PARENTHOOD }
 
 ### Commitment
 
-> 🟡 **PARTIAL** — извлекается из переписки, но `activityId` (FK → Activity) никогда не заполняется — обязательства не привязаны к проектам/задачам
+> 🟢 **PRODUCTION** — извлекается из переписки, `activityId` заполняется через projectMap при extraction (Phase 2)
 
 **Обязательства между субъектами** — обещания, запросы, соглашения, встречи.
 
@@ -469,7 +463,7 @@ EntityRelation { type: PARENTHOOD }
 
 ### ActivityMember
 
-> 🔴 **DORMANT** — entity файл и миграция существуют, `activity.service.ts` инжектирует репозиторий, но **ни один сервис не создаёт записи**. Участники хранятся как `Activity.metadata.participants: string[]` (нерезолвленные имена)
+> 🟢 **PRODUCTION** — ActivityMemberService автоматически создаёт записи при extraction (Phase 2). Resolve names -> Entity -> ActivityMember с ролями (OWNER, MEMBER, CLIENT и др.)
 
 **Участие Entity в Activity** — связь многие-ко-многим с ролями.
 
@@ -810,6 +804,56 @@ EntityRelation { type: PARENTHOOD }
 
 ---
 
+## Системные сервисы (System)
+
+### DataQualityReport
+
+> 🟢 **PRODUCTION** — создаётся при аудите качества данных, доступен через REST API и Agent Tools (Phase 4)
+
+**Отчёт о качестве данных** — метрики, обнаруженные проблемы (дубликаты, orphans, пустые поля) и их разрешения.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | uuid | Уникальный идентификатор |
+| `reportDate` | timestamp | Дата создания отчёта |
+| `metrics` | jsonb | Метрики качества (totalActivities, duplicateGroups, orphanedTasks и др.) |
+| `issues` | jsonb | Массив обнаруженных проблем (type, severity, activityId, description, suggestedAction) |
+| `resolutions` | jsonb? | Записи о разрешении проблем |
+| `status` | enum | `PENDING` \| `REVIEWED` \| `RESOLVED` |
+
+**Файл:** `packages/entities/src/data-quality-report.entity.ts:85`
+
+**DataQualityIssueType:**
+
+| Тип | Описание |
+|-----|----------|
+| `DUPLICATE` | Дубликаты Activity (похожие названия) |
+| `ORPHAN` | Task без родительского проекта |
+| `MISSING_CLIENT` | Activity без client entity |
+| `MISSING_MEMBERS` | Activity без ActivityMember записей |
+| `UNLINKED_COMMITMENT` | Commitment без привязки к Activity |
+| `EMPTY_FIELDS` | Activity с незаполненными description/tags |
+
+**DataQualityMetrics:**
+```typescript
+{
+  totalActivities: number;
+  duplicateGroups: number;
+  orphanedTasks: number;
+  missingClientEntity: number;
+  activityMemberCoverage: number;   // 0.0-1.0
+  commitmentLinkageRate: number;    // 0.0-1.0
+  inferredRelationsCount: number;
+  fieldFillRate: number;            // 0.0-1.0
+}
+```
+
+**Доступ:**
+- REST API: `POST /data-quality/run-audit`, `GET /data-quality/reports`, `GET /data-quality/reports/:id`
+- Agent Tools: `run_data_quality_audit`, `get_data_quality_summary`
+
+---
+
 ## Системные проблемы и план устранения
 
 > Выявлено 2025-02-05 при аудите расхождений между этим документом и реальным состоянием кода. Детальный план устранения: [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](./plans/2025-02-05-project-creation-improvements-plan.md)
@@ -841,47 +885,118 @@ EntityRelation { type: PARENTHOOD }
 2. **Среднесрочно:** Оценить, нужен ли вообще closure-table. Если hierarchical queries потребуются — реализовать на базе `materializedPath` (LIKE-поиск) или recursive CTE, что проще и не требует отдельной таблицы
 3. **Долгосрочно:** Убрать `@Tree('closure-table')` декоратор и миграцию для удаления `activities_closure`, если не используется 6+ месяцев
 
-### Проблема 3: ActivityMember — полностью "спящая" entity
+### Проблема 3: ActivityMember -- RESOLVED (Phase 2)
 
-**Суть:** ActivityMember — одна из трёх edge-entity в графе, но единственная, которая не работает. Extraction pipeline сохраняет участников проектов как строковый массив в `Activity.metadata.participants`, минуя структурированную ActivityMember.
+**Суть:** ActivityMember ранее была "спящей" entity -- extraction pipeline сохранял участников как строковый массив в `Activity.metadata.participants`.
 
-**Последствия:**
-- Невозможно найти "все проекты, в которых участвует Иванов" через SQL JOIN
-- Нет ролевой модели: непонятно кто owner, исполнитель, наблюдатель
-- `metadata.participants` — нерезолвленные строки, не привязанные к Entity
+**Решение (Phase 2):** ActivityMemberService интегрирован в extraction pipeline. При создании Activity автоматически создаются ActivityMember записи с ролями (OWNER, MEMBER, CLIENT и др.). Имена участников резолвятся в Entity через fuzzy search.
 
-**План устранения (Проблема 8 в плане улучшений):**
-1. Создать `ActivityMemberService` с методом `resolveAndCreateMembers()`
-2. Интегрировать в `extraction-persistence.service.ts` — при создании Activity создавать ActivityMember записи
-3. Мигрировать существующие `metadata.participants` → ActivityMember
-4. Прекратить использование `metadata.participants` для участников
+### Проблема 4: Потеря данных при extraction -- PARTIALLY RESOLVED (Phase 2)
 
-### Проблема 4: Потеря данных при extraction
+**Суть:** Extraction pipeline извлекает информацию, но часть данных теряется при персистенции.
 
-**Суть:** Extraction pipeline извлекает информацию, но часть данных теряется при персистенции:
+**Решено в Phase 2:**
+
+| Что извлекается | Статус | Решение |
+|-----------------|--------|---------|
+| Commitment с контекстом проекта | ✅ Resolved | `activityId` заполняется через projectMap |
+| Activity с участниками | ✅ Resolved | ActivityMember записи создаются при extraction |
+| Project description/tags | ✅ Resolved | description и tags заполняются при extraction |
+
+**Остаётся:**
 
 | Что извлекается | Что сохраняется | Что теряется |
 |-----------------|-----------------|--------------|
-| InferredRelations (LLM) | — | Всё (код сохранения не написан) |
-| Commitment с контекстом проекта | Commitment без activityId | Привязка к проекту |
-| Activity с участниками | Activity + metadata.participants | Структурированные роли |
-| Project description из обсуждения | — | description (поле NULL) |
+| InferredRelations (LLM) | -- | Всё (код сохранения не написан) |
 
-**План устранения (Проблема 8 в плане улучшений):**
+**План устранения:**
 1. **InferredRelations:** Добавить `persistInferredRelations()` в extraction-persistence, создавать draft EntityRelation + EntityRelationMember
-2. **Commitment.activityId:** Обогатить extraction prompt, добавить линковку по имени проекта
-3. **Activity поля:** Расширить ExtractedProject тип, маппить description/priority/deadline/tags из extraction
 
 ### Общий roadmap устранения
 
-| Приоритет | Что | Когда | Ссылка |
-|-----------|-----|-------|--------|
-| 🔴 P0 | ActivityMember wiring | Phase 3 (Week 4) плана | Проблема 8.1 |
-| 🔴 P0 | InferredRelations persistence | Phase 3 (Week 4) плана | Проблема 8.3 |
-| 🟡 P1 | Commitment → Activity linking | Phase 3 (Week 4) плана | Проблема 8.2 |
-| 🟡 P1 | Activity fields enrichment | Phase 3 (Week 4) плана | Проблема 8.4 |
-| 🟢 P2 | Убрать избыточные tree patterns | После Phase 7 | Проблема 2 |
-| 🟢 P2 | Обновлять этот документ при каждом изменении | Ongoing | Проблема 1 |
+| Приоритет | Что | Когда | Ссылка | Статус |
+|-----------|-----|-------|--------|--------|
+| 🔴 P0 | ActivityMember wiring | Phase 2 | Проблема 8.1 | ✅ Completed (Phase 2) |
+| 🔴 P0 | InferredRelations persistence | Future phase | Проблема 8.3 | Ожидает (не входит в текущий scope) |
+| 🟡 P1 | Commitment → Activity linking | Phase 2 | Проблема 8.2 | ✅ Completed (Phase 2) |
+| 🟡 P1 | Activity fields enrichment | Phase 2 | Проблема 8.4 | ✅ Completed (Phase 2, description/tags) |
+| 🟢 P2 | Убрать избыточные tree patterns | После Phase 7 | Проблема 2 | Ожидает |
+| 🟢 P2 | Обновлять этот документ при каждом изменении | Ongoing | Проблема 1 | Ongoing |
+
+---
+
+## Foundation Services (Phase D, Phase 1)
+
+> **Обновлено:** 2026-02-06. Phase 1 создала фундаментальные сервисы. Phase 2 интегрировала их в extraction pipeline. Phase 3 добавила REST API с ActivityValidationService. Phase 4 — Data Quality system. Phase 5 — cleanup и backfill. См. [`docs/plans/2025-02-05-project-creation-improvements-plan.md`](./plans/2025-02-05-project-creation-improvements-plan.md).
+
+### Обзор
+
+Phase 1 создала четыре фундаментальных сервиса. Phase 2 интегрировала их в extraction pipeline: ProjectMatchingService предотвращает дубликаты проектов, ClientResolutionService определяет клиентов, ActivityMemberService создаёт структурированные записи участников, Commitment.activityId связывает обязательства с проектами. Phase 3 интегрировала ActivityValidationService в REST API для валидации CRUD-операций с Activity.
+
+### ProjectMatchingService
+
+**Назначение:** Fuzzy matching для предотвращения дубликатов Activity (проектов).
+
+**Файл:** `apps/pkg-core/src/modules/extraction/project-matching.service.ts`
+
+**Ключевые возможности:**
+- Нечёткий поиск существующих проектов по названию
+- Нормализация названий (регистр, пунктуация, стоп-слова)
+- Scoring candidates по степени совпадения
+- Порог совпадения для автоматического merge vs создания нового проекта
+
+**Решает проблему:** Дубликаты проектов с похожими названиями (Проблема 2 плана улучшений)
+
+### ClientResolutionService
+
+**Назначение:** Трёхстратегийное определение клиента/заказчика для Activity.
+
+**Файл:** `apps/pkg-core/src/modules/extraction/client-resolution.service.ts`
+
+**Ключевые возможности:**
+- Стратегия 1: Прямое упоминание клиента в тексте
+- Стратегия 2: Определение по контексту взаимодействия (собеседник)
+- Стратегия 3: Inference по связям Entity (организация, к которой относится контакт)
+- Приоритизация стратегий и fallback-логика
+
+**Решает проблему:** Неправильная привязка клиентов к проектам (Проблема 3 плана улучшений)
+
+### ActivityValidationService
+
+**Назначение:** Валидация иерархии типов Activity и бизнес-правил создания.
+
+**Файл:** `apps/pkg-core/src/modules/activity/activity-validation.service.ts`
+
+**Ключевые возможности:**
+- HIERARCHY_RULES — правила допустимых parent-child связей между типами Activity
+- Валидация типа Activity при создании (PROJECT не может быть дочерним для TASK)
+- Проверка обязательных полей в зависимости от типа
+- Валидация статусных переходов
+
+**Решает проблему:** Отсутствие контроля иерархии Activity (часть Проблемы 4 плана улучшений)
+
+### ActivityMemberService
+
+**Назначение:** Управление участниками Activity через структурированные записи ActivityMember.
+
+**Файл:** `apps/pkg-core/src/modules/activity/activity-member.service.ts`
+
+**Ключевые возможности:**
+- Resolve names -- Entity: поиск Entity по именам участников
+- Создание ActivityMember записей с ролями (OWNER, MEMBER, CLIENT, ASSIGNEE и др.)
+- Замена `metadata.participants: string[]` на структурированные связи
+- Поддержка множественных ролей одного Entity в одной Activity
+
+**Решает проблему:** ActivityMember -- полностью "спящая" entity (Проблема 3 в системных проблемах, Проблема 8.1 плана улучшений)
+
+### Связь с системными проблемами
+
+| Проблема | Foundation Service | Статус |
+|----------|-------------------|--------|
+| Дубликаты проектов | ProjectMatchingService | ✅ Интегрирован в DraftExtractionService (Phase 2) |
+| Неправильный клиент | ClientResolutionService | ✅ Интегрирован в оба extraction сервиса (Phase 2) |
+| Нет контроля иерархии | ActivityValidationService | ✅ Интегрирован в Activity REST API (Phase 3) |
+| ActivityMember dormant | ActivityMemberService | ✅ Интегрирован в extraction pipeline (Phase 2) |
 
 ---
 
@@ -971,8 +1086,8 @@ EntityRelation { type: PARENTHOOD }
 | EntityRelation | Edge (N-ary) | 🟡 PARTIAL | `packages/entities/src/entity-relation.entity.ts` | 26 |
 | EntityRelationMember | Edge (N-ary) | 🟡 PARTIAL | `packages/entities/src/entity-relation-member.entity.ts` | — |
 | RelationType | Enum | 🟢 PRODUCTION | `packages/entities/src/relation-type.enum.ts` | 5 |
-| Commitment | Edge | 🟡 PARTIAL | `packages/entities/src/commitment.entity.ts` | 92 |
-| ActivityMember | Edge | 🔴 DORMANT | `packages/entities/src/activity-member.entity.ts` | 49 |
+| Commitment | Edge | 🟢 PRODUCTION | `packages/entities/src/commitment.entity.ts` | 92 |
+| ActivityMember | Edge | 🟢 PRODUCTION | `packages/entities/src/activity-member.entity.ts` | 49 |
 | **Агрегации** | | | | |
 | EntityRelationshipProfile | Summary | 🟢 PRODUCTION | `packages/entities/src/entity-relationship-profile.entity.ts` | 48 |
 | InteractionSummary | Summary | 🟢 PRODUCTION | `packages/entities/src/interaction-summary.entity.ts` | 38 |
@@ -981,6 +1096,8 @@ EntityRelation { type: PARENTHOOD }
 | Message | Raw Data | 🟢 PRODUCTION | `packages/entities/src/message.entity.ts` | — |
 | TranscriptSegment | Raw Data | 🟢 PRODUCTION | `packages/entities/src/transcript-segment.entity.ts` | — |
 | InteractionParticipant | Raw Data | 🟢 PRODUCTION | `packages/entities/src/interaction-participant.entity.ts` | — |
+| **Системные** | | | | |
+| DataQualityReport | System | 🟢 PRODUCTION | `packages/entities/src/data-quality-report.entity.ts` | — |
 | **Планируемые (Phase E)** | | | | |
 | TopicalSegment | Planned | ⚪ PLANNED | `docs/second-brain/06-PHASE-E-KNOWLEDGE-PACKING.md` | — |
 | KnowledgePack | Planned | ⚪ PLANNED | `docs/second-brain/06-PHASE-E-KNOWLEDGE-PACKING.md` | — |

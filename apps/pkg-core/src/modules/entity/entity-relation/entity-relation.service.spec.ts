@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { EntityRelationService } from './entity-relation.service';
 import {
+  EntityRecord,
   EntityRelation,
   EntityRelationMember,
   RelationType,
@@ -58,6 +59,17 @@ describe('EntityRelationService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EntityRelationService,
+        {
+          provide: getRepositoryToken(EntityRecord),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            find: jest.fn().mockResolvedValue([
+              { id: 'entity-1' },
+              { id: 'entity-2' },
+              { id: 'entity-3' },
+            ]),
+          },
+        },
         {
           provide: getRepositoryToken(EntityRelation),
           useValue: mockRelationRepository,

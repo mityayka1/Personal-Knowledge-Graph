@@ -8,6 +8,7 @@ import {
   DailySynthesisExtractionParams,
   DailySynthesisExtractionResult,
   DailySynthesisExtractionResponse,
+  ExtractedProject,
   DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
 } from './daily-synthesis-extraction.types';
 import { DraftExtractionService, DraftExtractionResult } from './draft-extraction.service';
@@ -89,9 +90,12 @@ export class DailySynthesisExtractionService {
 
     const durationMs = Date.now() - startTime;
 
+    // Filter out low-quality project extractions before matching
+    const filteredProjects = this.filterLowQualityProjects(result.data.projects);
+
     // Match extracted projects to existing activities
     const enrichedProjects = await this.matchProjectsToActivities(
-      result.data.projects,
+      filteredProjects,
       existingActivities,
     );
 
@@ -259,10 +263,11 @@ export class DailySynthesisExtractionService {
 
 Проанализируй daily-отчёт за ${dateStr}${focusLine} и извлеки:
 
-1. **ПРОЕКТЫ** — любые упоминания проектов, инициатив, дел над которыми ведётся работа
+1. **ПРОЕКТЫ** — упоминания проектов, инициатив, дел над которыми ведётся работа
    - Если проект похож на существующий — установи isNew: false и укажи existingActivityId
    - Если это новый проект — установи isNew: true
    - Извлеки упомянутых участников и клиента
+   - Добавь description, priority, deadline, tags где доступны
 
 2. **ЗАДАЧИ** — конкретные действия, TODO, что нужно сделать
    - Определи статус: pending (нужно сделать), in_progress (в работе), done (сделано)
@@ -273,12 +278,33 @@ export class DailySynthesisExtractionService {
    - Определи кто кому что обещал
    - "self" означает владельца системы (автора отчёта)
    - Типы: promise (обещал сделать), request (просьба от другого), agreement (взаимная договорённость)
+   - Если обязательство связано с проектом — укажи projectName
 
 4. **СВЯЗИ** — кто с кем работает, кто клиент, кто ответственный
    - project_member: человек участвует в проекте
    - works_on: человек работает над задачей
    - client_of: клиент проекта
    - responsible_for: ответственный за направление
+
+══════════════════════════════════════════
+КРИТЕРИИ ИЗВЛЕЧЕНИЯ ПРОЕКТОВ
+══════════════════════════════════════════
+
+Проект ДОЛЖЕН удовлетворять хотя бы 3 из 5 индикаторов:
+1. **Duration (hasDuration)** — работа охватывает несколько дней/недель/месяцев
+2. **Structure (hasStructure)** — есть под-задачи, этапы или вехи
+3. **Deliverable (hasDeliverable)** — есть конкретный результат (документ, продукт, событие)
+4. **Team (hasTeam)** — вовлечены несколько людей
+5. **Explicit context (hasExplicitContext)** — явно упомянуто как "проект", "работа", "инициатива"
+
+НЕ извлекай как проекты:
+- Разовые покупки ("купить молоко", "заказать оборудование")
+- Простые напоминания ("позвонить завтра")
+- Одношаговые задачи без командного участия
+- Общие темы без конкретных действий
+
+Для каждого проекта заполни projectIndicators с boolean значениями для каждого критерия.
+Также извлеки: description (краткое описание scope), priority, deadline, tags где доступны.
 
 ══════════════════════════════════════════
 СУЩЕСТВУЮЩИЕ АКТИВНОСТИ (для сопоставления)
@@ -309,8 +335,42 @@ ${synthesisText}
 
 4. Для self — используй строку "self", не пытайся угадать имя владельца
 
+5. Для commitments: если обязательство явно связано с проектом или задачей, укажи projectName
+
 Заполни все обязательные поля JSON Schema.
 `;
+  }
+
+  /**
+   * Filter out low-quality project extractions.
+   * Projects with low confidence or insufficient indicators are removed.
+   *
+   * Note: The prompt asks Claude for 3/5 indicators, but code accepts 2/5 as a safety net.
+   * This intentional relaxation accounts for LLM extraction inaccuracies.
+   */
+  private filterLowQualityProjects(projects: ExtractedProject[]): ExtractedProject[] {
+    return projects.filter((project) => {
+      // Minimum confidence threshold
+      if (project.confidence < 0.6) {
+        this.logger.debug(
+          `[daily-extraction] Filtered project "${project.name}": low confidence ${project.confidence}`,
+        );
+        return false;
+      }
+
+      // Check project indicators (need at least 2 of 5)
+      if (project.projectIndicators) {
+        const indicatorCount = Object.values(project.projectIndicators).filter(Boolean).length;
+        if (indicatorCount < 2) {
+          this.logger.debug(
+            `[daily-extraction] Filtered project "${project.name}": only ${indicatorCount}/5 indicators`,
+          );
+          return false;
+        }
+      }
+
+      return true;
+    });
   }
 
   /**

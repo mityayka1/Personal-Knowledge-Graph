@@ -1,6 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import {
   Activity,
   ActivityType,
@@ -8,7 +6,6 @@ import {
   ActivityPriority,
   CommitmentType,
   CommitmentPriority,
-  EntityRecord,
 } from '@pkg/entities';
 import { ActivityService } from '../activity/activity.service';
 import { CommitmentService, CreateCommitmentDto } from '../activity/commitment.service';
@@ -17,6 +14,8 @@ import {
   ExtractedTask,
   ExtractedCommitment,
 } from './daily-synthesis-extraction.types';
+import { ClientResolutionService } from './client-resolution.service';
+import { ActivityMemberService } from '../activity/activity-member.service';
 
 /**
  * Input for persisting extracted items.
@@ -71,8 +70,8 @@ export class ExtractionPersistenceService {
   constructor(
     private readonly activityService: ActivityService,
     private readonly commitmentService: CommitmentService,
-    @InjectRepository(EntityRecord)
-    private readonly entityRepo: Repository<EntityRecord>,
+    private readonly clientResolutionService: ClientResolutionService,
+    private readonly activityMemberService: ActivityMemberService,
   ) {}
 
   /**
@@ -106,6 +105,22 @@ export class ExtractionPersistenceService {
         result.projectsCreated++;
         projectMap.set(project.name.toLowerCase(), activity.id);
         this.logger.debug(`Created project: ${activity.name} (${activity.id})`);
+
+        // Create ActivityMember records
+        if (project.participants?.length) {
+          try {
+            await this.activityMemberService.resolveAndCreateMembers({
+              activityId: activity.id,
+              participants: project.participants,
+              ownerEntityId: input.ownerEntityId,
+              clientEntityId: activity.clientEntityId ?? undefined,
+            });
+          } catch (memberError) {
+            this.logger.warn(
+              `Failed to create members for project "${project.name}": ${memberError instanceof Error ? memberError.message : 'Unknown'}`,
+            );
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         result.errors.push({ item: `project:${project.name}`, error: message });
@@ -133,7 +148,7 @@ export class ExtractionPersistenceService {
     // 3. Persist commitments
     for (const commitment of input.commitments) {
       try {
-        const created = await this.persistCommitment(commitment, input);
+        const created = await this.persistCommitment(commitment, input, projectMap);
         result.commitmentIds.push(created.id);
         result.commitmentsCreated++;
         this.logger.debug(`Created commitment: ${created.title} (${created.id})`);
@@ -171,11 +186,20 @@ export class ExtractionPersistenceService {
       return existing;
     }
 
-    // Try to resolve client entity
+    // Try to resolve client entity via 3-strategy approach
     let clientEntityId: string | undefined;
-    if (project.client) {
-      const client = await this.findEntityByName(project.client);
-      clientEntityId = client?.id;
+    let clientResolutionMethod: string | undefined;
+    const clientResult = await this.clientResolutionService.resolveClient({
+      clientName: project.client,
+      participants: project.participants,
+      ownerEntityId: input.ownerEntityId,
+    });
+    if (clientResult) {
+      clientEntityId = clientResult.entityId;
+      clientResolutionMethod = clientResult.method;
+      this.logger.debug(
+        `Resolved client for project "${project.name}": "${clientResult.entityName}" via ${clientResult.method}`,
+      );
     }
 
     return this.activityService.create({
@@ -184,13 +208,16 @@ export class ExtractionPersistenceService {
       status: this.mapProjectStatus(project.status),
       ownerEntityId: input.ownerEntityId,
       clientEntityId,
+      description: project.description,
+      deadline: project.deadline,
+      tags: project.tags,
       metadata: {
         extractedFrom: 'daily_synthesis',
         synthesisDate: input.synthesisDate,
         focusTopic: input.focusTopic,
-        participants: project.participants,
         sourceQuote: project.sourceQuote,
         confidence: project.confidence,
+        clientResolutionMethod,
       },
     });
   }
@@ -228,23 +255,30 @@ export class ExtractionPersistenceService {
   private async persistCommitment(
     commitment: ExtractedCommitment,
     input: PersistExtractionInput,
+    projectMap: Map<string, string>,
   ): Promise<{ id: string; title: string }> {
     // Resolve from/to entities
     let fromEntityId = input.ownerEntityId;
     let toEntityId = input.ownerEntityId;
 
     if (commitment.from !== 'self') {
-      const fromEntity = await this.findEntityByName(commitment.from);
+      const fromEntity = await this.clientResolutionService.findEntityByName(commitment.from);
       if (fromEntity) {
         fromEntityId = fromEntity.id;
       }
     }
 
     if (commitment.to !== 'self') {
-      const toEntity = await this.findEntityByName(commitment.to);
+      const toEntity = await this.clientResolutionService.findEntityByName(commitment.to);
       if (toEntity) {
         toEntityId = toEntity.id;
       }
+    }
+
+    // Resolve activityId from projectMap
+    let activityId: string | undefined;
+    if (commitment.projectName) {
+      activityId = projectMap.get(commitment.projectName.toLowerCase());
     }
 
     const dto: CreateCommitmentDto = {
@@ -252,6 +286,7 @@ export class ExtractionPersistenceService {
       title: commitment.what,
       fromEntityId,
       toEntityId,
+      activityId,
       priority: this.mapCommitmentPriority(commitment.priority),
       dueDate: commitment.deadline ? new Date(commitment.deadline) : undefined,
       confidence: commitment.confidence,
@@ -265,21 +300,6 @@ export class ExtractionPersistenceService {
 
     const created = await this.commitmentService.create(dto);
     return { id: created.id, title: created.title };
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Private: Entity Resolution
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Find entity by name (fuzzy match).
-   */
-  private async findEntityByName(name: string): Promise<EntityRecord | null> {
-    return this.entityRepo
-      .createQueryBuilder('e')
-      .where('e.name ILIKE :pattern', { pattern: `%${name}%` })
-      .orderBy('e.updatedAt', 'DESC')
-      .getOne();
   }
 
   // ─────────────────────────────────────────────────────────────

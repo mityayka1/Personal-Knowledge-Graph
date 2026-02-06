@@ -13,8 +13,22 @@ import { CommitmentType, CommitmentPriority } from '@pkg/entities';
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Extracted project from daily synthesis.
+ * Indicators that help determine whether an extraction is a real project
+ * vs a one-off task or purchase.
  */
+export interface ProjectIndicators {
+  /** Project spans multiple days/weeks/months */
+  hasDuration: boolean;
+  /** There are sub-tasks, phases, or milestones */
+  hasStructure: boolean;
+  /** There is a concrete deliverable (document, product, event) */
+  hasDeliverable: boolean;
+  /** Multiple people are involved */
+  hasTeam: boolean;
+  /** Explicitly mentioned as "project", "work", or "initiative" */
+  hasExplicitContext: boolean;
+}
+
 export interface ExtractedProject {
   /** Project name as mentioned in synthesis */
   name: string;
@@ -28,6 +42,16 @@ export interface ExtractedProject {
   client?: string;
   /** Status if mentioned (active, blocked, completed) */
   status?: string;
+  /** Brief description of the project scope */
+  description?: string;
+  /** Priority level */
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+  /** Project deadline if mentioned (ISO 8601) */
+  deadline?: string;
+  /** Tags/labels for categorization */
+  tags?: string[];
+  /** Indicators that classify this as a real project */
+  projectIndicators?: ProjectIndicators;
   /** Context snippet for this extraction */
   sourceQuote?: string;
   /** Confidence of extraction (0-1) */
@@ -74,6 +98,8 @@ export interface ExtractedCommitment {
   type: 'promise' | 'request' | 'agreement' | 'deadline' | 'reminder' | 'meeting';
   /** Priority if inferable */
   priority?: 'high' | 'medium' | 'low';
+  /** Related project name if commitment is tied to a project */
+  projectName?: string;
   /** Context snippet */
   sourceQuote?: string;
   /** Confidence of extraction (0-1) */
@@ -174,7 +200,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
   properties: {
     projects: {
       type: 'array',
-      description: 'Detected projects mentioned in synthesis',
+      description: 'Detected projects mentioned in synthesis. Must satisfy at least 3 of 5 project indicators.',
       items: {
         type: 'object',
         properties: {
@@ -188,10 +214,34 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           },
           client: { type: 'string', description: 'Client name if mentioned' },
           status: { type: 'string', description: 'Status: active, blocked, completed' },
+          description: { type: 'string', description: 'Brief description of the project scope' },
+          priority: {
+            type: 'string',
+            enum: ['low', 'medium', 'high', 'urgent'],
+            description: 'Priority level if inferable',
+          },
+          deadline: { type: 'string', description: 'Project deadline in ISO 8601 format if mentioned' },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Tags or labels for categorization (e.g., "backend", "design", "marketing")',
+          },
+          projectIndicators: {
+            type: 'object',
+            description: 'Indicators that classify this as a real project (at least 3 of 5 should be true)',
+            properties: {
+              hasDuration: { type: 'boolean', description: 'Project spans multiple days/weeks/months' },
+              hasStructure: { type: 'boolean', description: 'There are sub-tasks, phases, or milestones' },
+              hasDeliverable: { type: 'boolean', description: 'There is a concrete deliverable (document, product, event)' },
+              hasTeam: { type: 'boolean', description: 'Multiple people are involved' },
+              hasExplicitContext: { type: 'boolean', description: 'Explicitly mentioned as "project", "work", or "initiative"' },
+            },
+            required: ['hasDuration', 'hasStructure', 'hasDeliverable', 'hasTeam', 'hasExplicitContext'],
+          },
           sourceQuote: { type: 'string', description: 'Relevant quote from synthesis' },
           confidence: { type: 'number', description: 'Confidence 0-1' },
         },
-        required: ['name', 'isNew', 'participants', 'confidence'],
+        required: ['name', 'isNew', 'participants', 'confidence', 'projectIndicators'],
       },
     },
     tasks: {
@@ -203,6 +253,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           title: { type: 'string', description: 'Task title' },
           projectName: { type: 'string', description: 'Parent project name' },
           deadline: { type: 'string', description: 'ISO 8601 deadline if known' },
+          requestedBy: { type: 'string', description: 'Who requested this task ("self" or entity name/UUID)' },
           assignee: { type: 'string', description: '"self" or person name' },
           status: { type: 'string', enum: ['pending', 'in_progress', 'done'], description: 'Task status' },
           priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Priority' },
@@ -224,10 +275,11 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           deadline: { type: 'string', description: 'Due date ISO 8601' },
           type: {
             type: 'string',
-            enum: ['promise', 'request', 'agreement', 'deadline', 'reminder'],
+            enum: ['promise', 'request', 'agreement', 'deadline', 'reminder', 'meeting'],
             description: 'Commitment type',
           },
           priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+          projectName: { type: 'string', description: 'Related project name if commitment is tied to a project' },
           sourceQuote: { type: 'string', description: 'Relevant quote' },
           confidence: { type: 'number', description: 'Confidence 0-1' },
         },
