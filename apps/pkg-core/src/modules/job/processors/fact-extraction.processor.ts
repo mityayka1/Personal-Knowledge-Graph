@@ -37,10 +37,7 @@ export class FactExtractionProcessor extends WorkerHost {
         return { success: true, skipped: 'bot' };
       }
 
-      // Single unified extraction call replaces 3 separate flows:
-      // 1. FactExtractionService.extractFactsAgentBatch()
-      // 2. EventExtractionService.extractEventsBatch()
-      // 3. SecondBrainExtractionService.extractFromMessages()
+      // Single unified extraction call for facts, events, and relations
       const result = await this.unifiedExtractionService.extract({
         entityId,
         entityName: entity.name,
