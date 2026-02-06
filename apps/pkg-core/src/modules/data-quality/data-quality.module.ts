@@ -9,15 +9,15 @@ import {
 } from '@pkg/entities';
 import { DataQualityService } from './data-quality.service';
 import { DataQualityToolsProvider } from './data-quality-tools.provider';
+import { DataQualityController } from './data-quality.controller';
 
 /**
  * DataQualityModule -- data quality auditing and issue resolution.
  *
  * Provides:
+ * - DataQualityController -- REST API for audits, reports, merge
  * - DataQualityService -- audit logic, duplicate detection, merge
  * - DataQualityToolsProvider -- AI agent tools for quality audits
- *
- * No controller in this module -- REST API is added separately in P4.3.
  */
 @Module({
   imports: [
@@ -29,6 +29,7 @@ import { DataQualityToolsProvider } from './data-quality-tools.provider';
       EntityRelation,
     ]),
   ],
+  controllers: [DataQualityController],
   providers: [DataQualityService, DataQualityToolsProvider],
   exports: [DataQualityService, DataQualityToolsProvider],
 })

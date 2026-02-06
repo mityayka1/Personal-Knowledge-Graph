@@ -376,6 +376,22 @@ export class DataQualityService {
   // ─────────────────────────────────────────────────────────────
 
   /**
+   * Get paginated list of data quality reports, ordered by reportDate DESC.
+   */
+  async getReports(
+    limit = 20,
+    offset = 0,
+  ): Promise<{ data: DataQualityReport[]; total: number }> {
+    const [data, total] = await this.reportRepo.findAndCount({
+      order: { reportDate: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
+
+    return { data, total };
+  }
+
+  /**
    * Get the latest data quality report.
    */
   async getLatestReport(): Promise<DataQualityReport | null> {
