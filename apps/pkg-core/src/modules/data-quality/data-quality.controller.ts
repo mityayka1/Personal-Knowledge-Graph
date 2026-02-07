@@ -20,13 +20,16 @@ import { MergeActivitiesDto } from './dto/merge-activities.dto';
  * DataQualityController -- REST API for data quality auditing and resolution.
  *
  * Endpoints:
- * - POST   /api/v1/data-quality/audit              -- run full audit
- * - GET    /api/v1/data-quality/reports             -- list reports (paginated)
- * - GET    /api/v1/data-quality/reports/latest      -- latest report
- * - GET    /api/v1/data-quality/reports/:id         -- report by ID
- * - PATCH  /api/v1/data-quality/reports/:id/resolve -- resolve an issue
- * - GET    /api/v1/data-quality/metrics             -- current metrics (no report saved)
- * - POST   /api/v1/data-quality/merge               -- merge duplicate activities
+ * - POST   /api/v1/data-quality/audit                -- run full audit
+ * - GET    /api/v1/data-quality/reports               -- list reports (paginated)
+ * - GET    /api/v1/data-quality/reports/latest        -- latest report
+ * - GET    /api/v1/data-quality/reports/:id           -- report by ID
+ * - PATCH  /api/v1/data-quality/reports/:id/resolve   -- resolve an issue
+ * - GET    /api/v1/data-quality/metrics               -- current metrics (no report saved)
+ * - POST   /api/v1/data-quality/merge                 -- merge duplicate activities
+ * - POST   /api/v1/data-quality/auto-merge-duplicates -- auto-merge all duplicate groups
+ * - POST   /api/v1/data-quality/auto-assign-orphans   -- auto-assign orphaned tasks to parents
+ * - POST   /api/v1/data-quality/auto-resolve-clients  -- auto-resolve missing client entities
  */
 @ApiTags('data-quality')
 @Controller('data-quality')
@@ -115,5 +118,36 @@ export class DataQualityController {
       `Merging ${dto.mergeIds.length} activities into ${dto.keepId}`,
     );
     return this.dataQualityService.mergeActivities(dto.keepId, dto.mergeIds);
+  }
+
+  /**
+   * Auto-merge all detected duplicate groups.
+   * Selects the best "keeper" per group (most children → members → oldest)
+   * and merges the rest into it.
+   */
+  @Post('auto-merge-duplicates')
+  async autoMergeDuplicates() {
+    this.logger.log('Running auto-merge for all duplicate groups');
+    return this.dataQualityService.autoMergeAllDuplicates();
+  }
+
+  /**
+   * Auto-assign orphaned tasks to appropriate parent projects.
+   * Uses multi-strategy resolution: name containment → batch → single project → "Unsorted Tasks".
+   */
+  @Post('auto-assign-orphans')
+  async autoAssignOrphans() {
+    this.logger.log('Running auto-assign for orphaned tasks');
+    return this.dataQualityService.autoAssignOrphanedTasks();
+  }
+
+  /**
+   * Auto-resolve missing client entities on PROJECT/BUSINESS activities.
+   * Uses 3-strategy resolution: explicit name → participant org → name search.
+   */
+  @Post('auto-resolve-clients')
+  async autoResolveClients() {
+    this.logger.log('Running auto-resolve for missing client entities');
+    return this.dataQualityService.autoResolveClients();
   }
 }

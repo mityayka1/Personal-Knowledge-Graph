@@ -10,13 +10,17 @@ import {
 import { DataQualityService } from './data-quality.service';
 import { DataQualityToolsProvider } from './data-quality-tools.provider';
 import { DataQualityController } from './data-quality.controller';
+import { OrphanResolutionService } from './orphan-resolution.service';
+import { ActivityModule } from '../activity/activity.module';
+import { ExtractionModule } from '../extraction/extraction.module';
 
 /**
  * DataQualityModule -- data quality auditing and issue resolution.
  *
  * Provides:
  * - DataQualityController -- REST API for audits, reports, merge
- * - DataQualityService -- audit logic, duplicate detection, merge
+ * - DataQualityService -- audit logic, duplicate detection, merge, orphan resolution
+ * - OrphanResolutionService -- multi-strategy orphan task assignment
  * - DataQualityToolsProvider -- AI agent tools for quality audits
  */
 @Module({
@@ -28,9 +32,11 @@ import { DataQualityController } from './data-quality.controller';
       Commitment,
       EntityRelation,
     ]),
+    ActivityModule,
+    ExtractionModule,
   ],
   controllers: [DataQualityController],
-  providers: [DataQualityService, DataQualityToolsProvider],
+  providers: [DataQualityService, OrphanResolutionService, DataQualityToolsProvider],
   exports: [DataQualityService, DataQualityToolsProvider],
 })
 export class DataQualityModule {}

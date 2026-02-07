@@ -18,6 +18,7 @@ import { DataQualityService } from './data-quality.service';
  * - Merge duplicate activities
  * - Find orphaned tasks without valid parents
  * - Get data quality reports
+ * - Auto-fix detected data quality issues (duplicates, orphans, missing clients)
  */
 @Injectable()
 export class DataQualityToolsProvider {
@@ -246,6 +247,102 @@ Run run_data_quality_audit first if no reports exist.`,
             });
           } catch (error) {
             return handleToolError(error, this.logger, 'get_data_quality_report');
+          }
+        },
+      ),
+
+      tool(
+        'auto_fix_data_quality',
+        `Auto-fix detected data quality issues. Sequentially runs: 1) merge duplicate activities, 2) assign orphaned tasks to parents, 3) resolve missing client entities. Each step is independent — failures in one step won't affect others.`,
+        {
+          fixDuplicates: z
+            .boolean()
+            .default(true)
+            .describe(
+              'Merge duplicate activity groups found by name similarity. Default: true.',
+            ),
+          fixOrphans: z
+            .boolean()
+            .default(true)
+            .describe(
+              'Assign orphaned tasks (no valid parent) to appropriate parent projects. Default: true.',
+            ),
+          fixClients: z
+            .boolean()
+            .default(true)
+            .describe(
+              'Resolve missing client entities on activities. Default: true.',
+            ),
+        },
+        async (args) => {
+          try {
+            const errors: string[] = [];
+            let duplicates = null;
+            let orphans = null;
+            let clients = null;
+
+            // Step 1: Merge duplicates
+            if (args.fixDuplicates) {
+              try {
+                duplicates =
+                  await this.dataQualityService.autoMergeAllDuplicates();
+              } catch (error) {
+                const msg =
+                  error instanceof Error ? error.message : String(error);
+                errors.push(`fixDuplicates failed: ${msg}`);
+                this.logger.error(
+                  `auto_fix_data_quality: fixDuplicates failed: ${msg}`,
+                );
+              }
+            }
+
+            // Step 2: Assign orphaned tasks
+            if (args.fixOrphans) {
+              try {
+                orphans =
+                  await this.dataQualityService.autoAssignOrphanedTasks();
+              } catch (error) {
+                const msg =
+                  error instanceof Error ? error.message : String(error);
+                errors.push(`fixOrphans failed: ${msg}`);
+                this.logger.error(
+                  `auto_fix_data_quality: fixOrphans failed: ${msg}`,
+                );
+              }
+            }
+
+            // Step 3: Resolve missing clients
+            if (args.fixClients) {
+              try {
+                clients =
+                  await this.dataQualityService.autoResolveClients();
+              } catch (error) {
+                const msg =
+                  error instanceof Error ? error.message : String(error);
+                errors.push(`fixClients failed: ${msg}`);
+                this.logger.error(
+                  `auto_fix_data_quality: fixClients failed: ${msg}`,
+                );
+              }
+            }
+
+            return toolSuccess({
+              summary: {
+                duplicatesMerged: duplicates?.totalMerged ?? 0,
+                orphansResolved: orphans?.resolved ?? 0,
+                clientsResolved: clients?.resolved ?? 0,
+                errors,
+              },
+              duplicates,
+              orphans,
+              clients,
+            });
+          } catch (error) {
+            return handleToolError(
+              error,
+              this.logger,
+              'auto_fix_data_quality',
+            );
           }
         },
       ),

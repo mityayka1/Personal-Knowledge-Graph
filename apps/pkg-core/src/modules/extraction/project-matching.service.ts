@@ -59,6 +59,29 @@ const DEFAULT_THRESHOLD = 0.8;
  */
 @Injectable()
 export class ProjectMatchingService {
+  /**
+   * Normalize a project/activity name for comparison.
+   *
+   * Removes:
+   * - Cost/amount annotations in parentheses, e.g. "(424.39₽)", "(1.5M RUB)"
+   * - Leading/trailing whitespace
+   * - Trailing punctuation
+   * - Collapses multiple spaces into one
+   *
+   * Keeps the meaningful part of the name for matching.
+   */
+  static normalizeName(name: string): string {
+    return name
+      .trim()
+      .toLowerCase()
+      .replace(
+        /\s*\([^)]*(?:₽|руб|rub|тыс|млн|usd|eur|\$|k\b|m\b)[^)]*\)/gi,
+        '',
+      )
+      .replace(/\s+/g, ' ')
+      .replace(/[.,;:!]+$/, '')
+      .trim();
+  }
   private readonly logger = new Logger(ProjectMatchingService.name);
 
   constructor(
@@ -156,11 +179,14 @@ export class ProjectMatchingService {
       return [];
     }
 
-    // Score each activity against the input name
-    const normalizedName = name.trim().toLowerCase();
+    // Score each activity against the input name (normalized to strip cost annotations etc.)
+    const normalizedName = ProjectMatchingService.normalizeName(name);
     const scored: ProjectCandidate[] = activities.map((activity) => ({
       activity,
-      similarity: this.calculateSimilarity(normalizedName, activity.name.trim().toLowerCase()),
+      similarity: this.calculateSimilarity(
+        normalizedName,
+        ProjectMatchingService.normalizeName(activity.name),
+      ),
     }));
 
     // Sort by similarity descending, then by lastActivityAt for ties

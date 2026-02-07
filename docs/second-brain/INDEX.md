@@ -20,7 +20,7 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-2, REST API, Data Quality Completed) |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-5, DQ Remediation Completed) |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
 
 ---
@@ -104,6 +104,20 @@
 | `GET /activities/:id/members` | Список участников |
 
 Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Activity API section
+
+#### Data Quality Remediation (Phase 5) -- Completed
+
+Автоматическое исправление проблем качества данных, обнаруженных первым DQ-аудитом.
+
+| Фаза | Описание | Статус |
+|------|----------|--------|
+| **Phase 5.1** | normalizeName() + autoMergeAllDuplicates | ✅ Completed |
+| **Phase 5.2** | OrphanResolutionService + auto-assign orphans | ✅ Completed |
+| **Phase 5.3** | Auto-resolve missing client entities | ✅ Completed |
+| **Phase 5.4** | Agent Tools — Activity CRUD + auto-fix | ✅ Completed |
+| **Phase 5.5** | Extraction pipeline prevention (two-tier matching, normalization, task dedup) | ✅ Completed |
+
+Детали: [`apps/pkg-core/docs/plans/proud-prancing-squid.md`](../../apps/pkg-core/docs/plans/proud-prancing-squid.md)
 
 #### Data Quality System (Phase 6) -- Completed
 

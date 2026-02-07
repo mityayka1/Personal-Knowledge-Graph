@@ -1,3 +1,4 @@
+Жцй::wq
 # PKG Second Brain — Implementation Checklist
 
 > Краткий чеклист для отслеживания прогресса. Детали в [INDEX.md](./INDEX.md)

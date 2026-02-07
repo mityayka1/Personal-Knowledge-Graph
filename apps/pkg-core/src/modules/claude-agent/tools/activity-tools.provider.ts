@@ -3,11 +3,15 @@ import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { toolSuccess, toolEmptyResult, handleToolError, type ToolDefinition } from './tool.types';
 import { ActivityService } from '../../activity/activity.service';
+import { ActivityValidationService } from '../../activity/activity-validation.service';
+import { ActivityMemberService } from '../../activity/activity-member.service';
+import { CommitmentService } from '../../activity/commitment.service';
 import {
   ActivityType,
   ActivityStatus,
   ActivityContext,
   ActivityPriority,
+  ActivityMemberRole,
 } from '@pkg/entities';
 
 /**
@@ -27,6 +31,12 @@ export class ActivityToolsProvider {
   constructor(
     @Inject(forwardRef(() => ActivityService))
     private readonly activityService: ActivityService,
+    @Inject(forwardRef(() => ActivityValidationService))
+    private readonly activityValidationService: ActivityValidationService,
+    @Inject(forwardRef(() => ActivityMemberService))
+    private readonly activityMemberService: ActivityMemberService,
+    @Inject(forwardRef(() => CommitmentService))
+    private readonly commitmentService: CommitmentService,
   ) {}
 
   /**
@@ -415,6 +425,232 @@ Useful for daily morning brief.`,
             });
           } catch (error) {
             return handleToolError(error, this.logger, 'get_today_deadlines');
+          }
+        }
+      ),
+
+      // ─────────────────────────────────────────────────────────────
+      // Mutation tools
+      // ─────────────────────────────────────────────────────────────
+
+      tool(
+        'create_activity',
+        `Create a new activity (project, task, area, etc.).
+Validates hierarchy rules: e.g. task can only be under project/initiative/habit/learning/event_series.
+TYPES: area, business, direction, project, task, initiative, milestone, habit, learning, event_series
+CONTEXT: work, personal, any, location_based
+PRIORITY: critical, high, medium, low, none`,
+        {
+          name: z.string().min(1).max(500).describe('Activity name'),
+          activityType: z.enum([
+            'area', 'business', 'direction', 'project', 'task',
+            'initiative', 'milestone', 'habit', 'learning', 'event_series',
+          ]).describe('Type of activity to create'),
+          description: z.string().optional()
+            .describe('Detailed description of the activity'),
+          parentId: z.string().uuid().optional()
+            .describe('Parent activity ID for nesting (e.g. task under project)'),
+          ownerEntityId: z.string().uuid()
+            .describe('Entity ID of the owner/responsible person'),
+          clientEntityId: z.string().uuid().optional()
+            .describe('Entity ID of the client (for client projects)'),
+          context: z.enum(['work', 'personal', 'any', 'location_based']).optional()
+            .describe('Life context for the activity'),
+          priority: z.enum(['critical', 'high', 'medium', 'low', 'none']).optional()
+            .describe('Priority level'),
+          deadline: z.string().optional()
+            .describe('Deadline in ISO 8601 format (e.g. "2025-03-15T18:00:00Z")'),
+          tags: z.array(z.string()).optional()
+            .describe('Tags for categorization (e.g. ["urgent", "frontend"])'),
+        },
+        async (args) => {
+          try {
+            // Validate hierarchy before creation
+            await this.activityValidationService.validateCreate({
+              activityType: args.activityType as ActivityType,
+              parentId: args.parentId,
+            });
+
+            const activity = await this.activityService.create({
+              name: args.name,
+              activityType: args.activityType as ActivityType,
+              description: args.description,
+              parentId: args.parentId,
+              ownerEntityId: args.ownerEntityId,
+              clientEntityId: args.clientEntityId,
+              context: args.context as ActivityContext,
+              priority: args.priority as ActivityPriority,
+              deadline: args.deadline,
+              tags: args.tags,
+            });
+
+            return toolSuccess({
+              message: `Activity "${activity.name}" created successfully`,
+              activity: {
+                id: activity.id,
+                name: activity.name,
+                type: activity.activityType,
+                parentId: activity.parentId,
+                status: activity.status,
+              },
+            });
+          } catch (error) {
+            return handleToolError(error, this.logger, 'create_activity');
+          }
+        }
+      ),
+
+      tool(
+        'update_activity',
+        `Update an existing activity. Only provided fields are changed, others remain unchanged.
+Use null to clear optional fields (description, parentId, clientEntityId, deadline, tags, progress).
+Moving to a new parent validates hierarchy rules and checks for cycles.`,
+        {
+          activityId: z.string().uuid().describe('ID of the activity to update'),
+          name: z.string().min(1).max(500).optional()
+            .describe('New name for the activity'),
+          description: z.string().nullable().optional()
+            .describe('New description (null to clear)'),
+          parentId: z.string().uuid().nullable().optional()
+            .describe('New parent activity ID (null to move to root)'),
+          clientEntityId: z.string().uuid().nullable().optional()
+            .describe('New client entity ID (null to unlink)'),
+          context: z.enum(['work', 'personal', 'any', 'location_based']).optional()
+            .describe('New life context'),
+          priority: z.enum(['critical', 'high', 'medium', 'low', 'none']).optional()
+            .describe('New priority level'),
+          deadline: z.string().nullable().optional()
+            .describe('New deadline ISO 8601 (null to clear)'),
+          tags: z.array(z.string()).nullable().optional()
+            .describe('New tags array (null to clear)'),
+          progress: z.number().int().min(0).max(100).optional()
+            .describe('Progress percentage 0-100'),
+        },
+        async (args) => {
+          try {
+            // If parentId is changing, validate hierarchy and cycles
+            if (args.parentId !== undefined) {
+              const current = await this.activityService.findOne(args.activityId);
+              await this.activityValidationService.validateUpdate({
+                activityId: args.activityId,
+                activityType: current.activityType,
+                newParentId: args.parentId,
+              });
+            }
+
+            const activity = await this.activityService.update(args.activityId, {
+              name: args.name,
+              description: args.description,
+              parentId: args.parentId,
+              clientEntityId: args.clientEntityId,
+              context: args.context as ActivityContext,
+              priority: args.priority as ActivityPriority,
+              deadline: args.deadline,
+              tags: args.tags,
+              progress: args.progress,
+            });
+
+            return toolSuccess({
+              message: `Activity "${activity.name}" updated successfully`,
+              activity: {
+                id: activity.id,
+                name: activity.name,
+                type: activity.activityType,
+                status: activity.status,
+              },
+            });
+          } catch (error) {
+            return handleToolError(error, this.logger, 'update_activity');
+          }
+        }
+      ),
+
+      tool(
+        'manage_activity_members',
+        `Add or remove a member from an activity.
+Use to assign people to projects/tasks or remove them.
+Duplicate adds are ignored (idempotent).
+ROLES: owner, member, observer, assignee, reviewer, client, consultant`,
+        {
+          activityId: z.string().uuid().describe('Activity ID'),
+          action: z.enum(['add', 'remove']).describe('Action: add or remove member'),
+          entityId: z.string().uuid().describe('Entity ID of the person/organization'),
+          role: z.enum(['owner', 'member', 'observer', 'assignee', 'reviewer', 'client', 'consultant'])
+            .default('member')
+            .describe('Role of the member in the activity (default: member)'),
+        },
+        async (args) => {
+          try {
+            if (args.action === 'add') {
+              const member = await this.activityMemberService.addMember({
+                activityId: args.activityId,
+                entityId: args.entityId,
+                role: args.role as ActivityMemberRole,
+              });
+
+              if (member) {
+                return toolSuccess({
+                  message: `Member added to activity with role "${args.role}"`,
+                  member: {
+                    id: member.id,
+                    activityId: member.activityId,
+                    entityId: member.entityId,
+                    role: member.role,
+                  },
+                });
+              }
+
+              return toolSuccess({
+                message: `Member already exists in this activity with role "${args.role}" (no changes made)`,
+              });
+            }
+
+            // action === 'remove'
+            await this.activityMemberService.deactivateMember(
+              args.activityId,
+              args.entityId,
+            );
+
+            return toolSuccess({
+              message: 'Member removed from activity',
+              activityId: args.activityId,
+              entityId: args.entityId,
+            });
+          } catch (error) {
+            return handleToolError(error, this.logger, 'manage_activity_members');
+          }
+        }
+      ),
+
+      tool(
+        'assign_commitment_to_activity',
+        `Link or unlink a commitment (promise/obligation) to an activity.
+Use to associate commitments with relevant projects or tasks.
+Pass null for activityId to unlink.`,
+        {
+          commitmentId: z.string().uuid().describe('Commitment ID to update'),
+          activityId: z.string().uuid().nullable()
+            .describe('Activity ID to link to (null to unlink from current activity)'),
+        },
+        async (args) => {
+          try {
+            const commitment = await this.commitmentService.update(
+              args.commitmentId,
+              { activityId: args.activityId ?? undefined },
+            );
+
+            return toolSuccess({
+              message: args.activityId
+                ? `Commitment linked to activity`
+                : `Commitment unlinked from activity`,
+              commitment: {
+                id: commitment.id,
+                title: commitment.title,
+                activityId: commitment.activityId ?? null,
+              },
+            });
+          } catch (error) {
+            return handleToolError(error, this.logger, 'assign_commitment_to_activity');
           }
         }
       ),
