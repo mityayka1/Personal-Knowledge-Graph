@@ -51,6 +51,7 @@ describe('DraftExtractionService', () => {
             create: jest.fn((data) => ({ id: 'activity-id', ...data })),
             save: jest.fn((data) => Promise.resolve({ id: 'activity-id', ...data })),
             createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
+            find: jest.fn().mockResolvedValue([]),
             findOneOrFail: jest.fn().mockImplementation(({ where }) =>
               Promise.resolve({
                 id: where.id,
@@ -746,6 +747,299 @@ describe('DraftExtractionService', () => {
 
       expect(result.skipped.projects).toBe(1);
       expect(result.counts.projects).toBe(0);
+    });
+  });
+
+  describe('Phase 5.5: extraction pipeline prevention', () => {
+    it('should create project with possibleDuplicate flag for weak match (0.6-0.8)', async () => {
+      // Mock: fuzzy match returns matched=true with similarity 0.75 (weak match zone)
+      projectMatchingService.findBestMatch.mockResolvedValueOnce({
+        matched: true,
+        similarity: 0.75,
+        activity: {
+          id: 'similar-activity-id',
+          name: 'Existing Similar Project',
+        } as Activity,
+      });
+
+      // Create a custom query builder to capture the metadata values
+      const valuesQb = createQueryBuilderMock();
+      activityRepo.createQueryBuilder = jest.fn().mockReturnValue(valuesQb);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Similar Project v2',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      // Project should be CREATED (not skipped) with possibleDuplicate flag
+      expect(result.counts.projects).toBe(1);
+      expect(result.skipped.projects).toBe(0);
+
+      // Verify metadata contains possibleDuplicate
+      expect(valuesQb.values).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            possibleDuplicate: {
+              matchedActivityId: 'similar-activity-id',
+              matchedName: 'Existing Similar Project',
+              similarity: 0.75,
+            },
+          }),
+        }),
+      );
+    });
+
+    it('should skip project for strong match (>= 0.8)', async () => {
+      projectMatchingService.findBestMatch.mockResolvedValueOnce({
+        matched: true,
+        similarity: 0.85,
+        activity: {
+          id: 'existing-id',
+          name: 'Strong Match Project',
+        } as Activity,
+      });
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Strong Match Projekt',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      // Project should be SKIPPED (strong match)
+      expect(result.skipped.projects).toBe(1);
+      expect(result.counts.projects).toBe(0);
+    });
+
+    it('should create project normally when no match (< 0.6)', async () => {
+      // Default mock: no match (matched=false, similarity=0)
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Completely New Project',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [],
+      };
+
+      const valuesQb = createQueryBuilderMock();
+      activityRepo.createQueryBuilder = jest.fn().mockReturnValue(valuesQb);
+
+      const result = await service.createDrafts(input);
+
+      // Project should be CREATED without possibleDuplicate flag
+      expect(result.counts.projects).toBe(1);
+      expect(result.skipped.projects).toBe(0);
+
+      // Verify metadata does NOT contain possibleDuplicate
+      const callArgs = valuesQb.values.mock.calls[0][0] as any;
+      expect(callArgs.metadata.possibleDuplicate).toBeUndefined();
+    });
+
+    it('should use normalizeName for projectMap keys (task parent resolution)', async () => {
+      const projectId = 'project-uuid-norm';
+
+      activityRepo.findOneOrFail = jest
+        .fn()
+        .mockResolvedValueOnce({
+          id: projectId,
+          name: 'Оплата Рег.ру - хостинг (424.39₽)',
+          activityType: ActivityType.PROJECT,
+          status: ActivityStatus.DRAFT,
+          depth: 0,
+          materializedPath: null,
+        })
+        .mockResolvedValueOnce({
+          id: 'task-id',
+          name: 'Проверить оплату',
+          activityType: ActivityType.TASK,
+          status: ActivityStatus.DRAFT,
+        });
+
+      activityRepo.findOne = jest.fn().mockResolvedValue({
+        id: projectId,
+        name: 'Оплата Рег.ру - хостинг (424.39₽)',
+        depth: 0,
+        materializedPath: null,
+      });
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Оплата Рег.ру - хостинг (424.39₽)',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [
+          {
+            title: 'Проверить оплату',
+            // Task references project by name WITHOUT the cost annotation
+            projectName: 'Оплата Рег.ру - хостинг',
+            status: 'pending',
+            confidence: 0.85,
+          },
+        ],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.projects).toBe(1);
+      // Task should find its parent via normalized key matching
+      expect(result.counts.tasks).toBe(1);
+    });
+
+    it('should skip task via fuzzy match to existing active task', async () => {
+      // Mock: active tasks found for this owner
+      activityRepo.find = jest.fn().mockResolvedValue([
+        {
+          id: 'existing-task-id',
+          name: 'Отправить отчёт клиенту',
+          activityType: ActivityType.TASK,
+          status: ActivityStatus.ACTIVE,
+        },
+      ]);
+
+      // Mock: ProjectMatchingService.calculateSimilarity for task fuzzy matching
+      projectMatchingService.calculateSimilarity = jest.fn().mockReturnValue(0.85);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [],
+        tasks: [
+          {
+            title: 'Отправить отчет клиенту',
+            status: 'pending',
+            confidence: 0.85,
+          },
+        ],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      // Task should be SKIPPED (fuzzy match >= 0.7 threshold)
+      expect(result.skipped.tasks).toBe(1);
+      expect(result.counts.tasks).toBe(0);
+    });
+
+    it('should create task when fuzzy similarity below threshold', async () => {
+      // Mock: active tasks found but low similarity
+      activityRepo.find = jest.fn().mockResolvedValue([
+        {
+          id: 'unrelated-task-id',
+          name: 'Completely different task',
+          activityType: ActivityType.TASK,
+          status: ActivityStatus.ACTIVE,
+        },
+      ]);
+
+      projectMatchingService.calculateSimilarity = jest.fn().mockReturnValue(0.3);
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [],
+        tasks: [
+          {
+            title: 'New unique task',
+            status: 'pending',
+            confidence: 0.85,
+          },
+        ],
+        commitments: [],
+      };
+
+      const result = await service.createDrafts(input);
+
+      // Task should be CREATED (no match above threshold)
+      expect(result.counts.tasks).toBe(1);
+      expect(result.skipped.tasks).toBe(0);
+    });
+
+    it('should use normalizeName for commitment projectName resolution', async () => {
+      const projectId = 'project-uuid-commit';
+
+      activityRepo.findOneOrFail = jest.fn().mockResolvedValueOnce({
+        id: projectId,
+        name: 'Проект Alpha (1.5M RUB)',
+        activityType: ActivityType.PROJECT,
+        status: ActivityStatus.DRAFT,
+        depth: 0,
+        materializedPath: null,
+      });
+
+      const input: DraftExtractionInput = {
+        ownerEntityId: 'owner-123',
+        facts: [],
+        projects: [
+          {
+            name: 'Проект Alpha (1.5M RUB)',
+            isNew: true,
+            participants: [],
+            confidence: 0.9,
+          },
+        ],
+        tasks: [],
+        commitments: [
+          {
+            type: 'promise',
+            what: 'Deliver presentation',
+            from: 'self',
+            to: 'self',
+            // Reference without the cost annotation
+            projectName: 'Проект Alpha',
+            confidence: 0.85,
+          },
+        ],
+      };
+
+      const result = await service.createDrafts(input);
+
+      expect(result.counts.projects).toBe(1);
+      expect(result.counts.commitments).toBe(1);
+
+      // The commitment should have activityId resolved from normalized projectMap
+      expect(commitmentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activityId: expect.any(String),
+        }),
+      );
+      const createCall = commitmentRepo.create.mock.calls[0][0] as any;
+      expect(createCall.activityId).not.toBeNull();
     });
   });
 });

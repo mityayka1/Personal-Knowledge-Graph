@@ -1811,6 +1811,75 @@ REST API для аудита качества данных, обнаружени
 
 ---
 
+### POST /data-quality/auto-merge-duplicates
+
+Автоматическое объединение всех обнаруженных дубликатов. Выбирает лучшего "хранителя" в каждой группе по критериям: больше children -> members -> старший по createdAt.
+
+**Response:**
+```json
+{
+  "mergedGroups": 3,
+  "totalMerged": 7,
+  "errors": [],
+  "details": [
+    {
+      "keptId": "uuid",
+      "keptName": "Project Alpha",
+      "mergedIds": ["uuid1", "uuid2"]
+    }
+  ]
+}
+```
+
+---
+
+### POST /data-quality/auto-assign-orphans
+
+Автоматическое назначение orphaned tasks (без parentId) к подходящим проектам. Стратегии (по приоритету): name containment -> batch -> single project -> "Unsorted Tasks".
+
+**Response:**
+```json
+{
+  "resolved": 75,
+  "unresolved": 13,
+  "createdUnsortedProject": true,
+  "details": [
+    {
+      "taskId": "uuid",
+      "taskName": "Fix bug",
+      "assignedParentId": "uuid",
+      "assignedParentName": "Project Alpha",
+      "method": "name_containment"
+    }
+  ]
+}
+```
+
+---
+
+### POST /data-quality/auto-resolve-clients
+
+Автоматическое определение клиентов для PROJECT/BUSINESS activities без client entity. Использует 3-стратегийное определение: explicit name -> participant org -> name search.
+
+**Response:**
+```json
+{
+  "resolved": 5,
+  "unresolved": 2,
+  "details": [
+    {
+      "activityId": "uuid",
+      "activityName": "Project Alpha",
+      "clientEntityId": "uuid",
+      "clientName": "Acme Corp",
+      "method": "participant_org"
+    }
+  ]
+}
+```
+
+---
+
 ### AI Agent Tools
 
 Data Quality System предоставляет 5 AI agent tools для Claude:

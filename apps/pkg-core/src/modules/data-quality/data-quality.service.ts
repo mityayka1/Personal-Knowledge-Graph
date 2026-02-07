@@ -17,6 +17,11 @@ import {
   EntityRelation,
   RelationSource,
 } from '@pkg/entities';
+import { OrphanResolutionService, OrphanResolutionResult } from './orphan-resolution.service';
+import {
+  ClientResolutionService,
+  ClientResolutionMethod,
+} from '../extraction/client-resolution.service';
 
 /**
  * Group of duplicate activities (same LOWER(name) and type)
@@ -57,6 +62,31 @@ export interface CommitmentLinkage {
 export interface FieldFillRate {
   total: number;
   avgFillRate: number;
+}
+
+/**
+ * Result of automatic client resolution batch.
+ */
+export interface ClientResolutionBatchResult {
+  resolved: number;
+  unresolved: number;
+  details: Array<{
+    activityId: string;
+    activityName: string;
+    clientEntityId: string;
+    clientName: string;
+    method: ClientResolutionMethod;
+  }>;
+}
+
+/**
+ * Result of automatic duplicate merging.
+ */
+export interface AutoMergeResult {
+  mergedGroups: number;
+  totalMerged: number;
+  errors: Array<{ group: string; error: string }>;
+  details: Array<{ keptId: string; keptName: string; mergedIds: string[] }>;
 }
 
 /**
@@ -102,6 +132,8 @@ export class DataQualityService {
     @InjectRepository(EntityRelation)
     private readonly relationRepo: Repository<EntityRelation>,
     private readonly dataSource: DataSource,
+    private readonly orphanResolutionService: OrphanResolutionService,
+    private readonly clientResolutionService: ClientResolutionService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────
@@ -590,6 +622,236 @@ export class DataQualityService {
     return this.activityRepo.findOneOrFail({
       where: { id: keepId },
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Auto-Merge All Duplicates
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Automatically merge all detected duplicate groups.
+   *
+   * For each group, selects a "keeper" by:
+   * 1. Most children (tasks assigned under it)
+   * 2. Most ActivityMembers
+   * 3. Oldest createdAt (first created wins)
+   *
+   * Then calls mergeActivities(keepId, otherIds) for each group.
+   * Errors per-group are caught and collected — one failure does not stop others.
+   */
+  async autoMergeAllDuplicates(): Promise<{
+    mergedGroups: number;
+    totalMerged: number;
+    errors: Array<{ group: string; error: string }>;
+    details: Array<{ keptId: string; keptName: string; mergedIds: string[] }>;
+  }> {
+    const duplicates = await this.findDuplicateProjects();
+
+    if (duplicates.length === 0) {
+      this.logger.log('No duplicate groups found — nothing to merge');
+      return { mergedGroups: 0, totalMerged: 0, errors: [], details: [] };
+    }
+
+    this.logger.log(`Found ${duplicates.length} duplicate groups to auto-merge`);
+
+    const result = {
+      mergedGroups: 0,
+      totalMerged: 0,
+      errors: [] as Array<{ group: string; error: string }>,
+      details: [] as Array<{ keptId: string; keptName: string; mergedIds: string[] }>,
+    };
+
+    for (const group of duplicates) {
+      try {
+        const keeper = await this.selectKeeper(group.activities.map((a) => a.id));
+        const mergeIds = group.activities
+          .map((a) => a.id)
+          .filter((id) => id !== keeper.id);
+
+        if (mergeIds.length === 0) continue;
+
+        await this.mergeActivities(keeper.id, mergeIds);
+
+        result.mergedGroups++;
+        result.totalMerged += mergeIds.length;
+        result.details.push({
+          keptId: keeper.id,
+          keptName: keeper.name,
+          mergedIds: mergeIds,
+        });
+
+        this.logger.log(
+          `Merged group "${group.name}": kept ${keeper.id}, merged ${mergeIds.length}`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Failed to merge group "${group.name}": ${message}`);
+        result.errors.push({ group: group.name, error: message });
+      }
+    }
+
+    this.logger.log(
+      `Auto-merge complete: ${result.mergedGroups} groups, ${result.totalMerged} merged, ${result.errors.length} errors`,
+    );
+
+    return result;
+  }
+
+  /**
+   * Select the best "keeper" activity from a set of duplicate IDs.
+   *
+   * Priority:
+   * 1. Most children (sub-activities)
+   * 2. Most ActivityMembers
+   * 3. Oldest createdAt
+   */
+  private async selectKeeper(activityIds: string[]): Promise<Activity> {
+    // Count children per activity
+    const childCounts = await this.activityRepo
+      .createQueryBuilder('a')
+      .select('a.parent_id', 'parentId')
+      .addSelect('COUNT(*)', 'cnt')
+      .where('a.parent_id IN (:...ids)', { ids: activityIds })
+      .andWhere('a.deleted_at IS NULL')
+      .groupBy('a.parent_id')
+      .getRawMany<{ parentId: string; cnt: string }>();
+
+    const childMap = new Map(childCounts.map((r) => [r.parentId, parseInt(r.cnt, 10)]));
+
+    // Count members per activity
+    const memberCounts = await this.memberRepo
+      .createQueryBuilder('m')
+      .select('m.activity_id', 'activityId')
+      .addSelect('COUNT(*)', 'cnt')
+      .where('m.activity_id IN (:...ids)', { ids: activityIds })
+      .groupBy('m.activity_id')
+      .getRawMany<{ activityId: string; cnt: string }>();
+
+    const memberMap = new Map(memberCounts.map((r) => [r.activityId, parseInt(r.cnt, 10)]));
+
+    // Fetch activities with createdAt for tiebreak
+    const activities = await this.activityRepo.find({
+      where: { id: In(activityIds), deletedAt: IsNull() },
+      select: ['id', 'name', 'createdAt'],
+    });
+
+    // Sort: most children → most members → oldest createdAt
+    activities.sort((a, b) => {
+      const childDiff = (childMap.get(b.id) ?? 0) - (childMap.get(a.id) ?? 0);
+      if (childDiff !== 0) return childDiff;
+
+      const memberDiff = (memberMap.get(b.id) ?? 0) - (memberMap.get(a.id) ?? 0);
+      if (memberDiff !== 0) return memberDiff;
+
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
+
+    return activities[0];
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Auto-Assign Orphaned Tasks
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Automatically assign orphaned tasks to appropriate parent projects.
+   * Delegates to OrphanResolutionService which applies multi-strategy resolution.
+   *
+   * Fetches full task data (including ownerEntityId) since findOrphanedTasks()
+   * returns only summary fields for audit purposes.
+   */
+  async autoAssignOrphanedTasks(): Promise<OrphanResolutionResult> {
+    const orphanSummary = await this.findOrphanedTasks();
+
+    if (orphanSummary.length === 0) {
+      this.logger.log('No orphaned tasks found — nothing to assign');
+      return { resolved: 0, unresolved: 0, createdUnsortedProject: false, details: [] };
+    }
+
+    this.logger.log(`Found ${orphanSummary.length} orphaned tasks to auto-assign`);
+
+    // Fetch full task data needed for resolution strategies
+    const orphanIds = orphanSummary.map((t) => t.id);
+    const fullTasks = await this.activityRepo.find({
+      where: { id: In(orphanIds), deletedAt: IsNull() },
+    });
+
+    return this.orphanResolutionService.resolveOrphans(fullTasks);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Auto-Resolve Missing Clients
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Automatically resolve missing clientEntityId for PROJECT/BUSINESS activities.
+   *
+   * For each activity without a client:
+   * 1. Load its ActivityMembers with entity relations (to get participant names)
+   * 2. Call ClientResolutionService.resolveClient() with participant context
+   * 3. If resolved, update the activity's clientEntityId
+   */
+  async autoResolveClients(): Promise<ClientResolutionBatchResult> {
+    const missingClientSummary = await this.findMissingClientEntity();
+
+    if (missingClientSummary.length === 0) {
+      this.logger.log('No activities with missing clients — nothing to resolve');
+      return { resolved: 0, unresolved: 0, details: [] };
+    }
+
+    this.logger.log(`Found ${missingClientSummary.length} activities with missing clients`);
+
+    // Fetch full activity data (including ownerEntityId)
+    const activityIds = missingClientSummary.map((a) => a.id);
+    const fullActivities = await this.activityRepo.find({
+      where: { id: In(activityIds), deletedAt: IsNull() },
+    });
+
+    const result: ClientResolutionBatchResult = { resolved: 0, unresolved: 0, details: [] };
+
+    for (const activity of fullActivities) {
+      if (!activity.ownerEntityId) {
+        result.unresolved++;
+        continue;
+      }
+
+      // Load members with entity relation to get participant names
+      const members = await this.memberRepo.find({
+        where: { activityId: activity.id },
+        relations: ['entity'],
+      });
+
+      const participantNames = members
+        .map((m) => m.entity?.name)
+        .filter((name): name is string => !!name);
+
+      const resolution = await this.clientResolutionService.resolveClient({
+        participants: participantNames,
+        ownerEntityId: activity.ownerEntityId,
+      });
+
+      if (resolution) {
+        await this.activityRepo.update(activity.id, {
+          clientEntityId: resolution.entityId,
+        });
+        result.resolved++;
+        result.details.push({
+          activityId: activity.id,
+          activityName: activity.name,
+          clientEntityId: resolution.entityId,
+          clientName: resolution.entityName,
+          method: resolution.method,
+        });
+      } else {
+        result.unresolved++;
+      }
+    }
+
+    this.logger.log(
+      `Client resolution complete: ${result.resolved} resolved, ${result.unresolved} unresolved`,
+    );
+
+    return result;
   }
 
   // ─────────────────────────────────────────────────────────────

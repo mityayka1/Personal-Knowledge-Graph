@@ -60,6 +60,66 @@ describe('ProjectMatchingService', () => {
   });
 
   // =========================================================================
+  // normalizeName
+  // =========================================================================
+
+  describe('normalizeName', () => {
+    it('should trim and lowercase', () => {
+      expect(ProjectMatchingService.normalizeName('  Hello World  ')).toBe(
+        'hello world',
+      );
+    });
+
+    it('should remove cost annotation with ₽ symbol', () => {
+      expect(
+        ProjectMatchingService.normalizeName(
+          'Оплата Рег.ру - хостинг (424.39₽)',
+        ),
+      ).toBe('оплата рег.ру - хостинг');
+    });
+
+    it('should remove cost annotation with M RUB', () => {
+      expect(
+        ProjectMatchingService.normalizeName('My Project (1.5M RUB)'),
+      ).toBe('my project');
+    });
+
+    it('should remove cost annotation with $ symbol', () => {
+      expect(ProjectMatchingService.normalizeName('Задача ($500)')).toBe(
+        'задача',
+      );
+    });
+
+    it('should remove cost annotation with тыс руб', () => {
+      expect(
+        ProjectMatchingService.normalizeName('Оплата (10 тыс руб)'),
+      ).toBe('оплата');
+    });
+
+    it('should remove trailing punctuation', () => {
+      expect(ProjectMatchingService.normalizeName('Some project...')).toBe(
+        'some project',
+      );
+    });
+
+    it('should collapse multiple spaces into one', () => {
+      expect(
+        ProjectMatchingService.normalizeName('  lots   of   spaces  '),
+      ).toBe('lots of spaces');
+    });
+
+    it('should NOT remove regular parentheses without cost keywords', () => {
+      expect(ProjectMatchingService.normalizeName('Project (v2.0)')).toBe(
+        'project (v2.0)',
+      );
+    });
+
+    it('should return empty string for empty input', () => {
+      expect(ProjectMatchingService.normalizeName('')).toBe('');
+    });
+  });
+
+  // =========================================================================
   // calculateSimilarity
   // =========================================================================
 
@@ -354,6 +414,20 @@ describe('ProjectMatchingService', () => {
       expect(callArg.order.lastActivityAt).toEqual(
         expect.objectContaining({ direction: 'DESC', nulls: 'LAST' }),
       );
+    });
+
+    it('should match names with cost annotations via normalization', async () => {
+      const activities = [
+        createActivity({ name: 'Оплата Рег.ру - хостинг (424.39₽)', ownerEntityId }),
+      ];
+      mockRepo.find.mockResolvedValue(activities);
+
+      const result = await service.findCandidates({
+        name: 'Оплата Рег.ру - хостинг',
+        ownerEntityId,
+      });
+
+      expect(result[0].similarity).toBe(1.0);
     });
   });
 

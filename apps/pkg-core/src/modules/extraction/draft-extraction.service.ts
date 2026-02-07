@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Not, In } from 'typeorm';
 import { randomUUID } from 'crypto';
 import {
   Activity,
@@ -179,14 +179,16 @@ export class DraftExtractionService {
     // 1. Create draft projects (tasks may reference them)
     for (const project of input.projects) {
       try {
+        const normalizedKey = ProjectMatchingService.normalizeName(project.name);
+
         // Skip if already matched to existing activity
         if (project.existingActivityId) {
           this.logger.debug(`Skipping existing project: ${project.existingActivityId}`);
-          projectMap.set(project.name.toLowerCase(), project.existingActivityId);
+          projectMap.set(normalizedKey, project.existingActivityId);
           continue;
         }
 
-        // DEDUPLICATION: Enhanced check -- pending approvals + fuzzy match via ProjectMatchingService
+        // DEDUPLICATION: Enhanced check -- pending approvals + two-tier fuzzy match
         const existing = await this.findExistingProjectEnhanced(
           project.name,
           input.ownerEntityId,
@@ -198,7 +200,7 @@ export class DraftExtractionService {
               `${existing.similarity != null ? `, similarity: ${existing.similarity.toFixed(3)}` : ''})`,
           );
           // Add to projectMap so tasks can still reference the existing activity
-          projectMap.set(project.name.toLowerCase(), existing.activityId);
+          projectMap.set(normalizedKey, existing.activityId);
           result.skipped.projects++;
           continue;
         }
@@ -207,9 +209,10 @@ export class DraftExtractionService {
           project,
           input,
           batchId,
+          existing.weakMatch,
         );
 
-        projectMap.set(project.name.toLowerCase(), activity.id);
+        projectMap.set(normalizedKey, activity.id);
         result.approvals.push(approval);
         result.counts.projects++;
         this.logger.debug(`Created draft project: ${activity.name} (${activity.id})`);
@@ -239,19 +242,23 @@ export class DraftExtractionService {
     // 2. Create draft tasks (may link to projects)
     for (const task of input.tasks) {
       try {
-        // DEDUPLICATION: Check for existing pending task with similar title
-        const existingTask = await this.findExistingPendingTask(task.title);
-        if (existingTask) {
+        // DEDUPLICATION: Enhanced check -- pending approvals + active tasks via fuzzy match
+        const existingTask = await this.findExistingTaskEnhanced(
+          task.title,
+          input.ownerEntityId,
+        );
+        if (existingTask.found) {
           this.logger.debug(
             `Skipping duplicate task "${task.title}" - ` +
-              `already pending as ${existingTask.targetId}`,
+              `matched via ${existingTask.source} (activityId: ${existingTask.activityId}` +
+              `${existingTask.similarity != null ? `, similarity: ${existingTask.similarity.toFixed(3)}` : ''})`,
           );
           result.skipped.tasks++;
           continue;
         }
 
         const parentId = task.projectName
-          ? projectMap.get(task.projectName.toLowerCase())
+          ? projectMap.get(ProjectMatchingService.normalizeName(task.projectName))
           : undefined;
 
         const { activity, approval } = await this.createDraftTask(
@@ -288,7 +295,9 @@ export class DraftExtractionService {
         // Resolve activityId from projectMap for commitment
         let commitmentActivityId: string | undefined;
         if (commitment.projectName) {
-          commitmentActivityId = projectMap.get(commitment.projectName.toLowerCase());
+          commitmentActivityId = projectMap.get(
+            ProjectMatchingService.normalizeName(commitment.projectName),
+          );
         }
 
         const { entity, approval } = await this.createDraftCommitment(
@@ -382,6 +391,7 @@ export class DraftExtractionService {
     project: ExtractedProject,
     input: DraftExtractionInput,
     batchId: string,
+    weakMatch?: { matchedActivityId: string; matchedName: string; similarity: number },
   ): Promise<{ activity: Activity; approval: PendingApproval }> {
     // Try to resolve client entity via 3-strategy approach
     let clientEntityId: string | null = null;
@@ -427,6 +437,13 @@ export class DraftExtractionService {
           confidence: project.confidence,
           clientResolutionMethod,
           draftBatchId: batchId,
+          ...(weakMatch && {
+            possibleDuplicate: {
+              matchedActivityId: weakMatch.matchedActivityId,
+              matchedName: weakMatch.matchedName,
+              similarity: weakMatch.similarity,
+            },
+          }),
         },
       })
       .execute();
@@ -696,19 +713,27 @@ export class DraftExtractionService {
   }
 
   /**
-   * Enhanced project deduplication check.
+   * Enhanced project deduplication check with two-tier matching.
    *
    * Checks two layers:
-   * 1. Existing pending approvals (exact ILIKE match -- current behavior)
+   * 1. Existing pending approvals (exact ILIKE match)
    * 2. Active/Draft activities via fuzzy Levenshtein matching (ProjectMatchingService)
    *
-   * Returns the activity ID if a match is found so the caller can skip
-   * creating a new draft and instead reference the existing activity.
+   * Two-tier threshold:
+   * - >= 0.8 (strong match) → found=true, skip creation
+   * - 0.6-0.8 (weak match)  → found=false, weakMatch populated for metadata flag
+   * - < 0.6 (no match)      → found=false, create normally
    */
   private async findExistingProjectEnhanced(
     projectName: string,
     ownerEntityId: string,
-  ): Promise<{ found: boolean; activityId?: string; similarity?: number; source?: string }> {
+  ): Promise<{
+    found: boolean;
+    activityId?: string;
+    similarity?: number;
+    source?: string;
+    weakMatch?: { matchedActivityId: string; matchedName: string; similarity: number };
+  }> {
     // Step 1: Check pending approvals (existing exact ILIKE logic)
     const pendingMatch = await this.findExistingPendingProject(projectName);
     if (pendingMatch) {
@@ -720,21 +745,40 @@ export class DraftExtractionService {
     }
 
     // Step 2: Check active activities via ProjectMatchingService (fuzzy Levenshtein)
+    // Use a lower threshold (0.6) to capture weak matches too
     const matchResult = await this.projectMatchingService.findBestMatch({
       name: projectName,
       ownerEntityId,
+      threshold: DraftExtractionService.WEAK_MATCH_THRESHOLD,
     });
 
     if (matchResult.matched && matchResult.activity) {
+      // Strong match (>= 0.8): skip creation
+      if (matchResult.similarity >= DraftExtractionService.STRONG_MATCH_THRESHOLD) {
+        this.logger.log(
+          `Strong match project "${projectName}" -> "${matchResult.activity.name}" ` +
+            `(similarity: ${matchResult.similarity.toFixed(3)})`,
+        );
+        return {
+          found: true,
+          activityId: matchResult.activity.id,
+          similarity: matchResult.similarity,
+          source: 'fuzzy_match',
+        };
+      }
+
+      // Weak match (0.6-0.8): create but flag as possible duplicate
       this.logger.log(
-        `Fuzzy matched project "${projectName}" -> "${matchResult.activity.name}" ` +
-          `(similarity: ${matchResult.similarity.toFixed(3)})`,
+        `Weak match project "${projectName}" -> "${matchResult.activity.name}" ` +
+          `(similarity: ${matchResult.similarity.toFixed(3)}) — will create with possibleDuplicate flag`,
       );
       return {
-        found: true,
-        activityId: matchResult.activity.id,
-        similarity: matchResult.similarity,
-        source: 'fuzzy_match',
+        found: false,
+        weakMatch: {
+          matchedActivityId: matchResult.activity.id,
+          matchedName: matchResult.activity.name,
+          similarity: matchResult.similarity,
+        },
       };
     }
 
@@ -767,6 +811,73 @@ export class DraftExtractionService {
     if (!matchingActivity) return null;
 
     return pendingApprovals.find((p) => p.targetId === matchingActivity.id) ?? null;
+  }
+
+  /**
+   * Enhanced task deduplication check.
+   *
+   * Checks two layers:
+   * 1. Existing pending approvals (exact ILIKE match)
+   * 2. Active tasks owned by the same user via fuzzy Levenshtein matching
+   *
+   * Uses TASK_DEDUP_THRESHOLD (0.7) for fuzzy matching.
+   */
+  private async findExistingTaskEnhanced(
+    taskTitle: string,
+    ownerEntityId: string,
+  ): Promise<{ found: boolean; activityId?: string; similarity?: number; source?: string }> {
+    // Step 1: Check pending approvals (existing exact ILIKE logic)
+    const pendingMatch = await this.findExistingPendingTask(taskTitle);
+    if (pendingMatch) {
+      return {
+        found: true,
+        activityId: pendingMatch.targetId,
+        source: 'pending_approval',
+      };
+    }
+
+    // Step 2: Check active tasks via fuzzy matching
+    const activeTasks = await this.activityRepo.find({
+      where: {
+        ownerEntityId,
+        activityType: ActivityType.TASK,
+        status: Not(In([ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED])),
+      },
+      select: ['id', 'name'],
+    });
+
+    if (activeTasks.length === 0) return { found: false };
+
+    const normalizedTitle = ProjectMatchingService.normalizeName(taskTitle);
+    let bestMatch: { activity: Activity; similarity: number } | null = null;
+
+    for (const task of activeTasks) {
+      const similarity = this.projectMatchingService.calculateSimilarity(
+        normalizedTitle,
+        ProjectMatchingService.normalizeName(task.name),
+      );
+      if (
+        similarity >= DraftExtractionService.TASK_DEDUP_THRESHOLD &&
+        (!bestMatch || similarity > bestMatch.similarity)
+      ) {
+        bestMatch = { activity: task, similarity };
+      }
+    }
+
+    if (bestMatch) {
+      this.logger.log(
+        `Fuzzy matched task "${taskTitle}" -> "${bestMatch.activity.name}" ` +
+          `(similarity: ${bestMatch.similarity.toFixed(3)})`,
+      );
+      return {
+        found: true,
+        activityId: bestMatch.activity.id,
+        similarity: bestMatch.similarity,
+        source: 'fuzzy_match',
+      };
+    }
+
+    return { found: false };
   }
 
   /**
@@ -806,6 +917,13 @@ export class DraftExtractionService {
    */
   private static readonly UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /** Strong match threshold — skip creation entirely */
+  private static readonly STRONG_MATCH_THRESHOLD = 0.8;
+  /** Weak match threshold — create with possibleDuplicate flag */
+  private static readonly WEAK_MATCH_THRESHOLD = 0.6;
+  /** Task dedup threshold — skip creation if existing task is similar enough */
+  private static readonly TASK_DEDUP_THRESHOLD = 0.7;
 
 
   // ─────────────────────────────────────────────────────────────
