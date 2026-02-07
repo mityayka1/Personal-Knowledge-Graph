@@ -284,11 +284,13 @@ export class ActivityService {
 
       if (dto.parentId === null) {
         activity.parentId = null;
+        activity.parent = null;
         activity.depth = 0;
         activity.materializedPath = null;
       } else {
         const newParent = await this.findOne(dto.parentId);
         activity.parentId = dto.parentId;
+        activity.parent = newParent;
         activity.depth = newParent.depth + 1;
         activity.materializedPath = newParent.materializedPath
           ? `${newParent.materializedPath}/${newParent.id}`
