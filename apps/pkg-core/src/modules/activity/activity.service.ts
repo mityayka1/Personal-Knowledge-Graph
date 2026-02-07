@@ -314,7 +314,39 @@ export class ActivityService {
     // Обновить lastActivityAt
     activity.lastActivityAt = new Date();
 
-    await this.activityRepo.save(activity);
+    // Используем QueryBuilder для обхода closure-table бага (аналогично create())
+    // TypeORM save() вызывает ClosureSubjectExecutor.update(), который
+    // падает с "Cannot read properties of undefined (reading 'getEntityValue')"
+    // при изменении parentId на closure-table сущности.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateSet: any = {
+      name: activity.name,
+      description: activity.description,
+      status: activity.status,
+      priority: activity.priority,
+      context: activity.context,
+      ownerEntityId: activity.ownerEntityId,
+      clientEntityId: activity.clientEntityId,
+      recurrenceRule: activity.recurrenceRule,
+      tags: activity.tags,
+      progress: activity.progress,
+      metadata: activity.metadata,
+      deadline: activity.deadline,
+      startDate: activity.startDate,
+      endDate: activity.endDate,
+      parentId: activity.parentId,
+      depth: activity.depth,
+      materializedPath: activity.materializedPath,
+      lastActivityAt: activity.lastActivityAt,
+    };
+
+    await this.activityRepo
+      .createQueryBuilder()
+      .update(Activity)
+      .set(updateSet)
+      .where('id = :id', { id })
+      .execute();
+
     this.logger.log(`Updated activity: ${id}`);
 
     return this.findOne(id);
