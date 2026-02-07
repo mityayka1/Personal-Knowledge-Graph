@@ -51,6 +51,11 @@ class ApiClient {
         // Ignore JSON parse errors
       }
 
+      // Provide a clear message for auth failures
+      if (response.status === 401 && !initData) {
+        error.message = 'Не удалось авторизоваться. Откройте приложение через кнопку меню бота SeBra.'
+      }
+
       throw error
     }
 

@@ -19,6 +19,8 @@ interface TelegramWebApp {
     hash?: string
     start_param?: string
   }
+  platform?: string
+  version?: string
   colorScheme: 'light' | 'dark'
   themeParams: Record<string, string>
   isExpanded: boolean
