@@ -2,21 +2,18 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EntityFact } from '@pkg/entities';
-import { FactDeduplicationService } from './fact-deduplication.service';
-import { ExtractedFact } from './fact-extraction.service';
+import { FactDeduplicationService, DeduplicableFact } from './fact-deduplication.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 
-/** Helper to create test ExtractedFact */
+/** Helper to create test DeduplicableFact */
 const createFact = (
   factType: string,
   value: string,
   confidence: number,
-  sourceQuote = 'test quote',
-): ExtractedFact => ({
+): DeduplicableFact => ({
   factType,
   value,
   confidence,
-  sourceQuote,
 });
 
 /** Create a mock embedding (normalized random vector for testing) */
@@ -210,7 +207,7 @@ describe('FactDeduplicationService', () => {
     });
 
     it('should deduplicate within batch', async () => {
-      const facts: ExtractedFact[] = [
+      const facts: DeduplicableFact[] = [
         createFact('email', 'test@example.com', 0.8),
         createFact('email', 'test@example.com', 0.9),
         createFact('email', 'test@example.com', 0.7),
@@ -227,7 +224,7 @@ describe('FactDeduplicationService', () => {
     });
 
     it('should process mixed fact types', async () => {
-      const facts: ExtractedFact[] = [
+      const facts: DeduplicableFact[] = [
         createFact('email', 'test@example.com', 0.9),
         createFact('phone', '+79991234567', 0.8),
         createFact('position', 'Developer', 0.7),
@@ -250,7 +247,7 @@ describe('FactDeduplicationService', () => {
         },
       ]);
 
-      const facts: ExtractedFact[] = [
+      const facts: DeduplicableFact[] = [
         createFact('position', 'Senior Developer', 0.9),
       ];
 
@@ -270,7 +267,7 @@ describe('FactDeduplicationService', () => {
     });
 
     it('should handle large batches', async () => {
-      const facts: ExtractedFact[] = Array.from({ length: 100 }, (_, i) =>
+      const facts: DeduplicableFact[] = Array.from({ length: 100 }, (_, i) =>
         createFact('note', `Note ${i}`, 0.8)
       );
 
@@ -487,7 +484,7 @@ describe('FactDeduplicationService', () => {
       expect(result.reason).toContain('No semantic duplicates');
     });
 
-    it('should filter by factType when provided', async () => {
+    it('should NOT filter by factType — embeddings catch cross-type duplicates', async () => {
       const newEmbedding = createMockEmbedding(1);
       mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
       mockRepo.query.mockResolvedValue([]);
@@ -496,20 +493,8 @@ describe('FactDeduplicationService', () => {
 
       expect(mockRepo.query).toHaveBeenCalled();
       const queryCall = mockRepo.query.mock.calls[0];
-      expect(queryCall[0]).toContain('AND fact_type = $4');
-      expect(queryCall[1]).toContain('position');
-    });
-
-    it('should not filter by factType when not provided', async () => {
-      const newEmbedding = createMockEmbedding(1);
-      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
-      mockRepo.query.mockResolvedValue([]);
-
-      await service.checkSemanticDuplicate(entityId, 'test value');
-
-      expect(mockRepo.query).toHaveBeenCalled();
-      const queryCall = mockRepo.query.mock.calls[0];
-      expect(queryCall[0]).not.toContain('AND fact_type = $4');
+      // No factType filter — semantic search should find "birthday" ≈ "дата_рождения"
+      expect(queryCall[0]).not.toContain('AND fact_type');
     });
 
     it('should handle embedding service errors gracefully', async () => {

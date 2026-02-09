@@ -18,6 +18,7 @@ import {
 import { ProjectMatchingService } from './project-matching.service';
 import { ClientResolutionService } from './client-resolution.service';
 import { ActivityMemberService } from '../activity/activity-member.service';
+import { FactDeduplicationService } from './fact-deduplication.service';
 
 describe('DraftExtractionService', () => {
   let service: DraftExtractionService;
@@ -28,6 +29,7 @@ describe('DraftExtractionService', () => {
   let projectMatchingService: jest.Mocked<ProjectMatchingService>;
   let clientResolutionService: jest.Mocked<ClientResolutionService>;
   let activityMemberService: jest.Mocked<ActivityMemberService>;
+  let factDeduplicationService: jest.Mocked<FactDeduplicationService>;
 
   // Helper to create chainable query builder mock
   const createQueryBuilderMock = (result: unknown = null) => ({
@@ -117,6 +119,15 @@ describe('DraftExtractionService', () => {
             resolveAndCreateMembers: jest.fn().mockResolvedValue([]),
           },
         },
+        {
+          provide: FactDeduplicationService,
+          useValue: {
+            checkDuplicateHybrid: jest.fn().mockResolvedValue({
+              action: 'create',
+              reason: 'No duplicates found',
+            }),
+          },
+        },
       ],
     }).compile();
 
@@ -128,6 +139,7 @@ describe('DraftExtractionService', () => {
     projectMatchingService = module.get(ProjectMatchingService);
     clientResolutionService = module.get(ClientResolutionService);
     activityMemberService = module.get(ActivityMemberService);
+    factDeduplicationService = module.get(FactDeduplicationService);
   });
 
   afterEach(() => {

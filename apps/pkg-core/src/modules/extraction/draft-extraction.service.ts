@@ -29,6 +29,7 @@ import {
 import { ProjectMatchingService } from './project-matching.service';
 import { ClientResolutionService } from './client-resolution.service';
 import { ActivityMemberService } from '../activity/activity-member.service';
+import { FactDeduplicationService } from './fact-deduplication.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -113,6 +114,7 @@ export class DraftExtractionService {
     private readonly projectMatchingService: ProjectMatchingService,
     private readonly clientResolutionService: ClientResolutionService,
     private readonly activityMemberService: ActivityMemberService,
+    private readonly factDeduplicationService: FactDeduplicationService,
   ) {}
 
   /**
@@ -139,25 +141,28 @@ export class DraftExtractionService {
       errors: [],
     };
 
-    // 0. Create draft facts first
+    // 0. Create draft facts first — with hybrid deduplication (text + semantic/embedding)
     for (const fact of input.facts || []) {
       try {
-        // DEDUPLICATION: Check for existing pending fact with same entity + factType + value
-        const existingFact = await this.findExistingPendingFact(
+        // DEDUPLICATION: Hybrid check — Levenshtein text match, then pgvector semantic
+        const dedupResult = await this.factDeduplicationService.checkDuplicateHybrid(
           fact.entityId,
-          fact.factType,
-          fact.value,
+          fact,
         );
-        if (existingFact) {
+
+        if (dedupResult.action !== 'create') {
           this.logger.debug(
-            `Skipping duplicate fact "${fact.factType}:${fact.value}" for entity ${fact.entityId} - ` +
-              `already pending as ${existingFact.targetId}`,
+            `Skipping duplicate fact "${fact.factType}:${fact.value}" for entity ${fact.entityId} — ` +
+              `${dedupResult.reason}` +
+              (dedupResult.existingFactId ? ` (existing: ${dedupResult.existingFactId})` : ''),
           );
           result.skipped.facts++;
           continue;
         }
 
-        const { entity, approval } = await this.createDraftFact(fact, input, batchId);
+        const { entity, approval } = await this.createDraftFact(
+          fact, input, batchId, dedupResult.embedding,
+        );
 
         result.approvals.push(approval);
         result.counts.facts++;
@@ -338,16 +343,19 @@ export class DraftExtractionService {
 
   /**
    * Create draft EntityFact + PendingApproval.
+   * Saves embedding if provided (from semantic dedup check) so future
+   * facts in the same batch can be found via pgvector search.
    */
   private async createDraftFact(
     fact: ExtractedFact,
     input: DraftExtractionInput,
     batchId: string,
+    embedding?: number[],
   ): Promise<{ entity: EntityFact; approval: PendingApproval }> {
     // Determine fact category from fact type
     const category = this.inferFactCategory(fact.factType);
 
-    // Create draft EntityFact
+    // Create draft EntityFact — with embedding for future semantic dedup
     const entity = this.factRepo.create({
       entityId: fact.entityId,
       factType: fact.factType,
@@ -357,6 +365,7 @@ export class DraftExtractionService {
       confidence: fact.confidence,
       status: EntityFactStatus.DRAFT,
       sourceInteractionId: input.sourceInteractionId ?? null,
+      embedding: embedding ?? null,
     });
 
     const savedEntity = await this.factRepo.save(entity);

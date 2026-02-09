@@ -2,17 +2,25 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { EntityFact } from '@pkg/entities';
-import { ExtractedFact } from './fact-extraction.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import {
   SEMANTIC_SIMILARITY_THRESHOLD,
   formatEmbeddingForQuery,
 } from '../../common/utils/similarity.utils';
 
+/** Minimal fact shape required for deduplication checks */
+export interface DeduplicableFact {
+  factType: string;
+  value: string;
+  confidence: number;
+}
+
 export interface DeduplicationResult {
   action: 'create' | 'update' | 'skip' | 'supersede';
   existingFactId?: string;
   reason: string;
+  /** Embedding generated during semantic check — reuse when saving the fact */
+  embedding?: number[];
 }
 
 /**
@@ -41,7 +49,7 @@ export class FactDeduplicationService {
    */
   async checkDuplicate(
     entityId: string,
-    newFact: ExtractedFact,
+    newFact: DeduplicableFact,
   ): Promise<DeduplicationResult> {
     // Find existing facts of same type for this entity
     const existingFacts = await this.factRepo.find({
@@ -129,13 +137,17 @@ export class FactDeduplicationService {
 
       // 2. Build query to find similar facts using pgvector cosine distance
       // Note: pgvector <=> returns distance (0 = identical), we convert to similarity
-      let query = `
+      // Search across ALL non-deleted facts (active + draft) — don't filter by factType
+      // so that "birthday" vs "дата_рождения" are still caught as duplicates
+      const query = `
         SELECT id, value, fact_type, 1 - (embedding <=> $1::vector) as similarity
         FROM entity_facts
         WHERE entity_id = $2
-          AND valid_until IS NULL
+          AND deleted_at IS NULL
           AND embedding IS NOT NULL
           AND 1 - (embedding <=> $1::vector) > $3
+        ORDER BY similarity DESC
+        LIMIT 1
       `;
       const params: (string | number)[] = [
         embeddingStr,
@@ -143,17 +155,9 @@ export class FactDeduplicationService {
         SEMANTIC_SIMILARITY_THRESHOLD,
       ];
 
-      // Optionally filter by fact type
-      if (factType) {
-        query += ` AND fact_type = $4`;
-        params.push(factType);
-      }
-
-      query += ` ORDER BY similarity DESC LIMIT 1`;
-
       const similar = await this.factRepo.query(query, params);
 
-      // 3. Return result
+      // 3. Return result with embedding for reuse
       if (similar.length > 0) {
         const match = similar[0];
         const similarity = parseFloat(match.similarity);
@@ -166,10 +170,11 @@ export class FactDeduplicationService {
           action: 'skip',
           existingFactId: match.id,
           reason: `Semantic duplicate (similarity: ${similarity.toFixed(2)})`,
+          embedding,
         };
       }
 
-      return { action: 'create', reason: 'No semantic duplicates found' };
+      return { action: 'create', reason: 'No semantic duplicates found', embedding };
     } catch (error: any) {
       this.logger.error(`Semantic dedup failed: ${error.message}`, error.stack);
       // Fallback to allowing creation on error
@@ -180,10 +185,13 @@ export class FactDeduplicationService {
   /**
    * Hybrid deduplication: first check text-based, then semantic if needed.
    * This is more efficient as text-based check is cheaper.
+   *
+   * Note: semantic check intentionally does NOT filter by factType —
+   * embeddings catch cross-type duplicates like "birthday" vs "дата_рождения".
    */
   async checkDuplicateHybrid(
     entityId: string,
-    newFact: ExtractedFact,
+    newFact: DeduplicableFact,
   ): Promise<DeduplicationResult> {
     // First, quick text-based check
     const textResult = await this.checkDuplicate(entityId, newFact);
@@ -193,11 +201,10 @@ export class FactDeduplicationService {
       return textResult;
     }
 
-    // If no text match found, try semantic check
+    // If no text match found, try semantic check (without factType filter)
     const semanticResult = await this.checkSemanticDuplicate(
       entityId,
       newFact.value,
-      newFact.factType,
     );
 
     return semanticResult;
@@ -208,18 +215,18 @@ export class FactDeduplicationService {
    */
   async processBatch(
     entityId: string,
-    facts: ExtractedFact[],
+    facts: DeduplicableFact[],
   ): Promise<{
-    toCreate: ExtractedFact[];
-    toSupersede: Array<{ newFact: ExtractedFact; oldFactId: string }>;
+    toCreate: DeduplicableFact[];
+    toSupersede: Array<{ newFact: DeduplicableFact; oldFactId: string }>;
     skipped: number;
   }> {
-    const toCreate: ExtractedFact[] = [];
-    const toSupersede: Array<{ newFact: ExtractedFact; oldFactId: string }> = [];
+    const toCreate: DeduplicableFact[] = [];
+    const toSupersede: Array<{ newFact: DeduplicableFact; oldFactId: string }> = [];
     let skipped = 0;
 
     // Also deduplicate within the batch itself
-    const seenInBatch = new Map<string, ExtractedFact>();
+    const seenInBatch = new Map<string, DeduplicableFact>();
 
     for (const fact of facts) {
       const key = `${fact.factType}:${this.normalizeValue(fact.value)}`;
