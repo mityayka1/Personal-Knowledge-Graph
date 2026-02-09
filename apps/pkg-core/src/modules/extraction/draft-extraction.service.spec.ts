@@ -19,6 +19,8 @@ import { ProjectMatchingService } from './project-matching.service';
 import { ClientResolutionService } from './client-resolution.service';
 import { ActivityMemberService } from '../activity/activity-member.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
+import { FactDedupReviewService } from './fact-dedup-review.service';
+import { SettingsService } from '../settings/settings.service';
 
 describe('DraftExtractionService', () => {
   let service: DraftExtractionService;
@@ -125,6 +127,21 @@ describe('DraftExtractionService', () => {
             checkDuplicateHybrid: jest.fn().mockResolvedValue({
               action: 'create',
               reason: 'No duplicates found',
+            }),
+          },
+        },
+        {
+          provide: FactDedupReviewService,
+          useValue: {
+            reviewBatch: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: SettingsService,
+          useValue: {
+            getDedupSettings: jest.fn().mockResolvedValue({
+              reviewThreshold: 0.40,
+              reviewModel: 'haiku',
             }),
           },
         },

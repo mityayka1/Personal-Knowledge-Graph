@@ -244,11 +244,25 @@ export class FactDedupReviewService {
       );
 
       if (llmDecision) {
+        const action = ['skip', 'create'].includes(llmDecision.action)
+          ? llmDecision.action
+          : 'create';
+        if (action !== llmDecision.action) {
+          this.logger.warn(
+            `LLM returned invalid action '${llmDecision.action}' for candidate index=${candidate.index}, defaulting to 'create'`,
+          );
+        }
+        if (action === 'skip' && !llmDecision.duplicateOfId) {
+          this.logger.warn(
+            `LLM returned 'skip' without duplicateOfId for candidate index=${candidate.index}, ` +
+              `falling back to matchedFactId ${candidate.matchedFactId}`,
+          );
+        }
         decisions.push({
           newFactIndex: llmDecision.newFactIndex,
-          action: llmDecision.action,
+          action,
           reason: llmDecision.reason,
-          duplicateOfId: llmDecision.action === 'skip'
+          duplicateOfId: action === 'skip'
             ? llmDecision.duplicateOfId || candidate.matchedFactId
             : undefined,
         });

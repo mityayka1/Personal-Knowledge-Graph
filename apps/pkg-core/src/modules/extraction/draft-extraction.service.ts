@@ -146,7 +146,23 @@ export class DraftExtractionService {
     };
 
     // 0. Create draft facts — two-pass hybrid deduplication (text + semantic + LLM review)
-    const { reviewThreshold } = await this.settingsService.getDedupSettings();
+    let reviewThreshold = 0.40;
+    try {
+      const settings = await this.settingsService.getDedupSettings();
+      reviewThreshold = settings.reviewThreshold;
+    } catch (error) {
+      this.logger.error(
+        `Failed to load dedup settings, using default reviewThreshold=${reviewThreshold}: ` +
+          (error instanceof Error ? error.message : 'Unknown error'),
+      );
+    }
+    // Clamp: reviewThreshold must be < 0.70 (SEMANTIC_SIMILARITY_THRESHOLD)
+    if (reviewThreshold >= 0.70) {
+      this.logger.warn(
+        `reviewThreshold=${reviewThreshold} is >= 0.70, clamping to 0.40 to avoid skipping grey zone`,
+      );
+      reviewThreshold = 0.40;
+    }
 
     // Pass 1: Hybrid dedup check — collect auto-skip, auto-create, and review candidates
     const factsToCreate: Array<{ fact: ExtractedFact; embedding?: number[] }> = [];
@@ -201,7 +217,12 @@ export class DraftExtractionService {
 
       for (const decision of decisions) {
         const candidate = reviewCandidates.find((c) => c.index === decision.newFactIndex);
-        if (!candidate) continue;
+        if (!candidate) {
+          this.logger.warn(
+            `LLM returned decision for unknown index ${decision.newFactIndex}, skipping`,
+          );
+          continue;
+        }
 
         if (decision.action === 'create') {
           factsToCreate.push({ fact: candidate.newFact, embedding: candidate.embedding });
