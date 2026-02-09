@@ -30,6 +30,8 @@ import { ProjectMatchingService } from './project-matching.service';
 import { ClientResolutionService } from './client-resolution.service';
 import { ActivityMemberService } from '../activity/activity-member.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
+import { FactDedupReviewService, ReviewCandidate } from './fact-dedup-review.service';
+import { SettingsService } from '../settings/settings.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -115,6 +117,8 @@ export class DraftExtractionService {
     private readonly clientResolutionService: ClientResolutionService,
     private readonly activityMemberService: ActivityMemberService,
     private readonly factDeduplicationService: FactDeduplicationService,
+    private readonly factDedupReviewService: FactDedupReviewService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   /**
@@ -141,27 +145,80 @@ export class DraftExtractionService {
       errors: [],
     };
 
-    // 0. Create draft facts first — with hybrid deduplication (text + semantic/embedding)
-    for (const fact of input.facts || []) {
+    // 0. Create draft facts — two-pass hybrid deduplication (text + semantic + LLM review)
+    const { reviewThreshold } = await this.settingsService.getDedupSettings();
+
+    // Pass 1: Hybrid dedup check — collect auto-skip, auto-create, and review candidates
+    const factsToCreate: Array<{ fact: ExtractedFact; embedding?: number[] }> = [];
+    const reviewCandidates: ReviewCandidate[] = [];
+
+    for (let i = 0; i < (input.facts || []).length; i++) {
+      const fact = input.facts[i];
       try {
-        // DEDUPLICATION: Hybrid check — Levenshtein text match, then pgvector semantic
         const dedupResult = await this.factDeduplicationService.checkDuplicateHybrid(
           fact.entityId,
           fact,
+          reviewThreshold,
         );
 
-        if (dedupResult.action !== 'create') {
+        if (dedupResult.action === 'create') {
+          factsToCreate.push({ fact, embedding: dedupResult.embedding });
+        } else if (dedupResult.action === 'review') {
+          // Grey zone — collect for LLM batch review
+          reviewCandidates.push({
+            index: i,
+            entityId: fact.entityId,
+            newFact: fact,
+            matchedFactId: dedupResult.matchedFactId!,
+            similarity: dedupResult.similarity!,
+            embedding: dedupResult.embedding,
+          });
+        } else {
+          // skip, update, supersede — auto-skip
           this.logger.debug(
             `Skipping duplicate fact "${fact.factType}:${fact.value}" for entity ${fact.entityId} — ` +
               `${dedupResult.reason}` +
               (dedupResult.existingFactId ? ` (existing: ${dedupResult.existingFactId})` : ''),
           );
           result.skipped.facts++;
-          continue;
         }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push({ item: `fact:${fact.factType}:${fact.value}`, error: message });
+        this.logger.error(
+          `Failed dedup check for fact "${fact.factType}:${fact.value}": ${message}`,
+        );
+      }
+    }
 
+    // Pass 2: LLM review for grey-zone candidates
+    if (reviewCandidates.length > 0) {
+      this.logger.log(
+        `${reviewCandidates.length} fact(s) in grey zone (similarity ${reviewThreshold.toFixed(2)}-0.70), sending to LLM review`,
+      );
+
+      const decisions = await this.factDedupReviewService.reviewBatch(reviewCandidates);
+
+      for (const decision of decisions) {
+        const candidate = reviewCandidates.find((c) => c.index === decision.newFactIndex);
+        if (!candidate) continue;
+
+        if (decision.action === 'create') {
+          factsToCreate.push({ fact: candidate.newFact, embedding: candidate.embedding });
+        } else {
+          this.logger.debug(
+            `LLM review: skipping "${candidate.newFact.factType}:${candidate.newFact.value}" — ${decision.reason}`,
+          );
+          result.skipped.facts++;
+        }
+      }
+    }
+
+    // Pass 3: Create all approved draft facts
+    for (const { fact, embedding } of factsToCreate) {
+      try {
         const { entity, approval } = await this.createDraftFact(
-          fact, input, batchId, dedupResult.embedding,
+          fact, input, batchId, embedding,
         );
 
         result.approvals.push(approval);

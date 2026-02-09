@@ -33,6 +33,7 @@ import { ExtractionPersistenceService } from './extraction-persistence.service';
 import { DraftExtractionService } from './draft-extraction.service';
 import { ClientResolutionService } from './client-resolution.service';
 import { ProjectMatchingService } from './project-matching.service';
+import { FactDedupReviewService } from './fact-dedup-review.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { InteractionModule } from '../interaction/interaction.module';
@@ -100,6 +101,7 @@ import { ActivityModule } from '../activity/activity.module';
     DraftExtractionService,
     ClientResolutionService,
     ProjectMatchingService,
+    FactDedupReviewService,
   ],
   exports: [
     FactExtractionService,
@@ -120,6 +122,7 @@ import { ActivityModule } from '../activity/activity.module';
     DraftExtractionService,
     ClientResolutionService,
     ProjectMatchingService,
+    FactDedupReviewService,
   ],
 })
 export class ExtractionModule {}

@@ -17,7 +17,8 @@ export type ClaudeTaskType =
   | 'action'
   | 'draft_generation'
   | 'message_regeneration'
-  | 'unified_extraction';
+  | 'unified_extraction'
+  | 'fact_dedup_review';
 
 /**
  * Model types

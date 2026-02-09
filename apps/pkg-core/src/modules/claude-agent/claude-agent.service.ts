@@ -461,6 +461,7 @@ export class ClaudeAgentService {
       fact_extraction: 'You extract structured facts (like job title, company, contact info) from messages.',
       fact_fusion: 'You analyze two facts about the same entity and decide how to merge them: confirm, enrich, supersede, coexist, or flag as conflict.',
       unified_extraction: 'You extract facts, events, and relations from messages using the provided tools. Follow the sectioned instructions in the prompt.',
+      fact_dedup_review: 'Ты эксперт по дедупликации фактов. Анализируй новые факты в контексте существующих и определяй, являются ли они дубликатами. Учитывай сокращения, разные форматы дат, синонимы и перефразирования. Отвечай строго по JSON схеме.',
     };
     return prompts[taskType] || '';
   }

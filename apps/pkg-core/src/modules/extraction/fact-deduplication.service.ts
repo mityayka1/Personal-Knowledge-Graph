@@ -16,11 +16,15 @@ export interface DeduplicableFact {
 }
 
 export interface DeduplicationResult {
-  action: 'create' | 'update' | 'skip' | 'supersede';
+  action: 'create' | 'update' | 'skip' | 'supersede' | 'review';
   existingFactId?: string;
   reason: string;
   /** Embedding generated during semantic check — reuse when saving the fact */
   embedding?: number[];
+  /** Cosine similarity score (set for 'review' action in semantic grey zone) */
+  similarity?: number;
+  /** ID of matched existing fact for LLM review (set for 'review' action) */
+  matchedFactId?: string;
 }
 
 /**
@@ -124,11 +128,16 @@ export class FactDeduplicationService {
     entityId: string,
     newFactValue: string,
     factType?: string,
+    reviewThreshold?: number,
   ): Promise<DeduplicationResult> {
     if (!this.embeddingService) {
       this.logger.warn('EmbeddingService not available, falling back to text-based dedup');
       return { action: 'create', reason: 'Semantic dedup unavailable' };
     }
+
+    // Use reviewThreshold as lower bound for SQL query (to capture grey zone matches),
+    // fall back to SEMANTIC_SIMILARITY_THRESHOLD if not provided
+    const effectiveQueryThreshold = reviewThreshold ?? SEMANTIC_SIMILARITY_THRESHOLD;
 
     try {
       // 1. Generate embedding for new fact value
@@ -152,7 +161,7 @@ export class FactDeduplicationService {
       const params: (string | number)[] = [
         embeddingStr,
         entityId,
-        SEMANTIC_SIMILARITY_THRESHOLD,
+        effectiveQueryThreshold,
       ];
 
       const similar = await this.factRepo.query(query, params);
@@ -162,15 +171,32 @@ export class FactDeduplicationService {
         const match = similar[0];
         const similarity = parseFloat(match.similarity);
 
+        // High similarity — definite duplicate, skip
+        if (similarity >= SEMANTIC_SIMILARITY_THRESHOLD) {
+          this.logger.debug(
+            `Semantic duplicate found: "${newFactValue}" ≈ "${match.value}" (similarity: ${similarity.toFixed(3)})`,
+          );
+
+          return {
+            action: 'skip',
+            existingFactId: match.id,
+            reason: `Semantic duplicate (similarity: ${similarity.toFixed(2)})`,
+            embedding,
+          };
+        }
+
+        // Grey zone — similarity between reviewThreshold and SEMANTIC_SIMILARITY_THRESHOLD
+        // Needs LLM review to decide
         this.logger.debug(
-          `Semantic duplicate found: "${newFactValue}" ≈ "${match.value}" (similarity: ${similarity.toFixed(3)})`,
+          `Semantic grey zone: "${newFactValue}" ~ "${match.value}" (similarity: ${similarity.toFixed(3)}, review needed)`,
         );
 
         return {
-          action: 'skip',
-          existingFactId: match.id,
-          reason: `Semantic duplicate (similarity: ${similarity.toFixed(2)})`,
+          action: 'review',
+          reason: `Grey zone similarity (${similarity.toFixed(2)}), needs LLM review`,
           embedding,
+          similarity,
+          matchedFactId: match.id,
         };
       }
 
@@ -192,6 +218,7 @@ export class FactDeduplicationService {
   async checkDuplicateHybrid(
     entityId: string,
     newFact: DeduplicableFact,
+    reviewThreshold?: number,
   ): Promise<DeduplicationResult> {
     // First, quick text-based check
     const textResult = await this.checkDuplicate(entityId, newFact);
@@ -205,6 +232,8 @@ export class FactDeduplicationService {
     const semanticResult = await this.checkSemanticDuplicate(
       entityId,
       newFact.value,
+      undefined,
+      reviewThreshold,
     );
 
     return semanticResult;

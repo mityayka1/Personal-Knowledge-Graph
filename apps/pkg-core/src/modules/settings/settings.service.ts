@@ -87,6 +87,19 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Максимальное количество фактов для обработки за один запуск inference',
     category: 'inference',
   },
+  // Deduplication settings (LLM-agent review for gray-zone facts)
+  {
+    key: 'dedup.reviewThreshold',
+    value: 0.40,
+    description: 'Нижний порог семантической схожести для серой зоны (0.0-1.0). Факты с similarity между этим порогом и 0.70 отправляются на LLM-ревью.',
+    category: 'dedup',
+  },
+  {
+    key: 'dedup.reviewModel',
+    value: 'haiku',
+    description: 'Модель Claude для LLM-ревью дубликатов фактов (haiku, sonnet, opus)',
+    category: 'dedup',
+  },
   // Notification settings
   {
     key: 'notification.highConfidenceThreshold',
@@ -269,6 +282,24 @@ export class SettingsService implements OnModuleInit {
     return {
       similarityThreshold: similarityThreshold ?? 0.7,
       defaultLimit: defaultLimit ?? 1000,
+    };
+  }
+
+  /**
+   * Get deduplication settings (LLM-agent review for gray-zone facts).
+   */
+  async getDedupSettings(): Promise<{
+    reviewThreshold: number;
+    reviewModel: 'haiku' | 'sonnet' | 'opus';
+  }> {
+    const [reviewThreshold, reviewModel] = await Promise.all([
+      this.getValue<number>('dedup.reviewThreshold'),
+      this.getValue<string>('dedup.reviewModel'),
+    ]);
+
+    return {
+      reviewThreshold: reviewThreshold ?? 0.40,
+      reviewModel: (reviewModel ?? 'haiku') as 'haiku' | 'sonnet' | 'opus',
     };
   }
 

@@ -526,6 +526,101 @@ describe('FactDeduplicationService', () => {
       expect(result.action).toBe('create');
       expect(result.reason).toBe('Semantic dedup unavailable');
     });
+
+    it('should return review action when similarity is in grey zone (between reviewThreshold and 0.70)', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+
+      // Similarity 0.55 is between reviewThreshold (0.40) and SEMANTIC_SIMILARITY_THRESHOLD (0.70)
+      mockRepo.query.mockResolvedValue([
+        {
+          id: 'fact-grey',
+          value: 'живёт в Мск',
+          fact_type: 'location',
+          similarity: 0.55,
+        },
+      ]);
+
+      const result = await service.checkSemanticDuplicate(
+        entityId,
+        'проживает в Москве',
+        'location',
+        0.40, // reviewThreshold
+      );
+
+      expect(result.action).toBe('review');
+      expect(result.reason).toContain('Grey zone');
+      expect(result.similarity).toBe(0.55);
+      expect(result.matchedFactId).toBe('fact-grey');
+      expect(result.embedding).toEqual(newEmbedding);
+    });
+
+    it('should return skip when similarity is above SEMANTIC_SIMILARITY_THRESHOLD even with reviewThreshold set', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+
+      mockRepo.query.mockResolvedValue([
+        {
+          id: 'fact-high',
+          value: 'Сотрудник Сбербанка',
+          fact_type: 'position',
+          similarity: 0.85,
+        },
+      ]);
+
+      const result = await service.checkSemanticDuplicate(
+        entityId,
+        'Работает в Сбере',
+        'position',
+        0.40, // reviewThreshold
+      );
+
+      expect(result.action).toBe('skip');
+      expect(result.existingFactId).toBe('fact-high');
+      expect(result.reason).toContain('Semantic duplicate');
+    });
+
+    it('should return create when similarity is below reviewThreshold', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+
+      // No results because SQL query uses reviewThreshold as lower bound
+      mockRepo.query.mockResolvedValue([]);
+
+      const result = await service.checkSemanticDuplicate(
+        entityId,
+        'Completely different fact',
+        undefined,
+        0.40, // reviewThreshold — nothing above 0.40 found
+      );
+
+      expect(result.action).toBe('create');
+      expect(result.reason).toContain('No semantic duplicates');
+    });
+
+    it('should use reviewThreshold as effective query threshold in SQL', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([]);
+
+      await service.checkSemanticDuplicate(entityId, 'test value', undefined, 0.45);
+
+      const queryParams = mockRepo.query.mock.calls[0][1];
+      // Third param is the effective threshold
+      expect(queryParams[2]).toBe(0.45);
+    });
+
+    it('should use SEMANTIC_SIMILARITY_THRESHOLD as default when reviewThreshold not provided', async () => {
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([]);
+
+      await service.checkSemanticDuplicate(entityId, 'test value');
+
+      const queryParams = mockRepo.query.mock.calls[0][1];
+      // Should use the default SEMANTIC_SIMILARITY_THRESHOLD (0.70)
+      expect(queryParams[2]).toBe(0.70);
+    });
   });
 
   describe('checkDuplicateHybrid', () => {
@@ -620,6 +715,51 @@ describe('FactDeduplicationService', () => {
       expect(result.existingFactId).toBe('fact-1');
       // Should not call embedding service since text-based found a match
       expect(mockEmbeddingService.generate).not.toHaveBeenCalled();
+    });
+
+    it('should forward reviewThreshold to checkSemanticDuplicate and return review action', async () => {
+      // Text-based check finds no match
+      mockRepo.find.mockResolvedValue([]);
+
+      // Semantic check finds grey-zone match
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([
+        {
+          id: 'fact-grey',
+          value: 'живёт в Мск',
+          fact_type: 'location',
+          similarity: 0.55,
+        },
+      ]);
+
+      const newFact = createFact('location', 'проживает в Москве', 0.8);
+
+      const result = await service.checkDuplicateHybrid(entityId, newFact, 0.40);
+
+      expect(result.action).toBe('review');
+      expect(result.similarity).toBe(0.55);
+      expect(result.matchedFactId).toBe('fact-grey');
+
+      // Verify the SQL query used reviewThreshold (0.40) as lower bound
+      const queryParams = mockRepo.query.mock.calls[0][1];
+      expect(queryParams[2]).toBe(0.40);
+    });
+
+    it('should return create when semantic finds nothing with reviewThreshold', async () => {
+      // Text-based: no match
+      mockRepo.find.mockResolvedValue([]);
+
+      // Semantic: no match either (nothing above reviewThreshold)
+      const newEmbedding = createMockEmbedding(1);
+      mockEmbeddingService.generate.mockResolvedValue(newEmbedding);
+      mockRepo.query.mockResolvedValue([]);
+
+      const newFact = createFact('note', 'Completely unique note', 0.7);
+
+      const result = await service.checkDuplicateHybrid(entityId, newFact, 0.40);
+
+      expect(result.action).toBe('create');
     });
   });
 });
