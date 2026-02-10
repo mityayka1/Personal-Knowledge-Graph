@@ -46,6 +46,7 @@ import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
 import { ConfirmationModule } from '../confirmation/confirmation.module';
 import { ActivityModule } from '../activity/activity.module';
+import { JobModule } from '../job/job.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { ActivityModule } from '../activity/activity.module';
     forwardRef(() => ConfirmationModule),
     ActivityModule,
     PendingApprovalModule,
+    forwardRef(() => JobModule),
   ],
   controllers: [ExtractionController, ExtractedEventController],
   providers: [

@@ -194,4 +194,31 @@ export class JobService {
     });
     this.logger.debug(`Created extraction job ${jobId} with delay ${delayMs}ms`);
   }
+
+  /**
+   * Queue extraction job directly without debouncing.
+   * Used for reprocessing — all messages are already known.
+   */
+  async queueExtractionDirect(params: {
+    interactionId: string;
+    entityId: string;
+    messages: MessageData[];
+  }): Promise<string> {
+    const jobId = `reprocess_${params.interactionId}_${Date.now()}`;
+
+    const job = await this.extractionQueue.add('extract', {
+      interactionId: params.interactionId,
+      entityId: params.entityId,
+      messageIds: params.messages.map(m => m.id),
+      messages: params.messages,
+    } as ExtractionJobData, {
+      jobId,
+    });
+
+    this.logger.log(
+      `Queued reprocess job ${jobId} for interaction ${params.interactionId} with ${params.messages.length} messages`,
+    );
+
+    return job.id!;
+  }
 }

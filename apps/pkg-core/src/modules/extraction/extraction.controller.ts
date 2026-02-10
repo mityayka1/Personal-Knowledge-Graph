@@ -1,9 +1,13 @@
 import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
+import { PendingApprovalStatus } from '@pkg/entities';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
+import { MessageData } from './extraction.types';
 import { MessageService } from '../interaction/message/message.service';
 import { EntityService } from '../entity/entity.service';
+import { PendingApprovalService } from '../pending-approval/pending-approval.service';
+import { JobService } from '../job/job.service';
 
 interface ExtractFactsDto {
   entityId: string;
@@ -59,6 +63,10 @@ export class ExtractionController {
     @Optional()
     @Inject(forwardRef(() => DailySynthesisExtractionService))
     private dailySynthesisService: DailySynthesisExtractionService | null,
+    @Inject(forwardRef(() => PendingApprovalService))
+    private pendingApprovalService: PendingApprovalService,
+    @Inject(forwardRef(() => JobService))
+    private jobService: JobService,
   ) {}
 
   @Post('facts')
@@ -288,6 +296,122 @@ export class ExtractionController {
         durationMs: result.extraction.durationMs,
       },
       errors: result.drafts.errors.length > 0 ? result.drafts.errors : undefined,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Reprocess Pending (reject + re-extract)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Reject all PENDING approvals and re-queue extraction for their source interactions.
+   * POST /extraction/reprocess-pending
+   *
+   * Use case: extraction logic was updated (e.g., new group chat routing),
+   * and previously extracted pending items need to be re-extracted.
+   */
+  @Post('reprocess-pending')
+  async reprocessPending() {
+    this.logger.log('[reprocessPending] Starting reprocess of all pending approvals');
+
+    // 1. Get all PENDING approvals
+    const { items: pendingApprovals } = await this.pendingApprovalService.list({
+      status: PendingApprovalStatus.PENDING,
+      limit: 10000,
+    });
+
+    if (pendingApprovals.length === 0) {
+      this.logger.log('[reprocessPending] No pending approvals found');
+      return { pendingRejected: 0, batchesRejected: 0, interactionsQueued: 0 };
+    }
+
+    this.logger.log(`[reprocessPending] Found ${pendingApprovals.length} pending approvals`);
+
+    // 2. Group by batchId for rejection
+    const batchIds = [...new Set(pendingApprovals.map(a => a.batchId))];
+
+    let totalRejected = 0;
+    const rejectErrors: string[] = [];
+    for (const batchId of batchIds) {
+      try {
+        const result = await this.pendingApprovalService.rejectBatch(batchId);
+        totalRejected += result.processed;
+        if (result.errors) rejectErrors.push(...result.errors);
+      } catch (error) {
+        rejectErrors.push(`Batch ${batchId}: ${(error as Error).message}`);
+      }
+    }
+
+    this.logger.log(`[reprocessPending] Rejected ${totalRejected} items in ${batchIds.length} batches`);
+
+    // 3. Group by sourceInteractionId for re-extraction
+    const interactionIds = [...new Set(
+      pendingApprovals
+        .map(a => a.sourceInteractionId)
+        .filter((id): id is string => id != null),
+    )];
+
+    const skippedNoInteraction = pendingApprovals.filter(a => !a.sourceInteractionId).length;
+
+    // 4. For each interaction: load messages, convert, queue
+    let interactionsQueued = 0;
+    const queueErrors: string[] = [];
+
+    for (const interactionId of interactionIds) {
+      try {
+        const messages = await this.messageService.findByInteraction(interactionId, 1000);
+
+        if (messages.length === 0) {
+          queueErrors.push(`Interaction ${interactionId}: no messages found`);
+          continue;
+        }
+
+        // Convert Message[] → MessageData[]
+        const messageData: MessageData[] = messages
+          .filter(m => m.content && m.content.trim().length > 0)
+          .map(m => ({
+            id: m.id,
+            content: m.content!,
+            timestamp: m.timestamp.toISOString(),
+            isOutgoing: m.isOutgoing,
+            replyToSourceMessageId: m.replyToSourceMessageId ?? undefined,
+            topicName: m.topicName ?? undefined,
+            senderEntityId: m.senderEntityId ?? undefined,
+          }));
+
+        if (messageData.length === 0) {
+          queueErrors.push(`Interaction ${interactionId}: no messages with content`);
+          continue;
+        }
+
+        // entityId: use first sender entity (deprecated field, kept for compatibility)
+        const entityId = messageData.find(m => m.senderEntityId)?.senderEntityId || '';
+
+        await this.jobService.queueExtractionDirect({
+          interactionId,
+          entityId,
+          messages: messageData,
+        });
+
+        interactionsQueued++;
+      } catch (error) {
+        queueErrors.push(`Interaction ${interactionId}: ${(error as Error).message}`);
+      }
+    }
+
+    const allErrors = [...rejectErrors, ...queueErrors];
+
+    this.logger.log(
+      `[reprocessPending] Complete: rejected=${totalRejected}, queued=${interactionsQueued}, ` +
+        `skipped=${skippedNoInteraction}, errors=${allErrors.length}`,
+    );
+
+    return {
+      pendingRejected: totalRejected,
+      batchesRejected: batchIds.length,
+      interactionsQueued,
+      skippedNoInteraction,
+      errors: allErrors.length > 0 ? allErrors : undefined,
     };
   }
 }
