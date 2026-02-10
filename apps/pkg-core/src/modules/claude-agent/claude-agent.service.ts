@@ -274,6 +274,10 @@ export class ClaudeAgentService {
 
         if (message.type === 'result') {
           const resultMessage = message as SDKResultMessage;
+
+          // Extract usage from result message (SDK puts usage here, not in assistant)
+          this.accumulateUsageFromResult(resultMessage, usage);
+
           // Debug logging for structured output (run with LOG_LEVEL=debug to see)
           const msgAny = resultMessage as Record<string, unknown>;
           this.logger.debug(`Result keys: ${Object.keys(msgAny).join(', ')}`);
