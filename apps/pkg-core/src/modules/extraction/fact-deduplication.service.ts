@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { EntityFact } from '@pkg/entities';
@@ -45,6 +45,7 @@ export class FactDeduplicationService {
     @InjectRepository(EntityFact)
     private factRepo: Repository<EntityFact>,
     @Optional()
+    @Inject(forwardRef(() => EmbeddingService))
     private embeddingService: EmbeddingService | null,
   ) {}
 
