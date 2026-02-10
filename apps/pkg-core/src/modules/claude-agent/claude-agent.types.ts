@@ -18,6 +18,7 @@ export type ClaudeTaskType =
   | 'draft_generation'
   | 'message_regeneration'
   | 'unified_extraction'
+  | 'group_extraction'
   | 'fact_dedup_review';
 
 /**

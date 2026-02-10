@@ -2,19 +2,31 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Job as BullJob } from 'bullmq';
 import { FactExtractionProcessor } from './fact-extraction.processor';
 import { UnifiedExtractionService } from '../../extraction/unified-extraction.service';
+import { GroupExtractionService } from '../../extraction/group-extraction.service';
 import { EntityService } from '../../entity/entity.service';
+import { InteractionService } from '../../interaction/interaction.service';
 import { ExtractionJobData } from '../job.service';
 
 describe('FactExtractionProcessor', () => {
   let processor: FactExtractionProcessor;
   let unifiedExtractionService: jest.Mocked<UnifiedExtractionService>;
   let entityService: jest.Mocked<EntityService>;
+  let groupExtractionService: jest.Mocked<GroupExtractionService>;
+  let interactionService: jest.Mocked<InteractionService>;
 
   const mockUnifiedExtractionService = {
     extract: jest.fn(),
   };
 
+  const mockGroupExtractionService = {
+    extract: jest.fn(),
+  };
+
   const mockEntityService = {
+    findOne: jest.fn(),
+  };
+
+  const mockInteractionService = {
     findOne: jest.fn(),
   };
 
@@ -29,15 +41,25 @@ describe('FactExtractionProcessor', () => {
           useValue: mockUnifiedExtractionService,
         },
         {
+          provide: GroupExtractionService,
+          useValue: mockGroupExtractionService,
+        },
+        {
           provide: EntityService,
           useValue: mockEntityService,
+        },
+        {
+          provide: InteractionService,
+          useValue: mockInteractionService,
         },
       ],
     }).compile();
 
     processor = module.get<FactExtractionProcessor>(FactExtractionProcessor);
     unifiedExtractionService = module.get(UnifiedExtractionService);
+    groupExtractionService = module.get(GroupExtractionService);
     entityService = module.get(EntityService);
+    interactionService = module.get(InteractionService);
   });
 
   const createMockJob = (data: ExtractionJobData): BullJob<ExtractionJobData> => ({
@@ -61,6 +83,12 @@ describe('FactExtractionProcessor', () => {
     };
 
     beforeEach(() => {
+      // Default: interaction with private chat_type so existing tests route to private chat flow
+      mockInteractionService.findOne.mockResolvedValue({
+        id: 'interaction-123',
+        sourceMetadata: { chat_type: 'private' },
+        participants: [],
+      });
       mockEntityService.findOne.mockResolvedValue({
         id: 'entity-456',
         name: 'Test User',
@@ -183,6 +211,117 @@ describe('FactExtractionProcessor', () => {
           messages: jobData.messages,
           interactionId: 'interaction-789',
         });
+      });
+    });
+
+    describe('chat type routing', () => {
+      const groupExtractionResult = {
+        factsCreated: 2,
+        eventsCreated: 1,
+        relationsCreated: 0,
+        pendingEntities: 1,
+        turns: 3,
+        toolsUsed: ['create_fact'],
+        tokensUsed: 500,
+      };
+
+      beforeEach(() => {
+        mockGroupExtractionService.extract.mockResolvedValue(groupExtractionResult);
+      });
+
+      it('should route to group extraction for group chat_type', async () => {
+        mockInteractionService.findOne.mockResolvedValue({
+          id: 'interaction-123',
+          sourceMetadata: { chat_type: 'group' },
+          participants: [{ id: 'p-1', entity: { id: 'e-1', name: 'Alice' } }],
+        });
+
+        const job = createMockJob(baseJobData);
+        const result = await processor.process(job);
+
+        expect(result).toEqual({
+          success: true,
+          factsCreated: 2,
+          eventsCreated: 1,
+          relationsCreated: 0,
+          pendingEntities: 1,
+        });
+
+        expect(mockGroupExtractionService.extract).toHaveBeenCalledWith({
+          interactionId: 'interaction-123',
+          messages: baseJobData.messages,
+          participants: [{ id: 'p-1', entity: { id: 'e-1', name: 'Alice' } }],
+          chatName: undefined,
+        });
+        expect(mockUnifiedExtractionService.extract).not.toHaveBeenCalled();
+      });
+
+      it('should route to group extraction for supergroup chat_type', async () => {
+        mockInteractionService.findOne.mockResolvedValue({
+          id: 'interaction-123',
+          sourceMetadata: { chat_type: 'supergroup' },
+          participants: [],
+        });
+
+        const job = createMockJob(baseJobData);
+        const result = await processor.process(job);
+
+        expect(result).toEqual({
+          success: true,
+          factsCreated: 2,
+          eventsCreated: 1,
+          relationsCreated: 0,
+          pendingEntities: 1,
+        });
+
+        expect(mockGroupExtractionService.extract).toHaveBeenCalled();
+        expect(mockUnifiedExtractionService.extract).not.toHaveBeenCalled();
+      });
+
+      it('should fallback to private chat when interaction cannot be loaded', async () => {
+        mockInteractionService.findOne.mockRejectedValue(new Error('DB connection error'));
+
+        const job = createMockJob(baseJobData);
+        const result = await processor.process(job);
+
+        expect(result).toEqual({
+          success: true,
+          factsCreated: 0,
+          eventsCreated: 0,
+          relationsCreated: 0,
+          pendingEntities: 0,
+        });
+
+        expect(mockGroupExtractionService.extract).not.toHaveBeenCalled();
+        expect(mockUnifiedExtractionService.extract).toHaveBeenCalled();
+      });
+
+      it('should route to private chat when chat_type is private', async () => {
+        mockInteractionService.findOne.mockResolvedValue({
+          id: 'interaction-123',
+          sourceMetadata: { chat_type: 'private' },
+          participants: [],
+        });
+
+        const job = createMockJob(baseJobData);
+        await processor.process(job);
+
+        expect(mockGroupExtractionService.extract).not.toHaveBeenCalled();
+        expect(mockUnifiedExtractionService.extract).toHaveBeenCalled();
+      });
+
+      it('should route to private chat when sourceMetadata is missing', async () => {
+        mockInteractionService.findOne.mockResolvedValue({
+          id: 'interaction-123',
+          sourceMetadata: null,
+          participants: [],
+        });
+
+        const job = createMockJob(baseJobData);
+        await processor.process(job);
+
+        expect(mockGroupExtractionService.extract).not.toHaveBeenCalled();
+        expect(mockUnifiedExtractionService.extract).toHaveBeenCalled();
       });
     });
 
