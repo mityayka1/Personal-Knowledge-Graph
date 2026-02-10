@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Interaction, InteractionType, InteractionStatus, InteractionParticipant, ParticipantRole } from '@pkg/entities';
+
+type InteractionChatType = 'private' | 'group' | 'supergroup';
 import { SettingsService } from '../settings/settings.service';
 
 @Injectable()
@@ -59,8 +61,9 @@ export class InteractionService {
    *
    * @param chatId - Telegram chat ID
    * @param messageTime - Timestamp of the current message
+   * @param chatType - Telegram chat type (private, group, supergroup, channel)
    */
-  async findOrCreateSession(chatId: string, messageTime?: Date) {
+  async findOrCreateSession(chatId: string, messageTime?: Date, chatType?: InteractionChatType) {
     const existing = await this.findActiveSession(chatId);
 
     if (existing && messageTime) {
@@ -74,7 +77,15 @@ export class InteractionService {
         // End current session with last known activity time (not current time)
         await this.endSession(existing.id, lastActivity);
         // Create new session with message timestamp as startedAt
-        return this.createSession(chatId, messageTime);
+        return this.createSession(chatId, messageTime, chatType);
+      }
+
+      // Backfill chat_type on existing sessions that were created before this fix
+      if (chatType && !existing.sourceMetadata?.chat_type) {
+        await this.interactionRepo.update(existing.id, {
+          sourceMetadata: { ...existing.sourceMetadata, chat_type: chatType },
+        });
+        existing.sourceMetadata = { ...existing.sourceMetadata, chat_type: chatType };
       }
 
       // Update interaction's updatedAt to track last message time for gap calculation
@@ -83,25 +94,36 @@ export class InteractionService {
     }
 
     if (existing) {
+      // Backfill chat_type on existing sessions
+      if (chatType && !existing.sourceMetadata?.chat_type) {
+        await this.interactionRepo.update(existing.id, {
+          sourceMetadata: { ...existing.sourceMetadata, chat_type: chatType },
+        });
+        existing.sourceMetadata = { ...existing.sourceMetadata, chat_type: chatType };
+      }
       return existing;
     }
 
     // Create new session with message timestamp (or now if not provided)
-    return this.createSession(chatId, messageTime);
+    return this.createSession(chatId, messageTime, chatType);
   }
 
   /**
    * Create a new Telegram session.
    * @param chatId - Telegram chat ID
    * @param startedAt - Timestamp of the first message in the session (defaults to now for real-time)
+   * @param chatType - Telegram chat type (private, group, supergroup, channel)
    */
-  async createSession(chatId: string, startedAt?: Date) {
+  async createSession(chatId: string, startedAt?: Date, chatType?: InteractionChatType) {
     const interaction = this.interactionRepo.create({
       type: InteractionType.TELEGRAM_SESSION,
       source: 'telegram',
       status: InteractionStatus.ACTIVE,
       startedAt: startedAt || new Date(),
-      sourceMetadata: { telegram_chat_id: chatId },
+      sourceMetadata: {
+        telegram_chat_id: chatId,
+        ...(chatType && { chat_type: chatType }),
+      },
     });
 
     return this.interactionRepo.save(interaction);

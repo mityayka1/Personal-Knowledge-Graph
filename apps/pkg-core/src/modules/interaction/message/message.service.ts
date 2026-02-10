@@ -58,9 +58,12 @@ export class MessageService {
     });
 
     // 2. Find or create interaction (session)
+    // Pass chat_type to store in sourceMetadata (only private/group/supergroup are relevant)
+    const chatTypeForSession = dto.chat_type as 'private' | 'group' | 'supergroup' | undefined;
     const interaction = await this.interactionService.findOrCreateSession(
       dto.telegram_chat_id,
       new Date(dto.timestamp),
+      chatTypeForSession,
     );
 
     // 3. Resolve entity based on category
