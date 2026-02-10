@@ -25,6 +25,8 @@ import {
   ExtractedEventType,
   ExtractedEventStatus,
   PendingApprovalItemType,
+  EntityType,
+  CreationSource,
 } from '@pkg/entities';
 
 /** MCP server name for extraction tools */
@@ -418,18 +420,20 @@ export class ExtractionToolsProvider {
 
   /**
    * create_pending_entity - Create a pending entity for mentioned unknown person.
+   * Also creates a real Entity immediately so that create_fact and create_relation
+   * can reference it by entityId in the same extraction session.
    *
    * @param context - Message/interaction context for source tracking (avoids singleton state)
    */
   private createPendingEntityTool(context: ExtractionContext) {
     return tool(
       'create_pending_entity',
-      `Создать ожидающую сущность для упомянутого человека, которого нет в системе.
+      `Создать новую сущность для упомянутого человека/организации, которых нет в системе.
 Используй когда в сообщении упоминается новый человек, которого не удалось найти через find_entity_by_name.
 
-Pending entity будет ожидать ручного связывания с реальной сущностью или создания новой.`,
+Создаёт реальную Entity сразу и возвращает entityId — используй его для create_fact и create_relation.`,
       {
-        suggestedName: z.string().describe('Предполагаемое имя (например: "Маша", "Иван Петров")'),
+        suggestedName: z.string().describe('Предполагаемое имя (например: "Маша", "Иван Петров", "Жена Ивана")'),
         mentionedAs: z.string().describe('Контекст упоминания (например: "жена Ивана", "коллега по работе")'),
         relatedToEntityId: z.string().uuid().optional().describe('UUID связанной сущности если известна'),
       },
@@ -447,7 +451,7 @@ Pending entity будет ожидать ручного связывания с 
           const uniqueSuffix = context.messageId || Date.now().toString();
           const identifierValue = `${args.suggestedName}::${uniqueSuffix}`;
 
-          // Create pending resolution with context from mention
+          // 1. Create pending resolution with context from mention
           const pending = await this.pendingResolutionService.findOrCreate({
             identifierType: 'mentioned_name',
             identifierValue,
@@ -460,15 +464,27 @@ Pending entity будет ожидать ручного связывания с 
             },
           });
 
+          // 2. Create real Entity with CreationSource.EXTRACTED
+          const entity = await this.entityService.create({
+            type: EntityType.PERSON,
+            name: args.suggestedName,
+            creationSource: CreationSource.EXTRACTED,
+            notes: `Автоматически создан из извлечения. Контекст: ${args.mentionedAs}`,
+          });
+
+          // 3. Link PendingEntityResolution to the real Entity
+          await this.pendingResolutionService.linkToEntity(pending.id, entity.id);
+
           this.logger.log(
-            `Created pending entity for "${args.suggestedName}" (id: ${pending.id})`,
+            `Created entity "${args.suggestedName}" (entityId: ${entity.id}) and linked pending resolution (pendingId: ${pending.id})`,
           );
 
           return toolSuccess({
             pendingId: pending.id,
+            entityId: entity.id,
             suggestedName: args.suggestedName,
             status: pending.status,
-            message: 'Pending entity created. Will be resolved later.',
+            message: 'Entity created. Use entityId for create_fact and create_relation.',
           });
         } catch (error) {
           return handleToolError(error, this.logger, 'create_pending_entity');

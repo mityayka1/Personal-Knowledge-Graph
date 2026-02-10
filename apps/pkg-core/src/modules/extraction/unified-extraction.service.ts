@@ -300,9 +300,23 @@ ${relationsSection}
 2. "Маша работает в Сбере" → create_fact для Маши (найди через find_entity_by_name), НЕ для ${entityName}.
 3. Если упомянут человек из связей — загрузи его контекст через get_entity_context.
 4. Если упомянут новый человек — создай через create_pending_entity.
-5. НЕ дублируй уже известные факты (Smart Fusion обработает дубликаты автоматически).
-6. Типы фактов: position, company, birthday, phone, email, location, education, hobby, family, preference.
-7. [Я] / ИСХОДЯЩЕЕ — сообщения пользователя, [${entityName}] / ВХОДЯЩЕЕ — сообщения собеседника.
+5. ФАКТЫ О ТРЕТЬИХ ЛИЦАХ — "его жена учится на дизайне", "брат работает в Google":
+   a) find_entity_by_name("имя третьего лица") — поиск
+   b) Если НЕ найдено → create_pending_entity(suggestedName, mentionedAs, relatedToEntityId)
+   c) Используй ВОЗВРАЩЁННЫЙ entityId для create_fact
+   d) Создай связь: create_relation(marriage/parenthood/..., [${entityName}, новая сущность])
+
+   ПРИМЕР: "его жена учится на курсах по дизайну интерьеров"
+   → create_pending_entity(suggestedName: "Жена ${entityName}", mentionedAs: "жена", relatedToEntityId: ${entityId})
+   → create_fact(entityId: ВОЗВРАЩЁННЫЙ_entityId, factType: "education", value: "курсы по дизайну интерьеров")
+   → create_relation(marriage, [{entityId: ${entityId}, role: "spouse"}, {entityId: ВОЗВРАЩЁННЫЙ_entityId, role: "spouse"}])
+6. НЕ дублируй уже известные факты (Smart Fusion обработает дубликаты автоматически).
+7. Типы фактов: position, company, birthday, phone, email, location, education, hobby, family, preference.
+8. value поля create_fact должен содержать ТОЛЬКО сам факт.
+   НЕ добавляй пояснения: "это новый факт", "раньше не упоминался", "важно".
+   ПРАВИЛЬНО: value: "курсы по дизайну интерьеров"
+   НЕПРАВИЛЬНО: value: "учится на курсах, это новый факт который раньше не упоминался"
+9. [Я] / ИСХОДЯЩЕЕ — сообщения пользователя, [${entityName}] / ВХОДЯЩЕЕ — сообщения собеседника.
 
 ══════════════════════════════════════════
 § СОБЫТИЯ — правила извлечения

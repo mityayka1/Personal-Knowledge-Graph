@@ -15,6 +15,8 @@ import {
   PromiseEventData,
   TaskEventData,
   FactEventData,
+  EntityType,
+  CreationSource,
 } from '@pkg/entities';
 import { DraftExtractionService } from './draft-extraction.service';
 import {
@@ -25,6 +27,7 @@ import {
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
+import { EntityService } from '../entity/entity.service';
 
 /**
  * Raw event extracted by LLM
@@ -146,6 +149,9 @@ export class SecondBrainExtractionService {
     @Optional()
     @Inject(forwardRef(() => SubjectResolverService))
     private subjectResolverService: SubjectResolverService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityService))
+    private entityService: EntityService | null,
   ) {}
 
   /**
@@ -247,9 +253,28 @@ export class SecondBrainExtractionService {
         }
 
         switch (rawEvent.type) {
-          case 'fact':
-            facts.push(this.mapToExtractedFact(rawEvent, entityId));
+          case 'fact': {
+            const rawConvEvent = rawEvent as RawConversationEvent;
+            let factEntityId = entityId;
+
+            if (rawConvEvent.subjectMention) {
+              try {
+                factEntityId = await this.resolveFactSubject(
+                  rawConvEvent.subjectMention,
+                  conversation.participantEntityIds,
+                  rawConvEvent.confidence ?? 0.7,
+                  entityId,
+                );
+              } catch (e) {
+                this.logger.warn(
+                  `Failed to resolve subject "${rawConvEvent.subjectMention}": ${e}`,
+                );
+              }
+            }
+
+            facts.push(this.mapToExtractedFact(rawEvent, factEntityId));
             break;
+          }
 
           case 'task':
             // Task from conversation: requested by counterparty, assigned to self
@@ -430,6 +455,85 @@ export class SecondBrainExtractionService {
   }
 
   /**
+   * Resolve the subject (owner) of a fact when subjectMention indicates a third party.
+   *
+   * 1. Tries SubjectResolverService for name-based matching against known entities
+   * 2. Falls back to creating a new extracted Entity for unresolved subjects
+   *
+   * @param subjectMention - Text mentioning the subject (e.g., "Игорь", "жена")
+   * @param conversationParticipants - Entity IDs of conversation participants
+   * @param confidence - LLM confidence score for this extraction
+   * @param defaultEntityId - Fallback entity ID (main conversation partner)
+   * @returns Entity ID to attribute the fact to
+   */
+  private async resolveFactSubject(
+    subjectMention: string,
+    conversationParticipants: string[],
+    confidence: number,
+    defaultEntityId: string,
+  ): Promise<string> {
+    // 1. Try SubjectResolverService (already injected)
+    if (this.subjectResolverService) {
+      try {
+        const resolution = await this.subjectResolverService.resolve(
+          subjectMention,
+          conversationParticipants,
+          confidence,
+        );
+        if (resolution.status === 'resolved' && resolution.entityId) {
+          this.logger.log(
+            `Resolved subject "${subjectMention}" to entity ${resolution.entityId}`,
+          );
+          return resolution.entityId;
+        }
+        if (resolution.status === 'pending') {
+          this.logger.log(
+            `Subject "${subjectMention}" pending confirmation (${resolution.confirmationId})`,
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          `SubjectResolver failed for "${subjectMention}": ${error}`,
+        );
+      }
+    }
+
+    // 2. Unknown subject -> create Entity with CreationSource.EXTRACTED
+    return this.createExtractedEntity(subjectMention, defaultEntityId);
+  }
+
+  /**
+   * Create a new Entity for an extracted third-party subject.
+   *
+   * @param name - Name/mention of the person (e.g., "жена", "Игорь")
+   * @param relatedToEntityId - Entity ID of the main conversation partner (for context)
+   * @returns ID of the newly created entity
+   */
+  private async createExtractedEntity(
+    name: string,
+    relatedToEntityId: string,
+  ): Promise<string> {
+    if (!this.entityService) {
+      throw new Error(
+        `EntityService not available, cannot create extracted entity for "${name}"`,
+      );
+    }
+
+    const entity = await this.entityService.create({
+      type: EntityType.PERSON,
+      name,
+      creationSource: CreationSource.EXTRACTED,
+      notes: `Автоматически создан из извлечения. Упомянут в контексте entity ${relatedToEntityId}`,
+    });
+
+    this.logger.log(
+      `Created extracted entity "${name}" (${entity.id}) related to ${relatedToEntityId}`,
+    );
+
+    return entity.id;
+  }
+
+  /**
    * Build system prompt for conversation-based extraction.
    */
   private buildConversationSystemPrompt(
@@ -506,7 +610,11 @@ ${crossChatContext}
 ВАЖНО:
 - confidence 0.0-1.0 (высокий если явно, низкий если вывод)
 - sourceQuote — цитата из беседы
-- ВСЕ ОПИСАНИЯ НА РУССКОМ (даже если оригинал на английском)`;
+- ВСЕ ОПИСАНИЯ НА РУССКОМ (даже если оригинал на английском)
+- value должен содержать ТОЛЬКО факт, без пояснений
+- НЕ добавляй: "это новый факт", "раньше не упоминался", "важная информация"
+- ПРАВИЛЬНО: value: "курсы по дизайну интерьеров"
+- НЕПРАВИЛЬНО: value: "учится на курсах, это новый факт который раньше не упоминался"`;
 
     return prompt;
   }

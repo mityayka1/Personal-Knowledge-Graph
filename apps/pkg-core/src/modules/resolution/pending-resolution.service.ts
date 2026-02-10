@@ -177,6 +177,21 @@ export class PendingResolutionService {
     });
   }
 
+  /**
+   * Link a pending resolution directly to an entity without full resolve flow.
+   * Used when extraction creates a real Entity alongside a PendingEntityResolution.
+   */
+  async linkToEntity(id: string, entityId: string): Promise<void> {
+    const result = await this.resolutionRepo.update(id, {
+      resolvedEntityId: entityId,
+      status: ResolutionStatus.RESOLVED,
+      resolvedAt: new Date(),
+    });
+    if (result.affected === 0) {
+      this.logger.warn(`linkToEntity: pending resolution ${id} not found`);
+    }
+  }
+
   async ignore(id: string) {
     const resolution = await this.findOne(id);
 
