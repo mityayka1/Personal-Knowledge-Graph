@@ -27,6 +27,22 @@ import { DraftExtractionService, DraftExtractionResult } from './draft-extractio
  *
  * Uses oneshot mode with structured output (JSON Schema constrained decoding).
  */
+// Vague pronouns / placeholders that indicate non-specific content
+// Note: \b doesn't work with Cyrillic in JS, using (?<!\p{L}) / (?!\p{L}) instead
+const VAGUE_PATTERNS = [
+  /(?<!\p{L})что[-\s]?то(?!\p{L})/iu,
+  /(?<!\p{L})кое[-\s]?что(?!\p{L})/iu,
+  /(?<!\p{L})кое[-\s]?как(?!\p{L})/iu,
+  /(?<!\p{L})как[-\s]?нибудь(?!\p{L})/iu,
+  /(?<!\p{L})как[-\s]?то(?!\p{L})/iu,
+  /(?<!\p{L})где[-\s]?то(?!\p{L})/iu,
+  /(?<!\p{L})когда[-\s]?нибудь(?!\p{L})/iu,
+  /(?<!\p{L})что[-\s]?нибудь(?!\p{L})/iu,
+  /(?<!\p{L})куда[-\s]?то(?!\p{L})/iu,
+  /(?<!\p{L})че[-\s]?нибудь(?!\p{L})/iu,
+  /(?<!\p{L})че[-\s]?нить(?!\p{L})/iu,
+];
+
 @Injectable()
 export class DailySynthesisExtractionService {
   private readonly logger = new Logger(DailySynthesisExtractionService.name);
@@ -99,20 +115,21 @@ export class DailySynthesisExtractionService {
       existingActivities,
     );
 
-    // Filter out low-quality commitments
+    // Filter out low-quality tasks and commitments
+    const filteredTasks = this.filterLowQualityTasks(result.data.tasks);
     const filteredCommitments = this.filterLowQualityCommitments(result.data.commitments);
 
     this.logger.log(
       `[daily-extraction] Completed in ${durationMs}ms: ` +
         `${enrichedProjects.length} projects (${result.data.projects.length - enrichedProjects.length} filtered), ` +
-        `${result.data.tasks.length} tasks, ` +
+        `${filteredTasks.length} tasks (${result.data.tasks.length - filteredTasks.length} filtered), ` +
         `${filteredCommitments.length} commitments (${result.data.commitments.length - filteredCommitments.length} filtered), ` +
         `${result.data.inferredRelations.length} relations`,
     );
 
     return {
       projects: enrichedProjects,
-      tasks: result.data.tasks,
+      tasks: filteredTasks,
       commitments: filteredCommitments,
       inferredRelations: result.data.inferredRelations,
       extractionSummary: result.data.extractionSummary,
@@ -278,6 +295,11 @@ export class DailySynthesisExtractionService {
    - Если задача привязана к проекту — укажи projectName
    - Если есть дедлайн — укажи в формате ISO 8601
 
+   **НЕ извлекай как задачу если:**
+   - Нет конкретного объекта действия ("оплатить что-нибудь", "сделать что-то")
+   - Нет определённости по времени И контексту ("когда надо будет", "когда-нибудь")
+   - title должен отвечать на вопрос "ЧТО ИМЕННО сделать?"
+
 3. **ОБЯЗАТЕЛЬСТВА** — обещания, договорённости, напоминания
    - Определи кто кому что обещал
    - "self" означает владельца системы (автора отчёта)
@@ -384,30 +406,54 @@ ${synthesisText}
   }
 
   /**
+   * Filter out low-quality task extractions.
+   * Tasks with vague titles, low confidence, or no actionable content are removed.
+   */
+  private filterLowQualityTasks(
+    tasks: DailySynthesisExtractionResponse['tasks'],
+  ): DailySynthesisExtractionResponse['tasks'] {
+    return tasks.filter((task) => {
+      const title = task.title.trim();
+
+      if (task.confidence < 0.7) {
+        this.logger.debug(
+          `[daily-extraction] Filtered task "${title}": low confidence ${task.confidence}`,
+        );
+        return false;
+      }
+
+      if (title.length < 10) {
+        this.logger.debug(
+          `[daily-extraction] Filtered task "${title}": title too short (${title.length} chars)`,
+        );
+        return false;
+      }
+
+      const hasVagueWord = VAGUE_PATTERNS.some((pattern) => pattern.test(title));
+      if (hasVagueWord) {
+        const hasAnchor = task.projectName || task.deadline;
+        if (!hasAnchor) {
+          this.logger.debug(
+            `[daily-extraction] Filtered task "${title}": vague content without project/deadline anchor`,
+          );
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  /**
    * Filter out low-quality commitment extractions.
    * Commitments with vague titles, low confidence, or no actionable content are removed.
    */
   private filterLowQualityCommitments(
     commitments: DailySynthesisExtractionResponse['commitments'],
   ): DailySynthesisExtractionResponse['commitments'] {
-    // Vague pronouns / placeholders that indicate non-specific content
-    // Note: \b doesn't work with Cyrillic in JS, using (?<!\p{L}) / (?!\p{L}) instead
-    const VAGUE_PATTERNS = [
-      /(?<!\p{L})что[-\s]?то(?!\p{L})/iu,
-      /(?<!\p{L})кое[-\s]?что(?!\p{L})/iu,
-      /(?<!\p{L})кое[-\s]?как(?!\p{L})/iu,
-      /(?<!\p{L})как[-\s]?нибудь(?!\p{L})/iu,
-      /(?<!\p{L})как[-\s]?то(?!\p{L})/iu,
-      /(?<!\p{L})где[-\s]?то(?!\p{L})/iu,
-      /(?<!\p{L})когда[-\s]?нибудь(?!\p{L})/iu,
-      /(?<!\p{L})что[-\s]?нибудь(?!\p{L})/iu,
-      /(?<!\p{L})куда[-\s]?то(?!\p{L})/iu,
-    ];
-
     return commitments.filter((commitment) => {
       const what = commitment.what.trim();
 
-      // Minimum confidence threshold
       if (commitment.confidence < 0.7) {
         this.logger.debug(
           `[daily-extraction] Filtered commitment "${what}": low confidence ${commitment.confidence}`,
@@ -415,7 +461,6 @@ ${synthesisText}
         return false;
       }
 
-      // Title too short to be actionable (e.g., "сделать", "написать")
       if (what.length < 10) {
         this.logger.debug(
           `[daily-extraction] Filtered commitment "${what}": title too short (${what.length} chars)`,
@@ -423,7 +468,6 @@ ${synthesisText}
         return false;
       }
 
-      // Check for vague pronouns — only reject if there's no anchoring context
       const hasVagueWord = VAGUE_PATTERNS.some((pattern) => pattern.test(what));
       if (hasVagueWord) {
         const hasAnchor = commitment.projectName || commitment.deadline;

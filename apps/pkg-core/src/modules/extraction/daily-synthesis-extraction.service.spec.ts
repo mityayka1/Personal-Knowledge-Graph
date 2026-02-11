@@ -396,6 +396,102 @@ describe('DailySynthesisExtractionService', () => {
     });
   });
 
+  describe('filterLowQualityTasks (via extract)', () => {
+    const makeResponse = (
+      tasks: DailySynthesisExtractionResponse['tasks'],
+    ): DailySynthesisExtractionResponse => ({
+      projects: [],
+      tasks,
+      commitments: [],
+      inferredRelations: [],
+      extractionSummary: 'test',
+    });
+
+    const mockCall = (tasks: DailySynthesisExtractionResponse['tasks']) => {
+      claudeAgentService.call.mockResolvedValue({
+        data: makeResponse(tasks),
+        usage: { inputTokens: 100, outputTokens: 100, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+    };
+
+    it('should filter task with vague "что-нибудь" and no anchor', async () => {
+      mockCall([
+        {
+          title: 'Оплатить что-нибудь когда надо будет',
+          status: 'pending',
+          confidence: 0.85,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.tasks).toHaveLength(0);
+    });
+
+    it('should filter task with "че нить" (colloquial)', async () => {
+      mockCall([
+        {
+          title: 'Оплатить че нить для сервера',
+          status: 'pending',
+          confidence: 0.8,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.tasks).toHaveLength(0);
+    });
+
+    it('should filter task with confidence < 0.7', async () => {
+      mockCall([
+        {
+          title: 'Подготовить отчёт по продажам',
+          status: 'pending',
+          confidence: 0.6,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.tasks).toHaveLength(0);
+    });
+
+    it('should filter task with short title', async () => {
+      mockCall([
+        { title: 'Сделать', status: 'pending', confidence: 0.9 },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.tasks).toHaveLength(0);
+    });
+
+    it('should keep task with vague word but anchored to project', async () => {
+      mockCall([
+        {
+          title: 'Оплатить что-нибудь для хостинга',
+          projectName: 'PKG',
+          status: 'pending',
+          confidence: 0.85,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.tasks).toHaveLength(1);
+    });
+
+    it('should keep specific actionable task', async () => {
+      mockCall([
+        {
+          title: 'Оплатить хостинг на Hetzner до 15 февраля',
+          status: 'pending',
+          confidence: 0.9,
+          deadline: '2026-02-15',
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.tasks).toHaveLength(1);
+    });
+  });
+
   describe('filterLowQualityCommitments (via extract)', () => {
     const makeResponse = (
       commitments: DailySynthesisExtractionResponse['commitments'],
