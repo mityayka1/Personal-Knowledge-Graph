@@ -21,6 +21,7 @@ import {
   GraduationCap,
   CalendarRange,
   ChevronRight,
+  Link,
 } from 'lucide-vue-next';
 import {
   useActivity,
@@ -227,6 +228,35 @@ async function handleAddMember() {
   } catch (err) {
     console.error('Failed to add member:', err);
   }
+}
+
+// ─── Quick parent assignment dialog ─────────────────────────
+const showParentDialog = ref(false);
+const selectedParentId = ref('');
+
+async function handleQuickParentAssign() {
+  if (!activity.value) return;
+
+  const newParentId = selectedParentId.value || null;
+  if (newParentId === (activity.value.parentId || null)) {
+    showParentDialog.value = false;
+    return;
+  }
+
+  try {
+    await updateActivity.mutateAsync({
+      id: activity.value.id,
+      data: { parentId: newParentId },
+    });
+    showParentDialog.value = false;
+  } catch (err) {
+    console.error('Failed to assign parent:', err);
+  }
+}
+
+function openParentDialog() {
+  selectedParentId.value = activity.value?.parentId || '';
+  showParentDialog.value = true;
 }
 
 // ─── Enums for selects ──────────────────────────────────────
@@ -669,7 +699,19 @@ function isOverdue(deadline: string | null): boolean {
             <CardContent class="space-y-3">
               <!-- Parent -->
               <div>
-                <label class="text-sm font-medium text-muted-foreground">Родитель</label>
+                <div class="flex items-center justify-between">
+                  <label class="text-sm font-medium text-muted-foreground">Родитель</label>
+                  <Button
+                    v-if="!isEditing"
+                    size="sm"
+                    variant="ghost"
+                    class="h-7 px-2 text-xs"
+                    @click="openParentDialog"
+                  >
+                    <Link class="mr-1 h-3 w-3" />
+                    Привязать
+                  </Button>
+                </div>
                 <div v-if="!isEditing" class="mt-1">
                   <NuxtLink
                     v-if="activity.parent"
@@ -797,6 +839,40 @@ function isOverdue(deadline: string | null): boolean {
               @click="handleAddMember"
             >
               {{ addMembers.isPending.value ? 'Добавление...' : 'Добавить' }}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </ClientOnly>
+
+    <!-- Quick Parent Assignment Dialog -->
+    <ClientOnly>
+      <Dialog v-model:open="showParentDialog">
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Привязать к родительской активности</DialogTitle>
+            <DialogDescription>
+              Выберите проект, направление или другую активность, к которой принадлежит текущая
+            </DialogDescription>
+          </DialogHeader>
+          <div class="py-4">
+            <select
+              v-model="selectedParentId"
+              class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">Без родителя (корневая)</option>
+              <option v-for="candidate in parentCandidates" :key="candidate.id" :value="candidate.id">
+                {{ ACTIVITY_TYPE_LABELS[candidate.activityType] }}: {{ candidate.name }}
+              </option>
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" @click="showParentDialog = false">Отмена</Button>
+            <Button
+              :disabled="updateActivity.isPending.value"
+              @click="handleQuickParentAssign"
+            >
+              {{ updateActivity.isPending.value ? 'Сохранение...' : 'Привязать' }}
             </Button>
           </DialogFooter>
         </DialogContent>
