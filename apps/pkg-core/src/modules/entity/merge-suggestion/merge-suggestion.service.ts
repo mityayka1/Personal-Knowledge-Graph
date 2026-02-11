@@ -553,6 +553,68 @@ export class MergeSuggestionService {
         [sourceId],
       );
 
+      // Transfer pending_entity_resolutions
+      await manager.query(
+        `UPDATE pending_entity_resolutions SET resolved_entity_id = $1 WHERE resolved_entity_id = $2`,
+        [targetId, sourceId],
+      );
+
+      // Transfer activities (owner and client references)
+      await manager.query(
+        `UPDATE activities SET owner_entity_id = $1 WHERE owner_entity_id = $2`,
+        [targetId, sourceId],
+      );
+      await manager.query(
+        `UPDATE activities SET client_entity_id = $1 WHERE client_entity_id = $2`,
+        [targetId, sourceId],
+      );
+
+      // Transfer commitments
+      await manager.query(
+        `UPDATE commitments SET from_entity_id = $1 WHERE from_entity_id = $2`,
+        [targetId, sourceId],
+      );
+      await manager.query(
+        `UPDATE commitments SET to_entity_id = $1 WHERE to_entity_id = $2`,
+        [targetId, sourceId],
+      );
+
+      // Transfer entity_events
+      await manager.query(
+        `UPDATE entity_events SET entity_id = $1 WHERE entity_id = $2`,
+        [targetId, sourceId],
+      );
+      await manager.query(
+        `UPDATE entity_events SET related_entity_id = $1 WHERE related_entity_id = $2`,
+        [targetId, sourceId],
+      );
+
+      // Transfer transcript_segments
+      await manager.query(
+        `UPDATE transcript_segments SET speaker_entity_id = $1 WHERE speaker_entity_id = $2`,
+        [targetId, sourceId],
+      );
+
+      // Transfer group_memberships (delete duplicates first)
+      await manager.query(
+        `DELETE FROM group_memberships
+         WHERE entity_id = $1
+           AND group_id IN (
+             SELECT group_id FROM group_memberships WHERE entity_id = $2
+           )`,
+        [sourceId, targetId],
+      );
+      await manager.query(
+        `UPDATE group_memberships SET entity_id = $1 WHERE entity_id = $2`,
+        [targetId, sourceId],
+      );
+
+      // Transfer entity_relationship_profiles
+      await manager.query(
+        `DELETE FROM entity_relationship_profiles WHERE entity_id = $1`,
+        [sourceId],
+      );
+
       // Delete source entity (cascade will clean up remaining references)
       await manager.remove(EntityRecord, source);
 
