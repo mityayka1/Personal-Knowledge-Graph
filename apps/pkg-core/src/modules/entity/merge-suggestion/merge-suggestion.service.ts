@@ -595,12 +595,12 @@ export class MergeSuggestionService {
         [targetId, sourceId],
       );
 
-      // Transfer group_memberships (delete duplicates first)
+      // Transfer group_memberships (delete duplicates by telegram_chat_id first)
       await manager.query(
         `DELETE FROM group_memberships
          WHERE entity_id = $1
-           AND group_id IN (
-             SELECT group_id FROM group_memberships WHERE entity_id = $2
+           AND telegram_chat_id IN (
+             SELECT telegram_chat_id FROM group_memberships WHERE entity_id = $2
            )`,
         [sourceId, targetId],
       );
@@ -608,12 +608,7 @@ export class MergeSuggestionService {
         `UPDATE group_memberships SET entity_id = $1 WHERE entity_id = $2`,
         [targetId, sourceId],
       );
-
-      // Transfer entity_relationship_profiles
-      await manager.query(
-        `DELETE FROM entity_relationship_profiles WHERE entity_id = $1`,
-        [sourceId],
-      );
+      // entity_relationship_profiles has onDelete: CASCADE — no manual handling needed
 
       // Delete source entity (cascade will clean up remaining references)
       await manager.remove(EntityRecord, source);
