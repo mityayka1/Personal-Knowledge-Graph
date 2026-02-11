@@ -19,10 +19,11 @@ describe('ExtractionToolsProvider', () => {
 
   const mockEntityService = {
     findAll: jest.fn().mockResolvedValue({
-      items: [{ id: 'entity-1', name: 'John', type: 'person', organization: null }],
+      items: [{ id: 'entity-1', name: 'John', type: 'person', organization: null, identifiers: [] }],
       total: 1,
     }),
     findById: jest.fn().mockResolvedValue({ id: 'entity-1', name: 'John' }),
+    create: jest.fn().mockResolvedValue({ id: 'new-entity-uuid', name: 'Created Entity' }),
   };
 
   const mockEntityRelationService = {
@@ -39,6 +40,7 @@ describe('ExtractionToolsProvider', () => {
       id: 'pending-uuid-1',
       status: 'pending',
     }),
+    linkToEntity: jest.fn().mockResolvedValue(undefined),
   };
 
   const mockExtractedEventRepo = {
@@ -143,6 +145,125 @@ describe('ExtractionToolsProvider', () => {
       for (const tool of tools) {
         expect(tool.description).toBeDefined();
       }
+    });
+  });
+
+  describe('create_pending_entity - telegram_username prevention', () => {
+    const testContext = { messageId: 'msg-123', interactionId: 'interaction-456', ownerEntityId: 'owner-uuid' };
+
+    it('should return existing entity when telegram_username matches suggestedName', async () => {
+      const tools = provider.getTools(testContext);
+      const createPendingTool = tools.find((t) => t.name === 'create_pending_entity');
+      expect(createPendingTool).toBeDefined();
+
+      // Entity "Александра" has telegram_username "vasunya91"
+      mockEntityService.findAll.mockResolvedValueOnce({
+        items: [{
+          id: 'aleksandra-uuid',
+          name: 'Александра',
+          type: 'person',
+          organization: null,
+          identifiers: [
+            { identifierType: 'telegram_username', identifierValue: 'vasunya91' },
+            { identifierType: 'telegram_user_id', identifierValue: '903703857' },
+          ],
+        }],
+        total: 1,
+      });
+
+      const result = await (createPendingTool as any).handler({
+        suggestedName: 'vasunya91',
+        mentionedAs: 'упомянут в чате',
+      });
+
+      expect(result.isError).toBeFalsy();
+      const data = JSON.parse(result.content[0].text);
+      expect(data.status).toBe('already_exists');
+      expect(data.entityId).toBe('aleksandra-uuid');
+      expect(data.suggestedName).toBe('Александра');
+
+      // Should NOT create new entity or pending resolution
+      expect(mockEntityService.create).not.toHaveBeenCalled();
+      expect(mockPendingResolutionService.findOrCreate).not.toHaveBeenCalled();
+    });
+
+    it('should handle @-prefixed username', async () => {
+      const tools = provider.getTools(testContext);
+      const createPendingTool = tools.find((t) => t.name === 'create_pending_entity');
+
+      mockEntityService.findAll.mockResolvedValueOnce({
+        items: [{
+          id: 'user-uuid',
+          name: 'Иван',
+          type: 'person',
+          organization: null,
+          identifiers: [
+            { identifierType: 'telegram_username', identifierValue: 'ivan_dev' },
+          ],
+        }],
+        total: 1,
+      });
+
+      const result = await (createPendingTool as any).handler({
+        suggestedName: '@ivan_dev',
+        mentionedAs: 'разработчик',
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.status).toBe('already_exists');
+      expect(data.entityId).toBe('user-uuid');
+    });
+
+    it('should create new entity when no telegram_username match', async () => {
+      const tools = provider.getTools(testContext);
+      const createPendingTool = tools.find((t) => t.name === 'create_pending_entity');
+
+      // No matching identifier
+      mockEntityService.findAll.mockResolvedValueOnce({
+        items: [{ id: 'other-uuid', name: 'Маша', type: 'person', organization: null, identifiers: [] }],
+        total: 1,
+      });
+
+      mockEntityService.create.mockResolvedValueOnce({ id: 'new-entity-uuid', name: 'Катя' });
+
+      const result = await (createPendingTool as any).handler({
+        suggestedName: 'Катя',
+        mentionedAs: 'подруга',
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.entityId).toBe('new-entity-uuid');
+      expect(data.status).not.toBe('already_exists');
+
+      expect(mockEntityService.create).toHaveBeenCalled();
+      expect(mockPendingResolutionService.findOrCreate).toHaveBeenCalled();
+    });
+
+    it('should be case-insensitive when matching username', async () => {
+      const tools = provider.getTools(testContext);
+      const createPendingTool = tools.find((t) => t.name === 'create_pending_entity');
+
+      mockEntityService.findAll.mockResolvedValueOnce({
+        items: [{
+          id: 'user-uuid',
+          name: 'Олег',
+          type: 'person',
+          organization: null,
+          identifiers: [
+            { identifierType: 'telegram_username', identifierValue: 'OlegDev' },
+          ],
+        }],
+        total: 1,
+      });
+
+      const result = await (createPendingTool as any).handler({
+        suggestedName: 'olegdev',
+        mentionedAs: 'коллега',
+      });
+
+      const data = JSON.parse(result.content[0].text);
+      expect(data.status).toBe('already_exists');
+      expect(data.entityId).toBe('user-uuid');
     });
   });
 

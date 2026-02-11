@@ -446,6 +446,33 @@ export class ExtractionToolsProvider {
         }
 
         try {
+          // Check if entity with matching telegram_username already exists
+          const cleanName = args.suggestedName.replace(/^@/, '');
+          if (cleanName.length >= 3) {
+            const existing = await this.entityService.findAll({
+              search: cleanName,
+              limit: 5,
+            });
+            const match = existing.items.find((e) =>
+              e.identifiers?.some(
+                (i) =>
+                  i.identifierType === 'telegram_username' &&
+                  i.identifierValue.toLowerCase() === cleanName.toLowerCase(),
+              ),
+            );
+            if (match) {
+              this.logger.log(
+                `Found existing entity "${match.name}" (${match.id}) by telegram_username "${cleanName}" — skipping creation`,
+              );
+              return toolSuccess({
+                entityId: match.id,
+                suggestedName: match.name,
+                status: 'already_exists',
+                message: `Entity "${match.name}" already has telegram username "${cleanName}". Use this entityId.`,
+              });
+            }
+          }
+
           // Create unique identifierValue to avoid collision for same names
           // Format: name::messageId or name::timestamp if no messageId
           const uniqueSuffix = context.messageId || Date.now().toString();
