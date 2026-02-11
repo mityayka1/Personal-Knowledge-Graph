@@ -99,17 +99,21 @@ export class DailySynthesisExtractionService {
       existingActivities,
     );
 
+    // Filter out low-quality commitments
+    const filteredCommitments = this.filterLowQualityCommitments(result.data.commitments);
+
     this.logger.log(
       `[daily-extraction] Completed in ${durationMs}ms: ` +
-        `${enrichedProjects.length} projects, ${result.data.tasks.length} tasks, ` +
-        `${result.data.commitments.length} commitments, ` +
+        `${enrichedProjects.length} projects (${result.data.projects.length - enrichedProjects.length} filtered), ` +
+        `${result.data.tasks.length} tasks, ` +
+        `${filteredCommitments.length} commitments (${result.data.commitments.length - filteredCommitments.length} filtered), ` +
         `${result.data.inferredRelations.length} relations`,
     );
 
     return {
       projects: enrichedProjects,
       tasks: result.data.tasks,
-      commitments: result.data.commitments,
+      commitments: filteredCommitments,
       inferredRelations: result.data.inferredRelations,
       extractionSummary: result.data.extractionSummary,
       tokensUsed: result.usage.inputTokens + result.usage.outputTokens,
@@ -280,6 +284,12 @@ export class DailySynthesisExtractionService {
    - Типы: promise (обещал сделать), request (просьба от другого), agreement (взаимная договорённость)
    - Если обязательство связано с проектом — укажи projectName
 
+   **КРИТЕРИИ КАЧЕСТВА ОБЯЗАТЕЛЬСТВ — НЕ извлекай если:**
+   - Нет конкретного действия или объекта ("написать что-то", "сделать кое-что")
+   - Фраза полностью неопределённая без привязки к проекту, срокам или контексту
+   - Это просто размышление вслух ("может попробую", "не знаю, посмотрим")
+   - what должен содержать конкретику: ЧТО именно, КОМУ, или В РАМКАХ ЧЕГО
+
 4. **СВЯЗИ** — кто с кем работает, кто клиент, кто ответственный
    - project_member: человек участвует в проекте
    - works_on: человек работает над задачей
@@ -364,6 +374,62 @@ ${synthesisText}
         if (indicatorCount < 2) {
           this.logger.debug(
             `[daily-extraction] Filtered project "${project.name}": only ${indicatorCount}/5 indicators`,
+          );
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  /**
+   * Filter out low-quality commitment extractions.
+   * Commitments with vague titles, low confidence, or no actionable content are removed.
+   */
+  private filterLowQualityCommitments(
+    commitments: DailySynthesisExtractionResponse['commitments'],
+  ): DailySynthesisExtractionResponse['commitments'] {
+    // Vague pronouns / placeholders that indicate non-specific content
+    // Note: \b doesn't work with Cyrillic in JS, using (?<!\p{L}) / (?!\p{L}) instead
+    const VAGUE_PATTERNS = [
+      /(?<!\p{L})что[-\s]?то(?!\p{L})/iu,
+      /(?<!\p{L})кое[-\s]?что(?!\p{L})/iu,
+      /(?<!\p{L})кое[-\s]?как(?!\p{L})/iu,
+      /(?<!\p{L})как[-\s]?нибудь(?!\p{L})/iu,
+      /(?<!\p{L})как[-\s]?то(?!\p{L})/iu,
+      /(?<!\p{L})где[-\s]?то(?!\p{L})/iu,
+      /(?<!\p{L})когда[-\s]?нибудь(?!\p{L})/iu,
+      /(?<!\p{L})что[-\s]?нибудь(?!\p{L})/iu,
+      /(?<!\p{L})куда[-\s]?то(?!\p{L})/iu,
+    ];
+
+    return commitments.filter((commitment) => {
+      const what = commitment.what.trim();
+
+      // Minimum confidence threshold
+      if (commitment.confidence < 0.7) {
+        this.logger.debug(
+          `[daily-extraction] Filtered commitment "${what}": low confidence ${commitment.confidence}`,
+        );
+        return false;
+      }
+
+      // Title too short to be actionable (e.g., "сделать", "написать")
+      if (what.length < 10) {
+        this.logger.debug(
+          `[daily-extraction] Filtered commitment "${what}": title too short (${what.length} chars)`,
+        );
+        return false;
+      }
+
+      // Check for vague pronouns — only reject if there's no anchoring context
+      const hasVagueWord = VAGUE_PATTERNS.some((pattern) => pattern.test(what));
+      if (hasVagueWord) {
+        const hasAnchor = commitment.projectName || commitment.deadline;
+        if (!hasAnchor) {
+          this.logger.debug(
+            `[daily-extraction] Filtered commitment "${what}": vague content without project/deadline anchor`,
           );
           return false;
         }

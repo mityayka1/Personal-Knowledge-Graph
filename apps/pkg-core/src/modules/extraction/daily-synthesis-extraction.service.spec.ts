@@ -363,7 +363,7 @@ describe('DailySynthesisExtractionService', () => {
       expect(result.projects[0].name).toBe('Good Project');
     });
 
-    it('should keep project without projectIndicators (legacy)', async () => {
+    it('should keep project without projectIndicators (legacy data)', async () => {
       const responseWithLegacyProject: DailySynthesisExtractionResponse = {
         projects: [
           {
@@ -393,6 +393,161 @@ describe('DailySynthesisExtractionService', () => {
       // Legacy project without indicators should be kept (only confidence check applies)
       expect(result.projects).toHaveLength(1);
       expect(result.projects[0].name).toBe('Legacy Project');
+    });
+  });
+
+  describe('filterLowQualityCommitments (via extract)', () => {
+    const makeResponse = (
+      commitments: DailySynthesisExtractionResponse['commitments'],
+    ): DailySynthesisExtractionResponse => ({
+      projects: [],
+      tasks: [],
+      commitments,
+      inferredRelations: [],
+      extractionSummary: 'test',
+    });
+
+    const mockCall = (commitments: DailySynthesisExtractionResponse['commitments']) => {
+      claudeAgentService.call.mockResolvedValue({
+        data: makeResponse(commitments),
+        usage: { inputTokens: 100, outputTokens: 100, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+    };
+
+    it('should filter commitment with confidence < 0.7', async () => {
+      mockCall([
+        {
+          what: 'Отправить отчёт до конца дня',
+          from: 'self',
+          to: 'Сергей',
+          type: 'promise',
+          confidence: 0.6,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(0);
+    });
+
+    it('should filter commitment with short vague title', async () => {
+      mockCall([
+        {
+          what: 'Написать',
+          from: 'self',
+          to: 'Маша',
+          type: 'promise',
+          confidence: 0.8,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(0);
+    });
+
+    it('should filter commitment with vague pronoun and no anchor', async () => {
+      mockCall([
+        {
+          what: 'Попытаться написать что-то',
+          from: 'Маша',
+          to: 'self',
+          type: 'request',
+          confidence: 0.7,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(0);
+    });
+
+    it('should keep commitment with vague pronoun but anchored to project', async () => {
+      mockCall([
+        {
+          what: 'Написать что-то для презентации',
+          from: 'self',
+          to: 'Маша',
+          type: 'promise',
+          confidence: 0.8,
+          projectName: 'Хаб для Панавто',
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(1);
+    });
+
+    it('should keep commitment with vague pronoun but anchored to deadline', async () => {
+      mockCall([
+        {
+          what: 'Написать что-то для клиента',
+          from: 'self',
+          to: 'Сергей',
+          type: 'promise',
+          confidence: 0.75,
+          deadline: '2026-02-15',
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(1);
+    });
+
+    it('should keep specific actionable commitment', async () => {
+      mockCall([
+        {
+          what: 'Отправить документацию по API до пятницы',
+          from: 'self',
+          to: 'Сергей',
+          type: 'promise',
+          deadline: '2026-02-14',
+          confidence: 0.9,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(1);
+      expect(result.commitments[0].what).toBe('Отправить документацию по API до пятницы');
+    });
+
+    it('should filter multiple vague commitments and keep good ones', async () => {
+      mockCall([
+        {
+          what: 'Сделать кое-что',
+          from: 'self',
+          to: 'Маша',
+          type: 'promise',
+          confidence: 0.7,
+        },
+        {
+          what: 'Подготовить отчёт по продажам за январь',
+          from: 'self',
+          to: 'Директор',
+          type: 'promise',
+          confidence: 0.85,
+        },
+        {
+          what: 'Позвонить',
+          from: 'self',
+          to: 'Клиент',
+          type: 'reminder',
+          confidence: 0.75,
+        },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(1);
+      expect(result.commitments[0].what).toBe('Подготовить отчёт по продажам за январь');
+    });
+
+    it('should handle various vague patterns (как-нибудь, где-то, когда-нибудь)', async () => {
+      mockCall([
+        { what: 'Как-нибудь доделать форму', from: 'self', to: 'self', type: 'promise', confidence: 0.7 },
+        { what: 'Где-то поправить баг', from: 'self', to: 'self', type: 'promise', confidence: 0.7 },
+        { what: 'Когда-нибудь разобраться с деплоем', from: 'self', to: 'self', type: 'promise', confidence: 0.7 },
+      ]);
+
+      const result = await service.extract({ synthesisText: 'test' });
+      expect(result.commitments).toHaveLength(0);
     });
   });
 });
