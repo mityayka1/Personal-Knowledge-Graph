@@ -13,6 +13,7 @@ import {
   LogOut,
   User,
   GitMerge,
+  FolderKanban,
 } from 'lucide-vue-next';
 import Toaster from '~/components/ui/toast/Toaster.vue';
 
@@ -22,6 +23,7 @@ const { user, logout } = useAuth();
 const navigation = [
   { name: 'Сущности', href: '/entities', icon: Users },
   { name: 'Слияние', href: '/entities/merge-requests', icon: GitMerge },
+  { name: 'Активности', href: '/activities', icon: FolderKanban },
   { name: 'Взаимодействия', href: '/interactions', icon: MessageSquare },
   { name: 'Чаты', href: '/chats', icon: MessagesSquare },
   { name: 'Поиск', href: '/search', icon: Search },
