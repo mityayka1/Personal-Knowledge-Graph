@@ -443,7 +443,10 @@ export class MergeSuggestionService {
             continue;
           } else if (resolution === ConflictResolution.KEEP_SOURCE) {
             // Delete target's identifier, move source's
-            await manager.delete(EntityIdentifier, { id: targetIdentifier.id });
+            await manager.query(
+              `DELETE FROM entity_identifiers WHERE id = $1`,
+              [targetIdentifier.id],
+            );
           }
           // KEEP_BOTH: For identifiers, we keep target's and skip source's
           // (can't have duplicate identifier types for same entity)
@@ -541,8 +544,14 @@ export class MergeSuggestionService {
       );
 
       // Remove any dismissed suggestions involving the source
-      await manager.delete(DismissedMergeSuggestion, { primaryEntityId: sourceId });
-      await manager.delete(DismissedMergeSuggestion, { dismissedEntityId: sourceId });
+      await manager.query(
+        `DELETE FROM dismissed_merge_suggestions WHERE primary_entity_id = $1`,
+        [sourceId],
+      );
+      await manager.query(
+        `DELETE FROM dismissed_merge_suggestions WHERE dismissed_entity_id = $1`,
+        [sourceId],
+      );
 
       // Delete source entity (cascade will clean up remaining references)
       await manager.remove(EntityRecord, source);
