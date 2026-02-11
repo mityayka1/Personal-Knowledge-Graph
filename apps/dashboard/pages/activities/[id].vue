@@ -45,8 +45,8 @@ import {
   type ActivityMemberRole,
   type UpdateActivityDto,
 } from '~/composables/useActivities';
-import { useEntities, type EntityListParams } from '~/composables/useEntities';
 import { ConfirmDialog } from '~/components/ui/confirm-dialog';
+import { EntityCombobox } from '~/components/ui/entity-combobox';
 import { formatDate, formatDateTime } from '~/lib/utils';
 
 const route = useRoute();
@@ -206,10 +206,6 @@ async function confirmArchive() {
 const showAddMemberDialog = ref(false);
 const newMemberEntityId = ref('');
 const newMemberRole = ref<ActivityMemberRole>('member');
-
-const entityParams = computed<EntityListParams>(() => ({ limit: 200 }));
-const { data: entitiesData } = useEntities(entityParams);
-const allEntities = computed(() => entitiesData.value?.items || []);
 
 const memberRoles = Object.entries(ACTIVITY_MEMBER_ROLE_LABELS) as [ActivityMemberRole, string][];
 
@@ -481,20 +477,13 @@ function isOverdue(deadline: string | null): boolean {
                   </NuxtLink>
                   <span v-else class="text-muted-foreground">Не указан</span>
                 </div>
-                <select
+                <EntityCombobox
                   v-else
                   v-model="editForm.ownerEntityId"
-                  class="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="">Выберите владельца</option>
-                  <option
-                    v-for="entity in allEntities.filter(e => e.type === 'person')"
-                    :key="entity.id"
-                    :value="entity.id"
-                  >
-                    {{ entity.name }}
-                  </option>
-                </select>
+                  entity-type="person"
+                  placeholder="Поиск владельца..."
+                  class="mt-1"
+                />
               </div>
 
               <!-- Client -->
@@ -510,16 +499,12 @@ function isOverdue(deadline: string | null): boolean {
                   </NuxtLink>
                   <span v-else class="text-muted-foreground">Не указан</span>
                 </div>
-                <select
+                <EntityCombobox
                   v-else
                   v-model="editForm.clientEntityId"
-                  class="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="">Без клиента</option>
-                  <option v-for="entity in allEntities" :key="entity.id" :value="entity.id">
-                    {{ entity.name }} ({{ entity.type === 'person' ? 'человек' : 'организация' }})
-                  </option>
-                </select>
+                  placeholder="Поиск клиента..."
+                  class="mt-1"
+                />
               </div>
 
               <!-- Progress -->
@@ -810,15 +795,10 @@ function isOverdue(deadline: string | null): boolean {
           <div class="space-y-4 py-4">
             <div class="space-y-2">
               <label class="text-sm font-medium">Сущность</label>
-              <select
+              <EntityCombobox
                 v-model="newMemberEntityId"
-                class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="">Выберите...</option>
-                <option v-for="entity in allEntities" :key="entity.id" :value="entity.id">
-                  {{ entity.name }} ({{ entity.type === 'person' ? 'человек' : 'организация' }})
-                </option>
-              </select>
+                placeholder="Поиск сущности..."
+              />
             </div>
             <div class="space-y-2">
               <label class="text-sm font-medium">Роль</label>

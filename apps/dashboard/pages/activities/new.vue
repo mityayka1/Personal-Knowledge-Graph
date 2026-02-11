@@ -13,7 +13,7 @@ import {
   type ActivityPriority,
   type ActivityContext,
 } from '~/composables/useActivities';
-import { useEntities, type EntityListParams } from '~/composables/useEntities';
+import { EntityCombobox } from '~/components/ui/entity-combobox';
 
 definePageMeta({
   title: 'Создать активность',
@@ -31,6 +31,7 @@ const form = reactive<CreateActivityDto>({
   name: '',
   activityType: queryType,
   ownerEntityId: '',
+  clientEntityId: '',
   description: '',
   status: 'active',
   priority: 'medium',
@@ -42,22 +43,11 @@ const deadline = ref('');
 const startDate = ref('');
 const tagsInput = ref('');
 const parentSearch = ref('');
-const clientSearch = ref('');
 
 const errors = reactive({
   name: '',
   ownerEntityId: '',
 });
-
-// Load entities for owner/client select
-const entityParams = computed<EntityListParams>(() => ({
-  limit: 200,
-}));
-const { data: entitiesData } = useEntities(entityParams);
-
-const entities = computed(() => entitiesData.value?.items || []);
-const persons = computed(() => entities.value.filter(e => e.type === 'person'));
-const organizations = computed(() => entities.value.filter(e => e.type === 'organization'));
 
 // Load activities for parent select
 const parentParams = computed(() => ({
@@ -212,35 +202,23 @@ async function handleSubmit() {
           <!-- Owner -->
           <div class="space-y-2">
             <label for="ownerEntityId" class="text-sm font-medium">Владелец *</label>
-            <select
-              id="ownerEntityId"
+            <EntityCombobox
               v-model="form.ownerEntityId"
-              :class="[
-                'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                errors.ownerEntityId ? 'border-destructive' : '',
-              ]"
-            >
-              <option value="">Выберите владельца</option>
-              <option v-for="entity in persons" :key="entity.id" :value="entity.id">
-                {{ entity.name }}
-              </option>
-            </select>
+              entity-type="person"
+              placeholder="Поиск владельца..."
+              :class="errors.ownerEntityId ? '[&_input]:border-destructive [&>div]:border-destructive' : ''"
+            />
             <p v-if="errors.ownerEntityId" class="text-sm text-destructive">{{ errors.ownerEntityId }}</p>
           </div>
 
           <!-- Client -->
           <div class="space-y-2">
             <label for="clientEntityId" class="text-sm font-medium">Клиент (опционально)</label>
-            <select
-              id="clientEntityId"
-              v-model="form.clientEntityId"
-              class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">Без клиента</option>
-              <option v-for="entity in entities" :key="entity.id" :value="entity.id">
-                {{ entity.name }} ({{ entity.type === 'person' ? 'человек' : 'организация' }})
-              </option>
-            </select>
+            <EntityCombobox
+              :model-value="form.clientEntityId ?? ''"
+              placeholder="Поиск клиента..."
+              @update:model-value="form.clientEntityId = $event"
+            />
           </div>
 
           <!-- Parent Activity -->
