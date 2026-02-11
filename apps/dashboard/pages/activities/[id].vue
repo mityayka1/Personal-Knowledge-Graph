@@ -67,6 +67,15 @@ const childrenParams = computed(() => ({
 const { data: childrenData } = useActivities(childrenParams);
 const children = computed(() => childrenData.value?.items || []);
 
+// ─── Parent candidates (for edit mode) ──────────────────────
+const parentCandidatesParams = computed(() => ({
+  limit: 100,
+}));
+const { data: parentCandidatesData } = useActivities(parentCandidatesParams);
+const parentCandidates = computed(() =>
+  (parentCandidatesData.value?.items || []).filter(a => a.id !== activityId.value),
+);
+
 // ─── Edit mode ───────────────────────────────────────────────
 const isEditing = ref(false);
 
@@ -672,6 +681,16 @@ function isOverdue(deadline: string | null): boolean {
                   </NuxtLink>
                   <span v-else class="text-muted-foreground">Корневая активность</span>
                 </div>
+                <select
+                  v-else
+                  v-model="editForm.parentId"
+                  class="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="">Без родителя (корневая)</option>
+                  <option v-for="candidate in parentCandidates" :key="candidate.id" :value="candidate.id">
+                    {{ ACTIVITY_TYPE_LABELS[candidate.activityType] }}: {{ candidate.name }}
+                  </option>
+                </select>
               </div>
 
               <!-- Children -->
