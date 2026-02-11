@@ -24,6 +24,7 @@ import {
 } from 'lucide-vue-next';
 import {
   useActivity,
+  useActivities,
   useActivityMembers,
   useUpdateActivity,
   useDeleteActivity,
@@ -57,6 +58,14 @@ const { data: members, refetch: refetchMembers } = useActivityMembers(activityId
 const updateActivity = useUpdateActivity();
 const deleteActivity = useDeleteActivity();
 const addMembers = useAddActivityMembers();
+
+// ─── Children ───────────────────────────────────────────────
+const childrenParams = computed(() => ({
+  parentId: activityId.value,
+  limit: 50,
+}));
+const { data: childrenData } = useActivities(childrenParams);
+const children = computed(() => childrenData.value?.items || []);
 
 // ─── Edit mode ───────────────────────────────────────────────
 const isEditing = ref(false);
@@ -639,8 +648,14 @@ function isOverdue(deadline: string | null): boolean {
 
           <!-- Card: Иерархия -->
           <Card>
-            <CardHeader>
+            <CardHeader class="flex flex-row items-center justify-between">
               <CardTitle class="text-lg">Иерархия</CardTitle>
+              <NuxtLink :to="`/activities/new?parentId=${activity.id}&type=task`">
+                <Button size="sm" variant="outline">
+                  <Plus class="mr-2 h-4 w-4" />
+                  Подзадача
+                </Button>
+              </NuxtLink>
             </CardHeader>
             <CardContent class="space-y-3">
               <!-- Parent -->
@@ -659,20 +674,35 @@ function isOverdue(deadline: string | null): boolean {
                 </div>
               </div>
 
+              <!-- Children -->
+              <div>
+                <label class="text-sm font-medium text-muted-foreground">Дочерние активности</label>
+                <div v-if="children.length" class="mt-1 space-y-1">
+                  <NuxtLink
+                    v-for="child in children"
+                    :key="child.id"
+                    :to="`/activities/${child.id}`"
+                    class="flex items-center gap-2 p-2 rounded-lg hover:bg-accent/50 transition-colors group"
+                  >
+                    <component :is="TYPE_ICONS[child.activityType]" class="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
+                    <span class="flex-1 truncate text-sm group-hover:text-primary">{{ child.name }}</span>
+                    <Badge :class="ACTIVITY_STATUS_COLORS[child.status]" class="text-xs shrink-0">
+                      {{ ACTIVITY_STATUS_LABELS[child.status] }}
+                    </Badge>
+                    <ChevronRight class="h-4 w-4 text-muted-foreground shrink-0" />
+                  </NuxtLink>
+                </div>
+                <p v-else class="mt-1 text-sm text-muted-foreground">Нет дочерних активностей</p>
+              </div>
+
               <!-- Depth & Path -->
-              <div class="text-sm">
+              <div v-if="activity.depth > 0" class="text-sm">
                 <span class="text-muted-foreground">Глубина:</span>
                 <span class="ml-2">{{ activity.depth }}</span>
               </div>
               <div v-if="activity.materializedPath" class="text-sm">
                 <span class="text-muted-foreground">Путь:</span>
                 <span class="ml-2 font-mono text-xs break-all">{{ activity.materializedPath }}</span>
-              </div>
-
-              <!-- Children count -->
-              <div v-if="activity.childrenCount" class="text-sm">
-                <span class="text-muted-foreground">Подзадач:</span>
-                <span class="ml-2 font-medium">{{ activity.childrenCount }}</span>
               </div>
             </CardContent>
           </Card>

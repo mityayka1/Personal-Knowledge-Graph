@@ -19,17 +19,23 @@ definePageMeta({
   title: 'Создать активность',
 });
 
+const route = useRoute();
 const router = useRouter();
 const createActivity = useCreateActivity();
 
+// Pre-fill from query params (e.g. /activities/new?parentId=xxx&type=task)
+const queryParentId = (route.query.parentId as string) || '';
+const queryType = (route.query.type as ActivityType) || 'project';
+
 const form = reactive<CreateActivityDto>({
   name: '',
-  activityType: 'project',
+  activityType: queryType,
   ownerEntityId: '',
   description: '',
   status: 'active',
   priority: 'medium',
   context: 'work',
+  parentId: queryParentId || undefined,
 });
 
 const deadline = ref('');
