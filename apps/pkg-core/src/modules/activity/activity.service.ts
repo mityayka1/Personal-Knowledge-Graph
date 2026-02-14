@@ -482,6 +482,20 @@ export class ActivityService {
   }
 
   /**
+   * Найти активности без описания (для обогащения через AI).
+   */
+  async findActivitiesWithoutDescriptions(): Promise<Activity[]> {
+    return this.activityRepo
+      .createQueryBuilder('a')
+      .leftJoinAndSelect('a.parent', 'parent')
+      .leftJoinAndSelect('a.clientEntity', 'clientEntity')
+      .where('a.description IS NULL')
+      .andWhere('a.status != :archived', { archived: ActivityStatus.ARCHIVED })
+      .orderBy('a.updatedAt', 'DESC')
+      .getMany();
+  }
+
+  /**
    * Получить активности с просроченным дедлайном.
    */
   async getOverdueActivities(): Promise<Activity[]> {

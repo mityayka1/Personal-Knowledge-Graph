@@ -4,6 +4,7 @@ import { ClaudeAgentRun } from '@pkg/entities';
 import { ClaudeAgentService } from './claude-agent.service';
 import { ClaudeAgentController } from './claude-agent.controller';
 import { AgentController } from './agent.controller';
+import { ActivityEnrichmentController } from './activity-enrichment.controller';
 import { SchemaLoaderService } from './schema-loader.service';
 import { ToolsRegistryService } from './tools-registry.service';
 import { RecallSessionService } from './recall-session.service';
@@ -60,7 +61,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     // ExtractionModule for DailySynthesisExtractionService
     forwardRef(() => ExtractionModule),
   ],
-  controllers: [ClaudeAgentController, AgentController],
+  controllers: [ClaudeAgentController, AgentController, ActivityEnrichmentController],
   providers: [
     // Core services
     ClaudeAgentService,

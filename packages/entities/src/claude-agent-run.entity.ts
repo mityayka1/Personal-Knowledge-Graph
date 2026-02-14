@@ -22,7 +22,8 @@ export type ClaudeTaskType =
   | 'message_regeneration'
   | 'unified_extraction'
   | 'group_extraction'
-  | 'fact_dedup_review';
+  | 'fact_dedup_review'
+  | 'description_enrichment';
 
 export type ExecutionMode = 'oneshot' | 'agent';
 
