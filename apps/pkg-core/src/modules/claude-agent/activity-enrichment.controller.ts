@@ -92,8 +92,7 @@ ${activitiesList}
           prompt,
           model: 'haiku',
           schema: ENRICHMENT_SCHEMA,
-          maxTurns: 1,
-          timeout: 60_000,
+          timeout: 120_000,
         });
 
         if (data?.descriptions) {
