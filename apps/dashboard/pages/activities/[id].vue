@@ -764,6 +764,28 @@ function isOverdue(deadline: string | null): boolean {
                   <span class="text-muted-foreground">ID:</span>
                   <span class="ml-2 font-mono text-xs">{{ activity.id }}</span>
                 </div>
+                <template v-if="activity.metadata">
+                  <div v-if="activity.metadata.extractedFrom">
+                    <span class="text-muted-foreground">Источник:</span>
+                    <Badge variant="outline" class="ml-2 text-xs">
+                      {{ activity.metadata.extractedFrom === 'daily_synthesis' ? 'Daily Synthesis' : String(activity.metadata.extractedFrom) }}
+                    </Badge>
+                  </div>
+                  <div v-if="activity.metadata.confidence">
+                    <span class="text-muted-foreground">Уверенность:</span>
+                    <span class="ml-2">{{ Math.round(Number(activity.metadata.confidence) * 100) }}%</span>
+                  </div>
+                  <div v-if="activity.metadata.synthesisDate">
+                    <span class="text-muted-foreground">Дата извлечения:</span>
+                    <span class="ml-2">{{ activity.metadata.synthesisDate }}</span>
+                  </div>
+                  <div v-if="activity.metadata.sourceQuote">
+                    <span class="text-muted-foreground">Цитата из источника:</span>
+                    <p class="mt-1 text-xs italic border-l-2 border-muted pl-2">
+                      {{ activity.metadata.sourceQuote }}
+                    </p>
+                  </div>
+                </template>
               </div>
             </CardContent>
           </Card>

@@ -214,7 +214,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           },
           client: { type: 'string', description: 'Client name if mentioned' },
           status: { type: 'string', description: 'Status: active, blocked, completed' },
-          description: { type: 'string', description: 'Brief description of the project scope' },
+          description: { type: 'string', description: 'Описание проекта: что делается, для чего, какой результат ожидается (2-3 предложения). ОБЯЗАТЕЛЬНО.' },
           priority: {
             type: 'string',
             enum: ['low', 'medium', 'high', 'urgent'],
@@ -241,7 +241,7 @@ export const DAILY_SYNTHESIS_EXTRACTION_SCHEMA = {
           sourceQuote: { type: 'string', description: 'Relevant quote from synthesis' },
           confidence: { type: 'number', description: 'Confidence 0-1' },
         },
-        required: ['name', 'isNew', 'participants', 'confidence', 'projectIndicators'],
+        required: ['name', 'isNew', 'participants', 'confidence', 'projectIndicators', 'description'],
       },
     },
     tasks: {

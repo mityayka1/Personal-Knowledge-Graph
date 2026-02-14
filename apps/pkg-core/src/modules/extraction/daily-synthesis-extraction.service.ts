@@ -215,7 +215,7 @@ export class DailySynthesisExtractionService {
   private async loadExistingActivities(ownerEntityId?: string): Promise<Activity[]> {
     const query = this.activityRepo
       .createQueryBuilder('a')
-      .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId'])
+      .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId', 'a.description', 'a.tags'])
       .leftJoin('a.clientEntity', 'client')
       .addSelect(['client.name'])
       .where('a.status NOT IN (:...excludedStatuses)', {
@@ -251,7 +251,9 @@ export class DailySynthesisExtractionService {
       lines.push(`\n${type.toUpperCase()}:`);
       for (const a of items.slice(0, 10)) {
         const client = a.clientEntity ? ` (клиент: ${a.clientEntity.name})` : '';
-        lines.push(`  - ${a.name}${client} [${a.status}] (id: ${a.id})`);
+        const tags = a.tags?.length ? ` [теги: ${a.tags.join(', ')}]` : '';
+        const desc = a.description ? `\n      ${a.description}` : '';
+        lines.push(`  - ${a.name}${client} [${a.status}] (id: ${a.id})${tags}${desc}`);
       }
       if (items.length > 10) {
         lines.push(`  ... и ещё ${items.length - 10}`);
@@ -288,7 +290,8 @@ export class DailySynthesisExtractionService {
    - Если проект похож на существующий — установи isNew: false и укажи existingActivityId
    - Если это новый проект — установи isNew: true
    - Извлеки упомянутых участников и клиента
-   - Добавь description, priority, deadline, tags где доступны
+   - ОБЯЗАТЕЛЬНО добавь description (2-3 предложения): что это за проект, какова его цель, что конкретно делается
+   - Добавь priority, deadline, tags где доступны
 
 2. **ЗАДАЧИ** — конкретные действия, TODO, что нужно сделать
    - Определи статус: pending (нужно сделать), in_progress (в работе), done (сделано)
@@ -336,7 +339,12 @@ export class DailySynthesisExtractionService {
 - Общие темы без конкретных действий
 
 Для каждого проекта заполни projectIndicators с boolean значениями для каждого критерия.
-Также извлеки: description (краткое описание scope), priority, deadline, tags где доступны.
+
+**description ОБЯЗАТЕЛЬНО** — опиши суть проекта своими словами на основе контекста из отчёта.
+Хорошее описание: "Разработка системы мониторинга для клиента X. Включает бэкенд на Node.js и дашборд. Текущий этап — интеграция с API клиента."
+Плохое описание: "Проект" или "Работа над проектом"
+
+Также извлеки: priority, deadline, tags где доступны.
 
 ══════════════════════════════════════════
 СУЩЕСТВУЮЩИЕ АКТИВНОСТИ (для сопоставления)

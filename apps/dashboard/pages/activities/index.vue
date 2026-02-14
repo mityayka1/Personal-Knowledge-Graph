@@ -240,6 +240,9 @@ function isOverdue(deadline: string | null): boolean {
                   {{ ACTIVITY_PRIORITY_LABELS[activity.priority] }}
                 </Badge>
               </div>
+              <p v-if="activity.description" class="text-sm text-muted-foreground mt-0.5 line-clamp-1">
+                {{ activity.description }}
+              </p>
               <div class="text-sm text-muted-foreground flex items-center gap-3 mt-1">
                 <span v-if="activity.clientEntity">
                   @ {{ activity.clientEntity.name }}

@@ -341,14 +341,19 @@ ${relationsSection}
    - "давай встретимся" → meeting + needsEnrichment: true
    - "встреча 15 января в 14:00" → meeting + needsEnrichment: false
 
-4. PROMISE RECIPIENT:
+4. ОПИСАНИЯ — ОБЯЗАТЕЛЬНО:
+   - Для task и promise: описывай what подробно — ЧТО именно и В РАМКАХ ЧЕГО
+   - НЕ "сделать задачу", А "подготовить отчёт по метрикам производительности для клиента X"
+   - Контекст (проект, цель, детали) делает событие понятным без возврата к беседе
+
+5. PROMISE RECIPIENT:
    - Для promise_by_me: используй promiseToEntityId из метаданных сообщения
 
-5. entityId и sourceMessageId:
+6. entityId и sourceMessageId:
    - entityId: используй entityId из метаданных конкретного сообщения
    - sourceMessageId: используй msgId из метаданных сообщения
 
-6. sourceQuote — ОБЯЗАТЕЛЬНО:
+7. sourceQuote — ОБЯЗАТЕЛЬНО:
    - Всегда указывай цитату из сообщения (до 200 символов)
    - Это нужно для контекста в уведомлениях
    - Без sourceQuote событие будет непонятным получателю

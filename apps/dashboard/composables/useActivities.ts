@@ -51,6 +51,7 @@ export interface Activity {
   recurrenceRule: string | null;
   tags: string[] | null;
   progress: number | null;
+  metadata: Record<string, unknown> | null;
   depth: number;
   materializedPath: string | null;
   childrenCount?: number;
