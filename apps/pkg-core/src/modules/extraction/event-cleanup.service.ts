@@ -136,6 +136,7 @@ ${eventsList}
             prompt,
             model: 'haiku',
             schema: PHASE_A_SCHEMA,
+            maxTurns: 10,
             timeout: 120_000,
           });
 
@@ -258,6 +259,7 @@ ${eventsList}
           prompt,
           model: 'haiku',
           schema: PHASE_B_SCHEMA,
+          maxTurns: 10,
           timeout: 120_000,
         });
 
@@ -368,6 +370,7 @@ ${activitiesList}
           prompt,
           model: 'haiku',
           schema: PHASE_C_SCHEMA,
+          maxTurns: 10,
           timeout: 120_000,
         });
 
