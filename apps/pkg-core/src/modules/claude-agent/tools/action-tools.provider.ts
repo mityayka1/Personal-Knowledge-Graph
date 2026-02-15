@@ -41,13 +41,11 @@ export class ActionToolsProvider implements OnModuleInit, ToolsProviderInterface
   constructor(
     private readonly entityService: EntityService,
     private readonly entityEventService: EntityEventService,
-    private readonly contextService: ContextService | null,
-    private readonly claudeAgentService: ClaudeAgentService | null,
-    private readonly approvalService: ApprovalService | null,
+    private readonly contextService: ContextService,
+    private readonly claudeAgentService: ClaudeAgentService,
+    private readonly approvalService: ApprovalService,
     private readonly toolsRegistry: ToolsRegistryService,
-  ) {
-    this.logger.log(`ActionToolsProvider initialized. ApprovalService available: ${!!this.approvalService}`);
-  }
+  ) {}
 
   onModuleInit() {
     this.toolsRegistry.registerProvider('actions', this);
