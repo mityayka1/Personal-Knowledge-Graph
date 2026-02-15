@@ -19,6 +19,7 @@ import {
   EntityFactStatus,
   FactSource,
   FactCategory,
+  FactType,
   RelationType,
   RelationSource,
 } from '@pkg/entities';
@@ -38,6 +39,11 @@ import { EntityRelationService } from '../entity/entity-relation/entity-relation
 import { ActivityService } from '../activity/activity.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { SettingsService } from '../settings/settings.service';
+import { FactFusionService } from '../entity/entity-fact/fact-fusion.service';
+import { FusionAction } from '../entity/entity-fact/fact-fusion.constants';
+import { ExtractionFusionAction } from './fusion-action.enum';
+import { CreateFactDto } from '../entity/dto/create-entity.dto';
+import { CreateFactResult } from '../entity/entity-fact/entity-fact.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -66,6 +72,26 @@ export interface DraftExtractionInput {
 }
 
 /**
+ * Detail record for a single Smart Fusion action applied during extraction.
+ */
+export interface FusionActionDetail {
+  /** The extraction-level fusion action (confirm, supersede, enrich, conflict, coexist) */
+  action: ExtractionFusionAction;
+  /** Entity ID the fact belongs to */
+  entityId: string;
+  /** Fact type (e.g., "position", "company") */
+  factType: string;
+  /** New value from extraction */
+  newValue: string;
+  /** Existing fact ID that triggered fusion */
+  existingFactId: string;
+  /** Result fact ID (may differ from existingFactId for SUPERSEDE/COEXIST) */
+  resultFactId?: string;
+  /** Explanation from LLM fusion decision */
+  reason: string;
+}
+
+/**
  * Result of creating draft entities.
  */
 export interface DraftExtractionResult {
@@ -91,6 +117,8 @@ export interface DraftExtractionResult {
   };
   /** Items that failed to create */
   errors: Array<{ item: string; error: string }>;
+  /** Smart Fusion actions applied (CONFIRM, SUPERSEDE, ENRICH, CONFLICT, COEXIST) */
+  fusionActions: FusionActionDetail[];
 }
 
 /**
@@ -101,6 +129,10 @@ export interface DraftExtractionResult {
  * - Creates PendingApproval linking to target via itemType + targetId
  * - On approve: target.status → 'active' (handled by PendingApprovalService)
  * - On reject: soft delete target (handled by PendingApprovalService)
+ *
+ * Smart Fusion: When dedup detects a potential duplicate, routes through
+ * FactFusionService for intelligent resolution (CONFIRM/SUPERSEDE/ENRICH/
+ * CONFLICT/COEXIST) instead of simple skip.
  *
  * Unlike ExtractionPersistenceService which creates ACTIVE entities after
  * carousel confirmation, this service creates DRAFT entities immediately
@@ -138,6 +170,9 @@ export class DraftExtractionService {
     @Optional()
     @Inject(forwardRef(() => ActivityService))
     private readonly activityService: ActivityService | null,
+    @Optional()
+    @Inject(forwardRef(() => FactFusionService))
+    private readonly factFusionService: FactFusionService | null,
   ) {}
 
   /**
@@ -151,6 +186,10 @@ export class DraftExtractionService {
    * DEDUPLICATION: Before creating each draft, we check for existing pending
    * approvals with similar content. If found, we skip creating a duplicate.
    *
+   * SMART FUSION: When dedup finds a potential duplicate with an existing fact,
+   * we route through FactFusionService for LLM-based resolution instead of
+   * simple skip. This enables CONFIRM, SUPERSEDE, ENRICH, CONFLICT, COEXIST.
+   *
    * @see https://github.com/typeorm/typeorm/issues/9658
    * @see https://github.com/typeorm/typeorm/issues/11302
    */
@@ -162,6 +201,7 @@ export class DraftExtractionService {
       counts: { facts: 0, projects: 0, tasks: 0, commitments: 0, relations: 0 },
       skipped: { facts: 0, projects: 0, tasks: 0, commitments: 0, relations: 0 },
       errors: [],
+      fusionActions: [],
     };
 
     // 0. Create draft facts — two-pass hybrid deduplication (text + semantic + LLM review)
@@ -208,8 +248,26 @@ export class DraftExtractionService {
             similarity: dedupResult.similarity!,
             embedding: dedupResult.embedding,
           });
+        } else if (dedupResult.existingFactId && this.factFusionService) {
+          // Smart Fusion: route through FactFusionService for intelligent resolution
+          try {
+            const fusionDetail = await this.applySmartFusion(
+              fact,
+              dedupResult.existingFactId,
+              result,
+            );
+            if (fusionDetail) {
+              result.fusionActions.push(fusionDetail);
+            }
+          } catch (fusionError) {
+            const msg = fusionError instanceof Error ? fusionError.message : 'Unknown';
+            this.logger.warn(
+              `Smart fusion failed for "${fact.factType}:${fact.value}", falling back to skip: ${msg}`,
+            );
+            result.skipped.facts++;
+          }
         } else {
-          // skip, update, supersede — auto-skip
+          // skip, update, supersede — auto-skip (no fusion service or no existing fact ID)
           this.logger.debug(
             `Skipping duplicate fact "${fact.factType}:${fact.value}" for entity ${fact.entityId} — ` +
               `${dedupResult.reason}` +
@@ -245,6 +303,24 @@ export class DraftExtractionService {
 
         if (decision.action === 'create') {
           factsToCreate.push({ fact: candidate.newFact, embedding: candidate.embedding });
+        } else if (candidate.matchedFactId && this.factFusionService) {
+          // Smart Fusion for grey-zone candidates that LLM decided to skip
+          try {
+            const fusionDetail = await this.applySmartFusion(
+              candidate.newFact,
+              candidate.matchedFactId,
+              result,
+            );
+            if (fusionDetail) {
+              result.fusionActions.push(fusionDetail);
+            }
+          } catch (fusionError) {
+            const msg = fusionError instanceof Error ? fusionError.message : 'Unknown';
+            this.logger.warn(
+              `Smart fusion failed for grey-zone "${candidate.newFact.factType}:${candidate.newFact.value}", falling back to skip: ${msg}`,
+            );
+            result.skipped.facts++;
+          }
         } else {
           this.logger.debug(
             `LLM review: skipping "${candidate.newFact.factType}:${candidate.newFact.value}" — ${decision.reason}`,
@@ -594,15 +670,141 @@ export class DraftExtractionService {
       result.skipped.tasks +
       result.skipped.commitments +
       result.skipped.relations;
+    const fusionSummary = this.summarizeFusionActions(result.fusionActions);
     this.logger.log(
       `Draft extraction complete (batch=${batchId}): ` +
         `${result.counts.facts} facts, ${result.counts.projects} projects, ` +
         `${result.counts.tasks} tasks, ${result.counts.commitments} commitments, ` +
         `${result.counts.relations} relations ` +
-        `(${totalSkipped} skipped as duplicates, ${result.errors.length} errors)`,
+        `(${totalSkipped} skipped as duplicates, ${result.errors.length} errors)` +
+        fusionSummary,
     );
 
     return result;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: Smart Fusion Methods
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Apply Smart Fusion for a fact that has a matching existing fact.
+   *
+   * Loads the existing fact, calls FactFusionService.decideFusion() for
+   * LLM-based resolution, then applies the decision via applyDecision().
+   *
+   * @returns FusionActionDetail if fusion was applied, null otherwise
+   */
+  private async applySmartFusion(
+    fact: ExtractedFact,
+    existingFactId: string,
+    result: DraftExtractionResult,
+  ): Promise<FusionActionDetail | null> {
+    const existingFact = await this.factRepo.findOne({ where: { id: existingFactId } });
+    if (!existingFact) {
+      this.logger.warn(
+        `Smart fusion: existing fact ${existingFactId} not found, skipping`,
+      );
+      result.skipped.facts++;
+      return null;
+    }
+
+    // Ask LLM for fusion decision
+    const decision = await this.factFusionService!.decideFusion(
+      existingFact,
+      fact.value,
+      FactSource.EXTRACTED,
+    );
+
+    // Build CreateFactDto for applyDecision
+    const newFactDto: CreateFactDto = {
+      type: fact.factType as FactType,
+      category: this.inferFactCategory(fact.factType),
+      value: fact.value,
+      source: FactSource.EXTRACTED,
+      confidence: fact.confidence,
+    };
+
+    // Apply the decision
+    const applyResult = await this.factFusionService!.applyDecision(
+      existingFact,
+      newFactDto,
+      decision,
+      fact.entityId,
+    );
+
+    this.logger.log(
+      `[SmartFusion] ${decision.action} for "${fact.factType}:${fact.value}" ` +
+        `(existing: ${existingFactId}) → result: ${applyResult.action}, reason: ${decision.explanation}`,
+    );
+
+    return this.mapFusionToDetail(fact, existingFactId, decision, applyResult, result);
+  }
+
+  /**
+   * Map a FactFusionService decision to a FusionActionDetail record
+   * and update the result counters accordingly.
+   */
+  private mapFusionToDetail(
+    fact: ExtractedFact,
+    existingFactId: string,
+    decision: { action: FusionAction; explanation: string },
+    applyResult: CreateFactResult,
+    result: DraftExtractionResult,
+  ): FusionActionDetail {
+    // Map FusionAction → ExtractionFusionAction
+    const actionMap: Record<FusionAction, ExtractionFusionAction> = {
+      [FusionAction.CONFIRM]: ExtractionFusionAction.CONFIRM,
+      [FusionAction.ENRICH]: ExtractionFusionAction.ENRICH,
+      [FusionAction.SUPERSEDE]: ExtractionFusionAction.SUPERSEDE,
+      [FusionAction.COEXIST]: ExtractionFusionAction.COEXIST,
+      [FusionAction.CONFLICT]: ExtractionFusionAction.CONFLICT,
+    };
+
+    const extractionAction = actionMap[decision.action] ?? ExtractionFusionAction.SKIP;
+
+    // Update counters: CONFIRM/ENRICH/CONFLICT count as "skipped" (no new draft),
+    // SUPERSEDE/COEXIST count as "created" (new fact was made)
+    switch (decision.action) {
+      case FusionAction.CONFIRM:
+      case FusionAction.ENRICH:
+      case FusionAction.CONFLICT:
+        result.skipped.facts++;
+        break;
+      case FusionAction.SUPERSEDE:
+      case FusionAction.COEXIST:
+        result.counts.facts++;
+        break;
+    }
+
+    return {
+      action: extractionAction,
+      entityId: fact.entityId,
+      factType: fact.factType,
+      newValue: fact.value,
+      existingFactId,
+      resultFactId: applyResult.fact?.id !== existingFactId ? applyResult.fact?.id : undefined,
+      reason: decision.explanation,
+    };
+  }
+
+  /**
+   * Generate a compact summary string of fusion actions for logging.
+   * Returns empty string if no fusion actions occurred.
+   */
+  private summarizeFusionActions(actions: FusionActionDetail[]): string {
+    if (actions.length === 0) return '';
+
+    const counts: Record<string, number> = {};
+    for (const a of actions) {
+      counts[a.action] = (counts[a.action] || 0) + 1;
+    }
+
+    const parts = Object.entries(counts)
+      .map(([action, count]) => `${action}=${count}`)
+      .join(', ');
+
+    return ` | fusion: ${parts}`;
   }
 
   // ─────────────────────────────────────────────────────────────
