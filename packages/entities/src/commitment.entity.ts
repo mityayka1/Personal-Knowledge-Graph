@@ -306,6 +306,13 @@ export class Commitment {
   reminderCount: number;
 
   // ─────────────────────────────────────────────────────────────
+  // Traceability (Knowledge Layer)
+  // ─────────────────────────────────────────────────────────────
+
+  @Column({ name: 'source_segment_id', type: 'uuid', nullable: true })
+  sourceSegmentId: string | null;
+
+  // ─────────────────────────────────────────────────────────────
   // Метаданные
   // ─────────────────────────────────────────────────────────────
 
