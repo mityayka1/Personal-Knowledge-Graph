@@ -82,6 +82,9 @@ export class PackingService {
     // Collect all participant IDs across segments
     const participantIds = this.collectParticipantIds(segments);
 
+    // Supersede existing ACTIVE packs for this activity
+    await this.supersedeExistingPacks(PackType.ACTIVITY, { activityId });
+
     // Create KnowledgePack
     const pack = await this.createPack({
       title: title || synthesis.suggestedTitle,
@@ -131,6 +134,9 @@ export class PackingService {
     const { synthesis, tokensUsed, durationMs } = await this.synthesize(segmentData);
     const { periodStart, periodEnd } = this.computePeriodBounds(segments);
     const participantIds = this.collectParticipantIds(segments);
+
+    // Supersede existing ACTIVE packs for this entity
+    await this.supersedeExistingPacks(PackType.ENTITY, { entityId });
 
     const pack = await this.createPack({
       title: title || synthesis.suggestedTitle,
@@ -248,6 +254,37 @@ export class PackingService {
     );
 
     return this.segmentationService.findOnePack(packId);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Pack Supersession
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Supersede existing ACTIVE packs for the same scope before creating a new one.
+   * Prevents duplicate knowledge packs in context retrieval.
+   */
+  private async supersedeExistingPacks(
+    packType: PackType,
+    scope: { activityId?: string; entityId?: string },
+  ): Promise<void> {
+    const qb = this.packRepo.createQueryBuilder('kp')
+      .where('kp.status = :status', { status: PackStatus.ACTIVE })
+      .andWhere('kp.packType = :packType', { packType });
+
+    if (scope.activityId) {
+      qb.andWhere('kp.activityId = :activityId', { activityId: scope.activityId });
+    }
+    if (scope.entityId) {
+      qb.andWhere('kp.entityId = :entityId', { entityId: scope.entityId });
+    }
+
+    const existingPacks = await qb.getMany();
+
+    for (const pack of existingPacks) {
+      await this.supersedePack(pack.id);
+      this.logger.log(`[packing] Superseded existing pack ${pack.id} before re-packing`);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -381,6 +418,14 @@ export class PackingService {
 
     const durationMs = Date.now() - startTime;
     const tokensUsed = result.usage.inputTokens + result.usage.outputTokens;
+
+    if (!result.data) {
+      this.logger.error(
+        `[packing] Claude returned empty response for knowledge synthesis ` +
+        `(${segmentData.length} segments, ${tokensUsed} tokens, ${durationMs}ms)`,
+      );
+      throw new Error('Knowledge synthesis returned empty response from Claude');
+    }
 
     this.logger.debug(
       `[packing] Synthesis complete: ${tokensUsed} tokens, ${durationMs}ms`,

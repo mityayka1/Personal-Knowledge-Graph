@@ -38,6 +38,7 @@ export class SegmentationJobService {
     const startTime = Date.now();
     let interactionsProcessed = 0;
     let totalSegmentsCreated = 0;
+    let errorCount = 0;
 
     try {
       // Check feature flag
@@ -71,10 +72,12 @@ export class SegmentationJobService {
             interactionsProcessed++;
             totalSegmentsCreated += segmentsCreated;
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
+          errorCount++;
+          const err = error instanceof Error ? error : new Error(String(error));
           this.logger.error(
-            `[segmentation-job] Error processing interaction ${interaction.id}: ${error.message}`,
-            error.stack,
+            `[segmentation-job] Error processing interaction ${interaction.id}: ${err.message}`,
+            err.stack,
           );
         }
       }
@@ -82,12 +85,13 @@ export class SegmentationJobService {
       const durationMs = Date.now() - startTime;
       this.logger.log(
         `[segmentation-job] Completed: ${interactionsProcessed} interactions processed, ` +
-          `${totalSegmentsCreated} segments created, ${durationMs}ms`,
+          `${totalSegmentsCreated} segments created, ${errorCount} errors, ${durationMs}ms`,
       );
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error));
       this.logger.error(
-        `[segmentation-job] Fatal error: ${error.message}`,
-        error.stack,
+        `[segmentation-job] Fatal error: ${err.message}`,
+        err.stack,
       );
     } finally {
       this.isRunning = false;
@@ -105,34 +109,44 @@ export class SegmentationJobService {
     if (!chatId) return 0;
 
     // Find messages NOT already linked to any segment
-    const unsegmentedMessages: Message[] = await this.dataSource.query(
-      `SELECT m.*
+    // Using LEFT JOIN instead of NOT IN for better performance (avoids full scan of segment_messages)
+    // Raw SQL returns snake_case columns — map explicitly to camelCase
+    const rawMessages: Array<{
+      id: string;
+      content: string | null;
+      timestamp: Date;
+      is_outgoing: boolean;
+      sender_entity_id: string | null;
+      reply_to_source_message_id: string | null;
+      topic_name: string | null;
+    }> = await this.dataSource.query(
+      `SELECT m.id, m.content, m.timestamp, m.is_outgoing,
+              m.sender_entity_id, m.reply_to_source_message_id, m.topic_name
        FROM messages m
+       LEFT JOIN segment_messages sm ON sm.message_id = m.id
        WHERE m.interaction_id = $1
-         AND m.id NOT IN (
-           SELECT sm.message_id FROM segment_messages sm
-         )
+         AND sm.message_id IS NULL
        ORDER BY m.timestamp ASC`,
       [interaction.id],
     );
 
-    if (unsegmentedMessages.length < MIN_UNSEGMENTED_MESSAGES) {
+    if (rawMessages.length < MIN_UNSEGMENTED_MESSAGES) {
       this.logger.debug(
         `[segmentation-job] Interaction ${interaction.id}: ` +
-          `only ${unsegmentedMessages.length} unsegmented message(s), skipping`,
+          `only ${rawMessages.length} unsegmented message(s), skipping`,
       );
       return 0;
     }
 
-    // Map to MessageData format
-    const messages: MessageData[] = unsegmentedMessages.map((m) => ({
+    // Map raw snake_case rows to MessageData format
+    const messages: MessageData[] = rawMessages.map((m) => ({
       id: m.id,
       content: m.content || '',
       timestamp: new Date(m.timestamp).toISOString(),
-      isOutgoing: m.isOutgoing,
-      senderEntityId: m.senderEntityId ?? undefined,
-      replyToSourceMessageId: m.replyToSourceMessageId ?? undefined,
-      topicName: m.topicName ?? undefined,
+      isOutgoing: m.is_outgoing,
+      senderEntityId: m.sender_entity_id ?? undefined,
+      replyToSourceMessageId: m.reply_to_source_message_id ?? undefined,
+      topicName: m.topic_name ?? undefined,
     }));
 
     // Get participant entity IDs

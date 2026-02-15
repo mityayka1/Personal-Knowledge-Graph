@@ -199,6 +199,11 @@ export class TopicBoundaryDetectorService {
       timeout: 60000,
     });
 
+    if (!result.data) {
+      this.logger.warn('[segmentation] Claude returned empty response for topic segmentation');
+      return { segments: [], skippedCount: messages.length, tokensUsed: 0 };
+    }
+
     const segments = this.validateSegments(result.data.segments, messages.length);
     const skippedCount = result.data.skippedMessageIndices?.length ?? 0;
     const tokensUsed = result.usage.inputTokens + result.usage.outputTokens;

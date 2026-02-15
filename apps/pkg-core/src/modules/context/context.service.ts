@@ -103,7 +103,12 @@ export class ContextService {
     const profile = await this.profileRepo.findOne({ where: { entityId } });
 
     // 5.5. KNOWLEDGE tier: Active knowledge packs for this entity
-    const knowledgePacks = await this.getKnowledgePacks(entityId);
+    let knowledgePacks: KnowledgePack[] = [];
+    try {
+      knowledgePacks = await this.getKnowledgePacks(entityId);
+    } catch (error) {
+      this.logger.warn(`Knowledge packs retrieval failed for entity ${entityId}: ${error}`);
+    }
 
     // 6. RELEVANT: Vector search for task_hint
     let relevantChunks: SearchResult[] = [];
@@ -247,7 +252,7 @@ export class ContextService {
     return this.packRepo
       .createQueryBuilder('kp')
       .where('kp.status = :status', { status: PackStatus.ACTIVE })
-      .andWhere(':entityId = ANY(kp.participant_ids)', { entityId })
+      .andWhere('(kp.entity_id = :entityId OR :entityId = ANY(kp.participant_ids))', { entityId })
       .orderBy('kp.created_at', 'DESC')
       .limit(10)
       .getMany();
