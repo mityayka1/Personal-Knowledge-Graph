@@ -11,6 +11,9 @@ import { MessageData } from '../extraction/extraction.types';
 /** Minimum unsegmented messages required to trigger segmentation for a chat */
 const MIN_UNSEGMENTED_MESSAGES = 4;
 
+/** Delay between Claude API calls to avoid rate limiting (ms) */
+const INTER_CALL_DELAY_MS = 2_000;
+
 @Injectable()
 export class SegmentationJobService {
   private readonly logger = new Logger(SegmentationJobService.name);
@@ -65,7 +68,14 @@ export class SegmentationJobService {
 
       this.logger.log(`[segmentation-job] Found ${interactions.length} interaction(s) to check`);
 
-      for (const interaction of interactions) {
+      for (let i = 0; i < interactions.length; i++) {
+        const interaction = interactions[i];
+
+        // Rate limiting: delay between Claude API calls (skip before first)
+        if (i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, INTER_CALL_DELAY_MS));
+        }
+
         try {
           const segmentsCreated = await this.processInteraction(interaction);
           if (segmentsCreated > 0) {
@@ -180,9 +190,10 @@ export class SegmentationJobService {
           const relatedIds = related.map((r) => r.segmentId);
           await this.segmentationService.linkRelatedSegments(segmentId, relatedIds);
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const err = error instanceof Error ? error : new Error(String(error));
         this.logger.warn(
-          `[segmentation-job] Failed to link related segments for ${segmentId}: ${error.message}`,
+          `[segmentation-job] Failed to link related segments for ${segmentId}: ${err.message}`,
         );
       }
     }
