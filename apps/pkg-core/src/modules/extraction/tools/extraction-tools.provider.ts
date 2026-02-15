@@ -19,6 +19,10 @@ import { EnrichmentQueueService } from '../enrichment-queue.service';
 import { DraftExtractionService } from '../draft-extraction.service';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import {
+  EntityDisambiguationService,
+  DisambiguationContext,
+} from '../../entity/entity-disambiguation.service';
+import {
   FactSource,
   RelationType,
   RelationSource,
@@ -82,6 +86,9 @@ export class ExtractionToolsProvider {
     private readonly activityRepo: Repository<Activity>,
     @Optional()
     private readonly projectMatchingService: ProjectMatchingService | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityDisambiguationService))
+    private readonly entityDisambiguationService: EntityDisambiguationService | null,
   ) {}
 
   /**
@@ -134,7 +141,7 @@ export class ExtractionToolsProvider {
     return [
       // Read tools
       this.createGetEntityContextTool(),
-      this.createFindEntityByNameTool(),
+      this.createFindEntityByNameTool(context),
       this.createFindActivityTool(context),
 
       // Write tools - all require context for draft creation
@@ -177,17 +184,23 @@ export class ExtractionToolsProvider {
 
   /**
    * find_entity_by_name - Search for entity by name or alias.
+   * Integrates with EntityDisambiguationService to rank candidates when multiple matches found.
+   *
+   * @param context - Extraction context (reserved for future disambiguation signals)
    */
-  private createFindEntityByNameTool() {
+  private createFindEntityByNameTool(context: ExtractionContext) {
     return tool(
       'find_entity_by_name',
       `Найти сущность (человека или организацию) по имени.
 Возвращает ID и основную информацию если найдена.
-Используй для поиска упомянутых людей перед созданием фактов.`,
+Используй для поиска упомянутых людей перед созданием фактов.
+При нескольких совпадениях ранжирует кандидатов по контекстным сигналам (недавние взаимодействия, общие чаты, организация).`,
       {
         name: z.string().min(2).describe('Имя для поиска (минимум 2 символа, поддерживается частичное совпадение)'),
         type: z.enum(['person', 'organization']).optional().describe('Тип сущности для фильтрации'),
         limit: z.number().int().min(1).max(10).default(5).describe('Максимум результатов'),
+        chatId: z.string().optional().describe('Telegram chat ID для контекстной дисамбигуации'),
+        mentionedWith: z.array(z.string()).optional().describe('Имена других сущностей, упомянутых вместе (для org-overlap scoring)'),
       },
       async (args) => {
         try {
@@ -205,6 +218,58 @@ export class ExtractionToolsProvider {
             );
           }
 
+          // If multiple matches and disambiguation service available, score and rank candidates
+          if (result.items.length > 1 && this.entityDisambiguationService) {
+            try {
+              const disambiguationCtx: DisambiguationContext = {
+                chatId: args.chatId,
+                mentionedWith: args.mentionedWith,
+              };
+              const scored = await this.entityDisambiguationService.disambiguate(
+                args.name,
+                disambiguationCtx,
+              );
+
+              if (scored.length > 0) {
+                const top = scored[0];
+                const entities = scored.slice(0, args.limit).map((s) => ({
+                  id: s.entity.id,
+                  name: s.entity.name,
+                  type: s.entity.type,
+                  organization: s.entity.organization?.name || null,
+                  score: Math.round(s.score * 100) / 100,
+                  reasons: s.reasons,
+                }));
+
+                // If top candidate scores above threshold, mark as recommended
+                if (top.score > 0.5) {
+                  return toolSuccess({
+                    found: entities.length,
+                    total: result.total,
+                    disambiguation: 'recommended',
+                    recommended: entities[0],
+                    entities,
+                  });
+                }
+
+                // Multiple candidates, no clear winner
+                return toolSuccess({
+                  found: entities.length,
+                  total: result.total,
+                  disambiguation: 'disambiguation_needed',
+                  disambiguation_needed: true,
+                  entities,
+                });
+              }
+            } catch (disambError) {
+              // Disambiguation failed - fall through to basic results
+              this.logger.warn(
+                `[find_entity_by_name] Disambiguation failed for "${args.name}": ${disambError}`,
+              );
+            }
+          }
+
+          // Fallback: return basic results without disambiguation
           const entities = result.items.map((e) => ({
             id: e.id,
             name: e.name,
