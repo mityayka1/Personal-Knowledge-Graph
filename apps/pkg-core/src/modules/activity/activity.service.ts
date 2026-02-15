@@ -590,13 +590,17 @@ export class ActivityService {
    * Архивировать активность.
    */
   async archive(id: string): Promise<Activity> {
-    const activity = await this.findOne(id);
-    activity.status = ActivityStatus.ARCHIVED;
-    activity.lastActivityAt = new Date();
+    await this.findOne(id); // validate exists
 
-    await this.activityRepo.save(activity);
+    // Use QueryBuilder to avoid TypeORM closure-table save() bug
+    await this.activityRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: ActivityStatus.ARCHIVED, lastActivityAt: new Date() })
+      .where('id = :id', { id })
+      .execute();
+
     this.logger.log(`Archived activity: ${id}`);
-
     return this.findOne(id);
   }
 
