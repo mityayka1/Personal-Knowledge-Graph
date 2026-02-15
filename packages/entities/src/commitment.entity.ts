@@ -355,6 +355,18 @@ export class Commitment {
   @UpdateDateColumn({ name: 'updated_at', comment: 'Дата последнего обновления' })
   updatedAt: Date;
 
+  // ─────────────────────────────────────────────────────────────
+  // Embedding (pgvector)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Embedding vector for semantic deduplication.
+   * Generated from commitment title + context via OpenAI text-embedding-3-small (1536 dim).
+   * Used by DraftExtractionService for cosine similarity dedup of commitments.
+   */
+  @Column({ type: 'vector', length: 1536, nullable: true })
+  embedding: number[] | null;
+
   /**
    * Soft delete timestamp.
    * Записи с deletedAt != null считаются удалёнными.

@@ -1,8 +1,9 @@
 import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In, Not, ILike } from 'typeorm';
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { ProjectMatchingService } from '../project-matching.service';
 import {
   toolSuccess,
   toolEmptyResult,
@@ -28,6 +29,9 @@ import {
   PendingApprovalItemType,
   EntityType,
   CreationSource,
+  Activity,
+  ActivityType,
+  ActivityStatus,
 } from '@pkg/entities';
 
 /** MCP server name for extraction tools */
@@ -74,6 +78,10 @@ export class ExtractionToolsProvider {
     @Optional()
     @Inject(forwardRef(() => DraftExtractionService))
     private readonly draftExtractionService: DraftExtractionService | null,
+    @InjectRepository(Activity)
+    private readonly activityRepo: Repository<Activity>,
+    @Optional()
+    private readonly projectMatchingService: ProjectMatchingService | null,
   ) {}
 
   /**
@@ -127,6 +135,7 @@ export class ExtractionToolsProvider {
       // Read tools
       this.createGetEntityContextTool(),
       this.createFindEntityByNameTool(),
+      this.createFindActivityTool(context),
 
       // Write tools - all require context for draft creation
       this.createFactTool(context),
@@ -210,6 +219,132 @@ export class ExtractionToolsProvider {
           });
         } catch (error) {
           return handleToolError(error, this.logger, 'find_entity_by_name');
+        }
+      },
+    );
+  }
+
+  /**
+   * find_activity - Search for existing Activity (project, task) by name.
+   * Uses ILIKE + fuzzy matching via ProjectMatchingService to prevent duplicates.
+   *
+   * @param context - Extraction context with ownerEntityId
+   */
+  private createFindActivityTool(context: ExtractionContext) {
+    return tool(
+      'find_activity',
+      `Поиск существующей активности (проекта, задачи) по имени.
+ОБЯЗАТЕЛЬНО используй ПЕРЕД create_event для проверки — не создавай дубликат!
+Возвращает top-5 matches с similarity score.`,
+      {
+        query: z.string().min(2).describe('Поисковый запрос — имя проекта/задачи'),
+        type: z
+          .enum(['AREA', 'BUSINESS', 'PROJECT', 'TASK', 'INITIATIVE'])
+          .optional()
+          .describe('Фильтр по типу активности'),
+      },
+      async (args) => {
+        if (!context.ownerEntityId) {
+          return toolError(
+            'Owner entity ID not provided',
+            'Cannot search activities without owner entity context.',
+          );
+        }
+
+        try {
+          // Run ILIKE search and fuzzy search in parallel
+          const excludedStatuses = [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED];
+
+          const ilikeWhereConditions: Record<string, unknown> = {
+            ownerEntityId: context.ownerEntityId,
+            name: ILike(`%${args.query}%`),
+            status: Not(In(excludedStatuses)),
+          };
+          if (args.type) {
+            ilikeWhereConditions.activityType = args.type.toLowerCase() as ActivityType;
+          }
+
+          const [ilikeResults, fuzzyResults] = await Promise.all([
+            // a. ILIKE search
+            this.activityRepo.find({
+              where: ilikeWhereConditions,
+              select: ['id', 'name', 'activityType', 'status', 'clientEntityId'],
+              relations: ['clientEntity'],
+              order: { lastActivityAt: { direction: 'DESC', nulls: 'LAST' } },
+              take: 10,
+            }),
+            // b. Fuzzy search via ProjectMatchingService
+            this.projectMatchingService
+              ? this.projectMatchingService.findCandidates({
+                  name: args.query,
+                  ownerEntityId: context.ownerEntityId,
+                  activityType: args.type
+                    ? (args.type.toLowerCase() as ActivityType)
+                    : undefined,
+                  limit: 5,
+                })
+              : Promise.resolve([]),
+          ]);
+
+          // Merge results, deduplicate by id
+          const seenIds = new Set<string>();
+          const merged: Array<{
+            id: string;
+            name: string;
+            type: string;
+            status: string;
+            similarity: number;
+            client: string | null;
+          }> = [];
+
+          // ILIKE matches first (similarity = 1.0 for exact substring match)
+          for (const activity of ilikeResults) {
+            if (!seenIds.has(activity.id)) {
+              seenIds.add(activity.id);
+              merged.push({
+                id: activity.id,
+                name: activity.name,
+                type: activity.activityType,
+                status: activity.status,
+                similarity: 1.0,
+                client: activity.clientEntity?.name || null,
+              });
+            }
+          }
+
+          // Fuzzy matches sorted by similarity
+          for (const candidate of fuzzyResults) {
+            if (!seenIds.has(candidate.activity.id)) {
+              seenIds.add(candidate.activity.id);
+              merged.push({
+                id: candidate.activity.id,
+                name: candidate.activity.name,
+                type: candidate.activity.activityType,
+                status: candidate.activity.status,
+                similarity: Math.round(candidate.similarity * 1000) / 1000,
+                client: null, // clientEntity not loaded in fuzzy search
+              });
+            }
+          }
+
+          // Sort: ILIKE matches first (similarity=1.0), then by similarity desc
+          merged.sort((a, b) => b.similarity - a.similarity);
+
+          // Return top 5
+          const top5 = merged.slice(0, 5);
+
+          if (top5.length === 0) {
+            return toolEmptyResult('activities matching query');
+          }
+
+          this.logger.debug(
+            `[find_activity] Found ${top5.length} matches for "${args.query}" ` +
+              `(ILIKE: ${ilikeResults.length}, fuzzy: ${fuzzyResults.length})`,
+          );
+
+          return toolSuccess(top5);
+        } catch (error) {
+          return handleToolError(error, this.logger, 'find_activity');
         }
       },
     );
@@ -551,7 +686,9 @@ export class ExtractionToolsProvider {
 ПРАВИЛА ОБЕЩАНИЙ:
 - promise_by_me: автор ИСХОДЯЩЕГО сообщения обещает что-то сделать
 - promise_by_them: автор ВХОДЯЩЕГО сообщения обещает что-то сделать
-- ОПРЕДЕЛЯЙ тип ТОЛЬКО по isOutgoing флагу сообщения, НЕ по тексту`,
+- ОПРЕДЕЛЯЙ тип ТОЛЬКО по isOutgoing флагу сообщения, НЕ по тексту
+
+ЗАПОЛНЯЙ priority, deadline и tags ЕСЛИ они упоминаются в разговоре.`,
       {
         eventType: z
           .enum(['meeting', 'promise_by_me', 'promise_by_them', 'task', 'fact', 'cancellation'])
@@ -581,6 +718,18 @@ export class ExtractionToolsProvider {
           .string()
           .optional()
           .describe('Имя проекта, если activityId неизвестен — система найдёт ближайшее совпадение через fuzzy match'),
+        priority: z
+          .enum(['none', 'low', 'medium', 'high', 'urgent'])
+          .optional()
+          .describe('Приоритет задачи/проекта, если упоминается в разговоре'),
+        deadline: z
+          .string()
+          .optional()
+          .describe('Дедлайн в формате ISO 8601 (например: "2026-03-15"), если упоминается'),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe('Теги/категории проекта (например: ["дизайн", "клиент", "срочно"])'),
         metadata: z.record(z.string(), z.unknown()).optional().describe('Доп. данные (participants, location и т.д.)'),
       },
       async (args) => {
@@ -638,6 +787,9 @@ export class ExtractionToolsProvider {
           // Map event type to appropriate draft entity
           if (args.eventType === 'task') {
             // Create draft task (Activity with type=TASK)
+            const taskPriority = args.priority && args.priority !== 'none'
+              ? (args.priority === 'urgent' ? 'high' : args.priority as 'high' | 'medium' | 'low')
+              : 'medium';
             const result = await this.draftExtractionService.createDrafts({
               ownerEntityId: context.ownerEntityId,
               facts: [],
@@ -645,9 +797,9 @@ export class ExtractionToolsProvider {
                 {
                   title: args.title,
                   projectName: args.projectName,
-                  deadline: args.date,
+                  deadline: args.deadline ?? args.date,
                   status: 'pending',
-                  priority: 'medium',
+                  priority: taskPriority,
                   sourceQuote: args.sourceQuote?.substring(0, 200),
                   confidence: args.confidence,
                 },
@@ -692,6 +844,9 @@ export class ExtractionToolsProvider {
             args.promiseToEntityId,
           );
 
+          const commitPriority = args.priority && args.priority !== 'none'
+            ? (args.priority === 'urgent' ? 'high' : args.priority as 'high' | 'medium' | 'low')
+            : 'medium';
           const result = await this.draftExtractionService.createDrafts({
             ownerEntityId: context.ownerEntityId,
             facts: [],
@@ -702,8 +857,8 @@ export class ExtractionToolsProvider {
                 from,
                 to,
                 type: commitmentType,
-                deadline: args.date,
-                priority: 'medium',
+                deadline: args.deadline ?? args.date,
+                priority: commitPriority,
                 projectName: args.projectName,
                 sourceQuote: args.sourceQuote?.substring(0, 200),
                 confidence: args.confidence,

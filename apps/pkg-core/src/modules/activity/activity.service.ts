@@ -6,6 +6,7 @@ import {
   Activity,
   ActivityType,
   ActivityStatus,
+  ActivityPriority,
   ActivityContext,
   ActivityMember,
   ActivityMemberRole,
@@ -521,6 +522,107 @@ export class ActivityService {
       })
       .orderBy('a.deadline', 'ASC')
       .getMany();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Enrichment
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Enrich existing Activity with new data from extraction.
+   * Only fills empty/null/default fields; never overwrites existing values.
+   * Tags are merged (union of unique values).
+   * Always updates lastActivityAt.
+   *
+   * Uses QueryBuilder for update to bypass TypeORM closure-table bug.
+   * @see https://github.com/typeorm/typeorm/issues/9658
+   */
+  async enrichActivity(
+    id: string,
+    fields: {
+      description?: string;
+      tags?: string[];
+      deadline?: Date;
+      priority?: string;
+    },
+  ): Promise<void> {
+    const activity = await this.activityRepo.findOne({ where: { id } });
+    if (!activity) {
+      this.logger.warn(`enrichActivity: activity ${id} not found, skipping`);
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateSet: Record<string, any> = {
+      lastActivityAt: new Date(),
+    };
+    const enriched: string[] = [];
+
+    // description: update only if current is null or empty
+    if (fields.description && !activity.description) {
+      updateSet.description = fields.description;
+      enriched.push('description');
+    }
+
+    // tags: merge arrays (unique values), never overwrite
+    if (fields.tags?.length) {
+      const existing = activity.tags ?? [];
+      const merged = [...new Set([...existing, ...fields.tags])];
+      if (merged.length > existing.length) {
+        updateSet.tags = merged;
+        enriched.push(`tags(+${merged.length - existing.length})`);
+      }
+    }
+
+    // deadline: update only if current is null
+    if (fields.deadline && !activity.deadline) {
+      updateSet.deadline = fields.deadline;
+      enriched.push('deadline');
+    }
+
+    // priority: update only if current is 'none' or default 'medium' (extraction default)
+    // Rationale: extracted activities start with MEDIUM default, so we enrich them
+    if (
+      fields.priority &&
+      (activity.priority === ActivityPriority.NONE ||
+        activity.priority === ActivityPriority.MEDIUM)
+    ) {
+      const mapped = this.mapPriorityString(fields.priority);
+      if (mapped && mapped !== activity.priority) {
+        updateSet.priority = mapped;
+        enriched.push('priority');
+      }
+    }
+
+    await this.activityRepo
+      .createQueryBuilder()
+      .update(Activity)
+      .set(updateSet)
+      .where('id = :id', { id })
+      .execute();
+
+    if (enriched.length > 0) {
+      this.logger.log(`Enriched activity ${id}: ${enriched.join(', ')}`);
+    }
+  }
+
+  /**
+   * Map priority string from extraction to ActivityPriority enum.
+   */
+  private mapPriorityString(priority: string): ActivityPriority | null {
+    switch (priority.toLowerCase()) {
+      case 'critical':
+      case 'urgent':
+        return ActivityPriority.CRITICAL;
+      case 'high':
+        return ActivityPriority.HIGH;
+      case 'medium':
+        return ActivityPriority.MEDIUM;
+      case 'low':
+        return ActivityPriority.LOW;
+      default:
+        return null;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

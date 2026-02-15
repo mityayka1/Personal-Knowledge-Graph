@@ -75,6 +75,8 @@ describe('ExtractionToolsProvider', () => {
       mockExtractedEventRepo as any,
       mockEnrichmentQueueService as any,
       mockDraftExtractionService as any,
+      { find: jest.fn().mockResolvedValue([]) } as any,
+      { findCandidates: jest.fn().mockResolvedValue([]) } as any,
     );
   });
 
@@ -85,7 +87,7 @@ describe('ExtractionToolsProvider', () => {
       const tools = provider.getTools(testContext);
 
       expect(Array.isArray(tools)).toBe(true);
-      expect(tools.length).toBe(6);
+      expect(tools.length).toBe(7);
     });
 
     it('should create new tools for each context (no singleton caching)', () => {
@@ -109,7 +111,7 @@ describe('ExtractionToolsProvider', () => {
       const tools = provider.getTools();
 
       expect(Array.isArray(tools)).toBe(true);
-      expect(tools.length).toBe(6);
+      expect(tools.length).toBe(7);
     });
   });
 
@@ -117,7 +119,7 @@ describe('ExtractionToolsProvider', () => {
     it('should return MCP-formatted tool names', () => {
       const toolNames = provider.getToolNames();
 
-      expect(toolNames.length).toBe(6);
+      expect(toolNames.length).toBe(7);
       toolNames.forEach((name) => {
         expect(name).toMatch(new RegExp(`^mcp__${EXTRACTION_MCP_NAME}__`));
       });

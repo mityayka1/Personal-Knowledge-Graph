@@ -362,6 +362,18 @@ export class Activity {
   @Index()
   lastActivityAt: Date | null;
 
+  // ─────────────────────────────────────────────────────────────
+  // Embedding (pgvector)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Embedding vector for semantic deduplication.
+   * Generated from activity name via OpenAI text-embedding-3-small (1536 dim).
+   * Used by DraftExtractionService for cosine similarity dedup of tasks/projects.
+   */
+  @Column({ type: 'vector', length: 1536, nullable: true })
+  embedding: number[] | null;
+
   /**
    * Soft delete timestamp.
    * Записи с deletedAt != null считаются удалёнными.

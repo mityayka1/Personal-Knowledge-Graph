@@ -36,6 +36,7 @@ import { FactDeduplicationService } from './fact-deduplication.service';
 import { FactDedupReviewService, ReviewCandidate } from './fact-dedup-review.service';
 import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
 import { ActivityService } from '../activity/activity.service';
+import { EmbeddingService } from '../embedding/embedding.service';
 import { SettingsService } from '../settings/settings.service';
 
 /**
@@ -128,6 +129,9 @@ export class DraftExtractionService {
     private readonly factDeduplicationService: FactDeduplicationService,
     private readonly factDedupReviewService: FactDedupReviewService,
     private readonly settingsService: SettingsService,
+    @Optional()
+    @Inject(forwardRef(() => EmbeddingService))
+    private readonly embeddingService: EmbeddingService | null,
     @Optional()
     @Inject(forwardRef(() => EntityRelationService))
     private readonly entityRelationService: EntityRelationService | null,
@@ -311,6 +315,23 @@ export class DraftExtractionService {
           result.skipped.projects++;
           if (existing.source === 'pending_approval') projectDedupPending++;
           else projectDedupStrong++;
+
+          // Enrich existing activity with new extraction data (fill empty fields only)
+          if (this.activityService) {
+            try {
+              await this.activityService.enrichActivity(existing.activityId, {
+                description: project.description,
+                tags: project.tags,
+                deadline: project.deadline ? new Date(project.deadline) : undefined,
+                priority: project.priority,
+              });
+            } catch (enrichError) {
+              this.logger.warn(
+                `Failed to enrich activity ${existing.activityId}: ${enrichError instanceof Error ? enrichError.message : 'Unknown'}`,
+              );
+            }
+          }
+
           continue;
         }
 
@@ -376,6 +397,45 @@ export class DraftExtractionService {
           continue;
         }
 
+        // SEMANTIC DEDUP: Embedding-based cosine similarity check (after Levenshtein)
+        let taskEmbedding: number[] | undefined;
+        try {
+          if (this.embeddingService) {
+            taskEmbedding = await this.embeddingService.generate(task.title);
+
+            if (taskEmbedding) {
+              const similar = await this.activityRepo
+                .createQueryBuilder('a')
+                .select(['a.id', 'a.name'])
+                .addSelect(`a.embedding <=> :emb`, 'distance')
+                .where('a.embedding IS NOT NULL')
+                .andWhere('a.activityType = :type', { type: ActivityType.TASK })
+                .andWhere('a.ownerEntityId = :owner', { owner: input.ownerEntityId })
+                .andWhere('a.status NOT IN (:...excluded)', {
+                  excluded: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
+                })
+                .setParameter('emb', `[${taskEmbedding.join(',')}]`)
+                .orderBy('distance', 'ASC')
+                .limit(1)
+                .getRawOne();
+
+              if (similar && 1 - similar.distance >= DraftExtractionService.SEMANTIC_DEDUP_THRESHOLD) {
+                result.skipped.tasks++;
+                this.logger.log(
+                  `[SemanticDedup] Task "${task.title}" is semantic duplicate of "${similar.a_name}" ` +
+                    `(cosine: ${(1 - similar.distance).toFixed(3)})`,
+                );
+                continue;
+              }
+            }
+          }
+        } catch (embError) {
+          this.logger.warn(
+            `[SemanticDedup] Embedding generation failed for task "${task.title}", ` +
+              `proceeding without semantic dedup: ${embError instanceof Error ? embError.message : 'Unknown'}`,
+          );
+        }
+
         let parentId = task.projectName
           ? projectMap.get(ProjectMatchingService.normalizeName(task.projectName))
           : undefined;
@@ -395,6 +455,7 @@ export class DraftExtractionService {
           input,
           batchId,
           parentId,
+          taskEmbedding,
         );
 
         result.approvals.push(approval);
@@ -423,6 +484,47 @@ export class DraftExtractionService {
           );
           result.skipped.commitments++;
           continue;
+        }
+
+        // SEMANTIC DEDUP: Embedding-based cosine similarity check (after Levenshtein)
+        const commitmentEmbeddingText =
+          commitment.what +
+          (commitment.from ? ` от ${commitment.from}` : '') +
+          (commitment.to ? ` для ${commitment.to}` : '');
+        let commitmentEmbedding: number[] | undefined;
+        try {
+          if (this.embeddingService) {
+            commitmentEmbedding = await this.embeddingService.generate(commitmentEmbeddingText);
+
+            if (commitmentEmbedding) {
+              const similar = await this.commitmentRepo
+                .createQueryBuilder('c')
+                .select(['c.id', 'c.title'])
+                .addSelect(`c.embedding <=> :emb`, 'distance')
+                .where('c.embedding IS NOT NULL')
+                .andWhere('c.status NOT IN (:...excluded)', {
+                  excluded: [CommitmentStatus.COMPLETED, CommitmentStatus.CANCELLED],
+                })
+                .setParameter('emb', `[${commitmentEmbedding.join(',')}]`)
+                .orderBy('distance', 'ASC')
+                .limit(1)
+                .getRawOne();
+
+              if (similar && 1 - similar.distance >= DraftExtractionService.SEMANTIC_DEDUP_THRESHOLD) {
+                result.skipped.commitments++;
+                this.logger.log(
+                  `[SemanticDedup] Commitment "${commitment.what}" is semantic duplicate of "${similar.c_title}" ` +
+                    `(cosine: ${(1 - similar.distance).toFixed(3)})`,
+                );
+                continue;
+              }
+            }
+          }
+        } catch (embError) {
+          this.logger.warn(
+            `[SemanticDedup] Embedding generation failed for commitment "${commitment.what}", ` +
+              `proceeding without semantic dedup: ${embError instanceof Error ? embError.message : 'Unknown'}`,
+          );
         }
 
         // Resolve activityId from projectMap or fuzzy match for commitment
@@ -468,6 +570,7 @@ export class DraftExtractionService {
           input,
           batchId,
           commitmentActivityId,
+          commitmentEmbedding,
         );
 
         result.approvals.push(approval);
@@ -658,6 +761,7 @@ export class DraftExtractionService {
     input: DraftExtractionInput,
     batchId: string,
     parentId?: string,
+    embedding?: number[],
   ): Promise<{ activity: Activity; approval: PendingApproval }> {
     // Compute depth and materializedPath if parent exists
     let depth = 0;
@@ -720,6 +824,14 @@ export class DraftExtractionService {
       })
       .execute();
 
+    // Save embedding for future semantic dedup searches (raw SQL for vector type)
+    if (embedding) {
+      await this.activityRepo.query(
+        `UPDATE activities SET embedding = $1::vector WHERE id = $2`,
+        [`[${embedding.join(',')}]`, activityId],
+      );
+    }
+
     // Fetch the inserted entity
     const savedActivity = await this.activityRepo.findOneOrFail({
       where: { id: activityId },
@@ -752,6 +864,7 @@ export class DraftExtractionService {
     input: DraftExtractionInput,
     batchId: string,
     activityId?: string,
+    embedding?: number[],
   ): Promise<{ entity: Commitment; approval: PendingApproval }> {
     // Resolve from/to entities
     let fromEntityId = input.ownerEntityId;
@@ -802,6 +915,14 @@ export class DraftExtractionService {
     });
 
     const savedEntity = await this.commitmentRepo.save(entity);
+
+    // Save embedding for future semantic dedup searches (raw SQL for vector type)
+    if (embedding) {
+      await this.commitmentRepo.query(
+        `UPDATE commitments SET embedding = $1::vector WHERE id = $2`,
+        [`[${embedding.join(',')}]`, savedEntity.id],
+      );
+    }
 
     // Create PendingApproval linking to the draft
     const approval = this.approvalRepo.create({
@@ -1389,6 +1510,8 @@ export class DraftExtractionService {
   private static readonly TASK_DEDUP_THRESHOLD = 0.7;
   /** Commitment dedup threshold — skip creation if existing commitment is similar enough */
   private static readonly COMMITMENT_DEDUP_THRESHOLD = 0.7;
+  /** Semantic dedup threshold — skip if cosine similarity >= this value */
+  private static readonly SEMANTIC_DEDUP_THRESHOLD = 0.85;
 
 
   // ─────────────────────────────────────────────────────────────
