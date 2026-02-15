@@ -83,7 +83,7 @@ export class KnowledgePack {
   entity: EntityRecord | null;
 
   /** Тема (для packType=topic) */
-  @Column({ length: 500, nullable: true })
+  @Column({ type: 'varchar', length: 500, nullable: true })
   topic: string | null;
 
   // ==================== Временной период ====================
