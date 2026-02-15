@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not } from 'typeorm';
 import {
@@ -36,6 +36,7 @@ import {
 @Injectable()
 export class EventCleanupService {
   private readonly logger = new Logger(EventCleanupService.name);
+  private runningPhase: string | null = null;
 
   constructor(
     @InjectRepository(ExtractedEvent)
@@ -50,24 +51,37 @@ export class EventCleanupService {
    * Run auto-cleanup with selected phases.
    */
   async autoCleanup(options: CleanupOptions): Promise<CleanupResult> {
+    if (this.runningPhase) {
+      throw new ConflictException(
+        `Auto-cleanup already in progress: "${this.runningPhase}". Wait for it to finish.`,
+      );
+    }
+
     this.logger.log(`Starting auto-cleanup: phases=${options.phases.join(',')}, dryRun=${options.dryRun}`);
 
     const result: CleanupResult = { dryRun: options.dryRun };
 
-    if (options.phases.includes('dedup')) {
-      result.phaseA = await this.deduplicateEvents(options.dryRun);
-    }
+    try {
+      if (options.phases.includes('dedup')) {
+        this.runningPhase = 'dedup';
+        result.phaseA = await this.deduplicateEvents(options.dryRun);
+      }
 
-    if (options.phases.includes('match')) {
-      result.phaseB = await this.matchEventsToActivities(options.dryRun);
-    }
+      if (options.phases.includes('match')) {
+        this.runningPhase = 'match';
+        result.phaseB = await this.matchEventsToActivities(options.dryRun);
+      }
 
-    if (options.phases.includes('activities')) {
-      result.phaseC = await this.deduplicateActivities(options.dryRun);
-    }
+      if (options.phases.includes('activities')) {
+        this.runningPhase = 'activities';
+        result.phaseC = await this.deduplicateActivities(options.dryRun);
+      }
 
-    this.logger.log('Auto-cleanup complete');
-    return result;
+      this.logger.log('Auto-cleanup complete');
+      return result;
+    } finally {
+      this.runningPhase = null;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
