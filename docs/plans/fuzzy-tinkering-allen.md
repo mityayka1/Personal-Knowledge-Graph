@@ -1,212 +1,177 @@
-# Plan: Превентивное качество данных в Extraction Pipeline
+# Plan: Качество извлечения данных — "Пойми контекст, потом извлекай"
 
 ## Context
 
-После успешной реализации `EventCleanupService` (Phase A/B/C) стало очевидно, что лучше предотвращать проблемы при извлечении, чем исправлять их постфактум. Анализ pipeline выявил 4 ключевых gap:
+Extraction pipeline генерирует мусорные данные. Реальный пример:
+- **Извлечено**: Commitment "Переделать что-то в будущем" (conf: 0.7)
+- **Реальный разговор**: обсуждение выбора сервиса транскрипции голосовых для invapp-panavto
+- **Должно было быть**: "Использовать внутренний сервис транскрибации вместо OpenAI для invapp-panavto"
 
-1. **Commitment dedup** — проекты и задачи имеют fuzzy Levenshtein дедупликацию, а commitments — только ILIKE (самый слабый фильтр)
-2. **Noise в unified extraction** — create_event tool не фильтрует шум, в отличие от daily synthesis
-3. **Events не линкуются с Activities** — unified extraction не загружает контекст активностей, поэтому 0 events привязаны к Activity при создании
-4. **Project dedup** — при совпадении клиента порог можно снизить для более агрессивного мержа
+Предыдущие улучшения (noise filtering, fuzzy dedup, activity linking, client boost) уже реализованы и работают на production. Теперь нужно решить **фундаментальную проблему**: Claude анализирует сообщения по одному, вместо того чтобы сначала понять разговор целиком.
 
-## Область 1: Noise Reduction — Shared Constants + Tool-Level Filtering
+## Root Causes
 
-### Проблема
-`VAGUE_PATTERNS` определены только в `daily-synthesis-extraction.service.ts` (строки 32-44). Unified extraction path (`create_event` tool) создаёт шумовые события без фильтрации.
+| # | Причина | Влияние |
+|---|---------|---------|
+| 1 | **Per-message extraction** — промпт говорит "Проанализируй все сообщения" без инструкции понять контекст | Claude извлекает из одного сообщения без контекста беседы |
+| 2 | **Потеря контекста чата** — `chatCategory.title` (напр. "invapp-panavto") доступен, но НЕ передаётся в extraction | Claude не знает тему чата |
+| 3 | **Escape в vague filter** — `isVagueContent(title) && !args.date` пропускает мусор с датой | "что-то в будущем" с датой проходит фильтр |
+| 4 | **Нет anti-pattern примеров** — промпт описывает правила абстрактно, без примеров плохих извлечений | Claude не учится на ошибках |
 
-### Решение
+## Решение: 4 области изменений
 
-**Новый файл:** `apps/pkg-core/src/modules/extraction/extraction-quality.constants.ts`
+### Область 1: Prompt Restructuring — "Пойми, потом извлекай" (PRIMARY)
 
-```typescript
-// Перенести из daily-synthesis-extraction.service.ts:
-export const VAGUE_PATTERNS: RegExp[] = [
-  /(?<!\p{L})что[-\s]?то(?!\p{L})/iu,
-  /(?<!\p{L})кое[-\s]?что(?!\p{L})/iu,
-  // ... все 11 паттернов
-];
+**Файл:** `apps/pkg-core/src/modules/extraction/unified-extraction.service.ts`
 
-// Добавить новые:
-export const NOISE_PATTERNS: RegExp[] = [
-  /подтвержд/iu,           // "Подтверждение использования инструмента..."
-  /инструмент\w*/iu,        // техническая лексика Claude
-  /использован/iu,
-];
+Заменить секцию ЗАДАНИЕ (строки 390-397) двухфазной инструкцией:
 
-export const MIN_MEANINGFUL_LENGTH = 15;
-
-export function isVagueContent(text: string): boolean { ... }
-export function isNoiseContent(text: string): boolean { ... }
-```
-
-**Модифицировать:** `extraction-tools.provider.ts` — в `createEventTool()` handler (строки ~537-717):
-- Добавить вызов `isVagueContent(what)` и `isNoiseContent(what)` перед созданием через `DraftExtractionService`
-- Вернуть `toolError('Content is too vague...')` если шум — Claude научится не создавать такие события
-
-**Модифицировать:** `daily-synthesis-extraction.service.ts` — заменить локальные `VAGUE_PATTERNS` на импорт из shared constants
-
-### Файлы
-
-| Файл | Действие |
-|------|----------|
-| `extraction-quality.constants.ts` | **Создать** — shared constants + helper functions |
-| `extraction-tools.provider.ts` | **Изменить** — добавить noise filter в `createEventTool()` handler |
-| `daily-synthesis-extraction.service.ts` | **Изменить** — импорт из shared constants |
-
-## Область 2: Commitment Fuzzy Dedup
-
-### Проблема
-`DraftExtractionService.findExistingPendingCommitment()` (строки 974-996) использует ТОЛЬКО `ILIKE` по `what`:
-```sql
-WHERE LOWER(c.what) LIKE :pattern AND c.status IN ('pending','confirmed')
-```
-А `findExistingProjectEnhanced()` и `findExistingTaskEnhanced()` имеют двухуровневую проверку: ILIKE + Levenshtein fuzzy matching.
-
-### Решение
-
-**Модифицировать:** `draft-extraction.service.ts` — заменить `findExistingPendingCommitment()` на `findExistingCommitmentEnhanced()`:
-
-```typescript
-private async findExistingCommitmentEnhanced(
-  what: string,
-  entityId: string,
-  type?: string,
-): Promise<{ commitment: any; similarity: number } | null> {
-  // 1. Pending ILIKE (как сейчас)
-  const pending = await this.findExistingPendingCommitment(what, entityId);
-  if (pending) return { commitment: pending, similarity: 1.0 };
-
-  // 2. Fuzzy Levenshtein по active commitments (как findExistingTaskEnhanced)
-  const normalized = this.projectMatchingService.normalizeName(what);
-  const candidates = await this.commitmentRepo.find({
-    where: {
-      entityId,
-      status: In(['pending', 'confirmed']),
-    },
-    take: 50,
-  });
-
-  let bestMatch = null;
-  let bestSimilarity = 0;
-  for (const c of candidates) {
-    const sim = this.projectMatchingService.calculateSimilarity(
-      normalized,
-      this.projectMatchingService.normalizeName(c.what),
-    );
-    if (sim > bestSimilarity) {
-      bestSimilarity = sim;
-      bestMatch = c;
-    }
-  }
-
-  const COMMITMENT_DEDUP_THRESHOLD = 0.7;
-  if (bestMatch && bestSimilarity >= COMMITMENT_DEDUP_THRESHOLD) {
-    return { commitment: bestMatch, similarity: bestSimilarity };
-  }
-
-  return null;
-}
-```
-
-**Использовать** в `createDrafts()` при создании commitments — если найден fuzzy match, пропустить создание.
-
-### Файлы
-
-| Файл | Действие |
-|------|----------|
-| `draft-extraction.service.ts` | **Изменить** — добавить `findExistingCommitmentEnhanced()`, обновить `createDrafts()` |
-
-## Область 3: Auto-Link Events → Activities при создании
-
-### Проблема
-`UnifiedExtractionService.buildUnifiedPrompt()` (строка 256) НЕ загружает контекст существующих активностей. В отличие от `DailySynthesisExtractionService`, который вызывает `loadExistingActivities()` и передаёт их в prompt.
-
-`create_event` tool (строки 537-717 в `extraction-tools.provider.ts`) не имеет параметров `activityId`/`projectName` — Claude не может указать, к какой активности относится событие.
-
-### Решение
-
-**Шаг A — Загрузка контекста активностей в unified extraction:**
-
-**Модифицировать:** `unified-extraction.service.ts` — в методе `extract()`:
-```typescript
-// Добавить после загрузки relationsContext:
-const activitiesContext = await this.loadActivitiesContext();
-```
-
-И передать `activitiesContext` в `buildUnifiedPrompt()` → добавить новую секцию `§ АКТИВНОСТИ` в prompt:
 ```
 ══════════════════════════════════════════
-§ АКТИВНОСТИ — существующие проекты и задачи
+ЗАДАНИЕ (2 фазы):
 ══════════════════════════════════════════
-Если событие (task/promise) относится к существующей активности, укажи activityId в create_event.
-${activitiesContext}
+
+ФАЗА 1 — ПОЙМИ КОНТЕКСТ РАЗГОВОРА:
+Прочитай ВСЕ сообщения целиком. Определи:
+- О чём разговор в целом? Какая основная тема?
+- Какие решения были приняты?
+- Какие конкретные действия обсуждались?
+НЕ начинай извлечение до понимания общего контекста.
+
+ФАЗА 2 — ИЗВЛЕКИ ЗНАЧИМЫЕ ЭЛЕМЕНТЫ:
+Основываясь на понимании разговора, извлеки:
+- Конкретные факты (должность, компания, контакты)
+- Конкретные обещания и задачи с ясным описанием ЧТО ИМЕННО
+- Связи между людьми/организациями
+
+КРИТИЧНО: Каждый элемент должен:
+1. Быть понятен БЕЗ возврата к переписке
+2. Содержать конкретику, а не расплывчатые формулировки
+3. Быть привязан к контексту разговора (проект, тема, цель)
 ```
 
-**Шаг B — Добавить параметры в create_event tool:**
+Добавить anti-pattern примеры в секцию § СОБЫТИЯ (после правила 7, строка ~367):
 
-**Модифицировать:** `extraction-tools.provider.ts` — в `createEventTool()`:
+```
+8. АНТИ-ПРИМЕРЫ — НЕ извлекай подобное:
+   ❌ "Переделать что-то в будущем" — нет конкретики. Правильно: "Перенести транскрибацию на внутренний сервис для invapp-panavto"
+   ❌ "Обсудить вопрос" — нет объекта. Правильно: "Согласовать стоимость лицензии $200/мес с клиентом X"
+   ❌ "Сделать задачу" — пересказ, не извлечение. Указывай ЧТО конкретно.
+   Правило: если title можно приложить к ЛЮБОМУ разговору — оно слишком абстрактное.
+```
+
+Также добавить chat title в контекст промпта — новая секция после `${relationsSection}`:
+
 ```typescript
-// Добавить в schema:
-activityId: z.string().uuid().optional().describe('UUID активности, если событие относится к существующему проекту/задаче'),
-projectName: z.string().optional().describe('Имя проекта, если не найден activityId - для fuzzy match'),
+const chatTitleSection = chatTitle
+  ? `\nЧАТ: "${chatTitle}"\nУчитывай название чата как контекст беседы.`
+  : '';
 ```
 
-В handler: если `activityId` передан, создать `Commitment` с этим `activityId` через `DraftExtractionService`. Если передан `projectName`, использовать `findExistingProjectEnhanced()` для поиска.
+Изменить сигнатуру `buildUnifiedPrompt()` — добавить параметр `chatTitle?: string`.
 
-### Файлы
+### Область 2: Chat Title Pipeline — передать название чата в extraction
 
-| Файл | Действие |
-|------|----------|
-| `unified-extraction.service.ts` | **Изменить** — загрузка активностей, новая секция в prompt |
-| `extraction-tools.provider.ts` | **Изменить** — добавить `activityId`/`projectName` в create_event schema + handler |
+Цепочка изменений для проброса `chatCategory.title`:
 
-## Область 4: Project Dedup Enhancement — Client Boost
+**Файл 1:** `apps/pkg-core/src/modules/extraction/unified-extraction.types.ts`
+- Добавить `chatTitle?: string` в `UnifiedExtractionParams`
 
-### Проблема
-`findExistingProjectEnhanced()` использует фиксированный `STRONG_MATCH_THRESHOLD = 0.8`. Но если клиент совпадает, вероятность дубля намного выше и порог можно снизить.
+**Файл 2:** `apps/pkg-core/src/modules/job/processors/fact-extraction.processor.ts`
+- Inject `ChatCategoryService` (из `ChatCategoryModule`)
+- В `processPrivateChat()`: получить `interaction` (уже загружается в `process()`), извлечь `telegram_chat_id` из `sourceMetadata`, вызвать `chatCategoryService.getCategory()`, получить `title`
+- Передать `chatTitle` в `extract()`
+- В `processGroupChat()`: аналогично, заменить `chatName: undefined` на реальный title
 
-### Решение
+**Файл 3:** `apps/pkg-core/src/modules/job/job.module.ts`
+- Добавить `ChatCategoryModule` в imports
 
-**Модифицировать:** `draft-extraction.service.ts` — в `findExistingProjectEnhanced()`:
+**Файл 4:** `apps/pkg-core/src/modules/extraction/unified-extraction.service.ts`
+- В `extract()`: деструктурировать `chatTitle` из params
+- Передать `chatTitle` в `buildUnifiedPrompt()`
+
+**Стратегия**: Lookup в processor через interaction.sourceMetadata.telegram_chat_id → ChatCategoryService.getCategory(). Это 1 простой indexed query на каждый extraction job (максимум раз в 10 минут), не влияет на performance.
+
+**Оптимизация**: Рефакторить `process()` чтобы всегда передавать loaded `interaction` в обе ветки (private/group), избегая двойной загрузки.
+
+### Область 3: Fix Vague Content Filter
+
+**Файл:** `apps/pkg-core/src/modules/extraction/tools/extraction-tools.provider.ts`
+
+Строка 627 — убрать `!args.date` escape:
+
 ```typescript
-const effectiveStrongThreshold = clientMatches
-  ? STRONG_MATCH_THRESHOLD - 0.1  // 0.7 при совпадении клиента
-  : STRONG_MATCH_THRESHOLD;        // 0.8 по умолчанию
+// БЫЛО:
+if (isVagueContent(args.title) && !args.date) {
+
+// СТАЛО:
+if (isVagueContent(args.title)) {
 ```
 
-Это минимальное изменение, которое значительно улучшит dedup проектов с одинаковым клиентом.
+**Обоснование**: "Переделать что-то в будущем" с любой датой — всё ещё мусор. Дата не компенсирует неконкретный title. Claude получит toolError и переформулирует с конкретикой.
 
-### Файлы
+Обновить сообщение об ошибке для лучшего in-context learning:
 
-| Файл | Действие |
-|------|----------|
-| `draft-extraction.service.ts` | **Изменить** — добавить client boost в `findExistingProjectEnhanced()` |
+```typescript
+return toolError(
+  'Event title is too vague',
+  'Title contains placeholder words (что-то, как-нибудь). ' +
+  'Use specific details from conversation: project name, action object, person.',
+);
+```
+
+### Область 4: Аналогичные изменения для Group Extraction
+
+**Файл:** `apps/pkg-core/src/modules/extraction/group-extraction.service.ts`
+
+Применить ту же двухфазную инструкцию в `buildGroupPrompt()` (строки 417-423):
+- Заменить ЗАДАНИЕ на двухфазную версию
+- Добавить anti-pattern примеры в секцию СОБЫТИЯ
+
+Chat title уже передаётся в group extraction через параметр `chatName`, но сейчас всегда `undefined` — это исправлено в Области 2.
 
 ## Порядок реализации
 
-| # | Область | Сложность | Зависимости |
-|---|---------|-----------|-------------|
-| 1 | Noise Reduction (shared constants + tool filter) | Низкая | Нет |
-| 2 | Commitment Fuzzy Dedup | Средняя | Нет |
-| 3 | Auto-Link Events → Activities | Средняя | #1 (tool changes) |
-| 4 | Project Client Boost | Низкая | Нет |
+| # | Изменение | Файлы | Зависимости |
+|---|-----------|-------|-------------|
+| 1 | `chatTitle` в types | `unified-extraction.types.ts` | Нет |
+| 2 | Chat title lookup в processor | `fact-extraction.processor.ts`, `job.module.ts` | #1 |
+| 3 | Prompt restructuring + chat title | `unified-extraction.service.ts` | #1 |
+| 4 | Fix vague filter | `extraction-tools.provider.ts` | Нет |
+| 5 | Group extraction prompt | `group-extraction.service.ts` | Нет |
+
+Шаги 1→2→3 последовательны. Шаги 4 и 5 независимы.
 
 ## Итого: файлы
 
-| Файл | Области |
-|------|---------|
-| `extraction-quality.constants.ts` | **Создать** (#1) |
-| `extraction-tools.provider.ts` | **Изменить** (#1, #3) |
-| `daily-synthesis-extraction.service.ts` | **Изменить** (#1) |
-| `draft-extraction.service.ts` | **Изменить** (#2, #4) |
-| `unified-extraction.service.ts` | **Изменить** (#3) |
+| Файл | Изменение |
+|------|-----------|
+| `unified-extraction.types.ts` | +1 строка: `chatTitle?: string` |
+| `fact-extraction.processor.ts` | +25 строк: DI ChatCategoryService, title lookup, передача в extract |
+| `job.module.ts` | +2 строки: import + ChatCategoryModule в imports |
+| `unified-extraction.service.ts` | ~40 строк: chatTitle param, промпт restructuring, anti-patterns |
+| `extraction-tools.provider.ts` | ~5 строк: убрать `!args.date`, обновить error message |
+| `group-extraction.service.ts` | ~20 строк: двухфазная инструкция + anti-patterns |
+
+## Существующие функции для reuse
+
+| Функция | Файл | Назначение |
+|---------|------|------------|
+| `ChatCategoryService.getCategory(telegramChatId)` | `chat-category.service.ts:206` | Получить ChatCategoryRecord с title |
+| `isVagueContent(text)` | `extraction-quality.constants.ts:37` | Проверка на vague patterns |
+| `isNoiseContent(text)` | `extraction-quality.constants.ts:42` | Проверка на noise patterns |
+| `InteractionService.findOne(id)` | interaction module | Загрузка interaction с sourceMetadata |
 
 ## Verification
 
-1. `cd apps/pkg-core && npx tsc --noEmit` — компиляция без ошибок
-2. Запустить unified extraction на тестовом interaction — проверить:
-   - Шумовые события отклоняются с toolError
-   - Дубли commitments не создаются (fuzzy match)
-   - События привязываются к существующим Activity через activityId
-3. Запустить daily synthesis — проверить что shared constants работают корректно
-4. Проверить на production через `/extracted-events/auto-cleanup?phases=dedup&dryRun=true` — количество дублей должно уменьшиться после накопления новых данных
+1. **Компиляция**: `cd apps/pkg-core && npx tsc --noEmit` — без ошибок
+2. **Vague filter тест**: Вручную проверить `isVagueContent("Переделать что-то")` — должен отклоняться даже с датой
+3. **Chat title**: Запустить extraction на interaction с known telegram_chat_id — title должен появиться в промпте (через debug лог)
+4. **Production тест**: Отправить сообщения в чат invapp-panavto → extraction должен использовать контекст чата для извлечений
+5. **Anti-patterns**: Попытка создать "Сделать что-то" через create_event → должен получить toolError
+
+## Ожидаемый результат
+
+**До**: Claude видит "надо переделать" в одном сообщении → извлекает "Переделать что-то в будущем"
+
+**После**: Claude видит все сообщения + название чата "invapp-panavto" → понимает что разговор о выборе сервиса транскрипции → извлекает "Использовать внутренний сервис транскрибации вместо OpenAI для invapp-panavto"

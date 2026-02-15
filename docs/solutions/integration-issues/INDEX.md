@@ -227,6 +227,7 @@ A: Yes — DATA_SOURCES.md has "NO READERS (intentional)" reason field.
 | code-review-fixes | [PR #103 Fixes](../code-review-fixes/pr103-entity-activity-extraction-20260130.md) | Source-agnostic architecture applied to ExtractionCarouselState |
 | architecture-decisions | [Entity Soft Delete Pattern](../architecture-decisions/entity-soft-delete-pattern-20260130.md) | Soft delete with FK protection |
 | logic-errors | [Soft Delete Code Review Fixes](../logic-errors/soft-delete-code-review-fixes-entity-20260130.md) | checkEntityReferences column fixes |
+| integration-issues | [Extraction Quality Prevention Pipeline](extraction-quality-prevention-pipeline-20260215.md) | Shift-left quality: noise filtering, fuzzy dedup, activity linking |
 
 ---
 

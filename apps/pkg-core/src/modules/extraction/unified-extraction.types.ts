@@ -13,6 +13,8 @@ export interface UnifiedExtractionParams {
   entityName: string;
   messages: MessageData[];
   interactionId: string;
+  /** Chat title from ChatCategory — provides conversation topic context */
+  chatTitle?: string;
 }
 
 /**

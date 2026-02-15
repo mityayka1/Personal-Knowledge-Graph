@@ -624,11 +624,13 @@ export class ExtractionToolsProvider {
             'Skip this event — it does not carry actionable real-world information. Focus on concrete tasks, promises and meetings.',
           );
         }
-        if (isVagueContent(args.title) && !args.date) {
+        if (isVagueContent(args.title)) {
           this.logger.debug(`[create_event] Filtered vague: "${args.title}"`);
           return toolError(
-            'Event title is too vague without a date anchor',
-            'Rephrase with specifics (who, what, when) or skip. Vague events like "что-то сделать" without a deadline are noise.',
+            'Event title is too vague',
+            'Title contains placeholder words (что-то, как-нибудь, кое-что). ' +
+            'Use specific details from conversation: project name, action object, person. ' +
+            'Example: instead of "переделать что-то" use "перенести транскрибацию на внутренний сервис для invapp-panavto".',
           );
         }
 

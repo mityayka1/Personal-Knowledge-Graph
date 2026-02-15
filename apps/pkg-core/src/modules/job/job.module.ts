@@ -10,6 +10,7 @@ import { InteractionModule } from '../interaction/interaction.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ExtractionModule } from '../extraction/extraction.module';
 import { EntityModule } from '../entity/entity.module';
+import { ChatCategoryModule } from '../chat-category/chat-category.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { EntityModule } from '../entity/entity.module';
     forwardRef(() => InteractionModule),
     forwardRef(() => ExtractionModule),
     forwardRef(() => EntityModule),
+    ChatCategoryModule,
   ],
   providers: [JobService, EmbeddingProcessor, FactExtractionProcessor],
   exports: [JobService],

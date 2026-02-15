@@ -69,7 +69,7 @@ export class UnifiedExtractionService {
    * Single agent call extracts facts, events, and relations.
    */
   async extract(params: UnifiedExtractionParams): Promise<UnifiedExtractionResult> {
-    const { entityId, entityName, messages, interactionId } = params;
+    const { entityId, entityName, messages, interactionId, chatTitle } = params;
 
     // Filter bot and short messages
     const validMessages = messages.filter((m) => {
@@ -122,7 +122,7 @@ export class UnifiedExtractionService {
     const enrichedMessages = await this.enrichMessages(validMessages, interactionId, entityId, entityName);
 
     // 4. Build unified prompt
-    const prompt = this.buildUnifiedPrompt(entityName, entityId, entityContext, relationsContext, activitiesContext, enrichedMessages);
+    const prompt = this.buildUnifiedPrompt(entityName, entityId, entityContext, relationsContext, activitiesContext, enrichedMessages, chatTitle);
 
     // 5. Get owner entity ID for draft creation
     let ownerEntityId: string | null = null;
@@ -268,6 +268,7 @@ export class UnifiedExtractionService {
     relationsContext: string,
     activitiesContext: string,
     messages: EnrichedMessage[],
+    chatTitle?: string,
   ): string {
     // Format messages block
     const messageBlock = messages
@@ -293,6 +294,10 @@ export class UnifiedExtractionService {
 
     const relationsSection = relationsContext ? `\n${relationsContext}` : '';
 
+    const chatTitleSection = chatTitle
+      ? `\nЧАТ: "${chatTitle}"\nУчитывай название чата как контекст беседы — оно указывает на тему или проект обсуждения.\n`
+      : '';
+
     return `Ты — агент извлечения знаний из переписки.
 Анализируй сообщения и создавай факты, события и связи через доступные инструменты.
 
@@ -300,6 +305,7 @@ export class UnifiedExtractionService {
 КОНТЕКСТ СОБЕСЕДНИКА:
 ${contextSection}
 ${relationsSection}
+${chatTitleSection}
 ══════════════════════════════════════════
 
 ══════════════════════════════════════════
@@ -367,6 +373,13 @@ ${relationsSection}
    - Это нужно для контекста в уведомлениях
    - Без sourceQuote событие будет непонятным получателю
 
+8. АНТИ-ПРИМЕРЫ — НЕ извлекай подобное:
+   ❌ "Переделать что-то в будущем" — нет конкретики. Правильно: "Перенести транскрибацию на внутренний сервис для invapp-panavto"
+   ❌ "Обсудить вопрос" — нет объекта. Правильно: "Согласовать стоимость лицензии $200/мес с клиентом X"
+   ❌ "Сделать задачу" — пересказ, не извлечение. Указывай ЧТО конкретно.
+   ❌ "Что-то доделать" — placeholder words. Укажи конкретное действие и объект.
+   Правило: если title можно приложить к ЛЮБОМУ разговору — оно слишком абстрактное.
+
 ══════════════════════════════════════════
 § СВЯЗИ — правила извлечения
 ══════════════════════════════════════════
@@ -388,8 +401,28 @@ ${activitiesContext}
 ${messageBlock}
 
 ══════════════════════════════════════════
-ЗАДАНИЕ:
-Проанализируй все сообщения. Для каждого найденного факта, события или связи — вызови соответствующий инструмент.
+ЗАДАНИЕ (2 фазы):
+══════════════════════════════════════════
+
+ФАЗА 1 — ПОЙМИ КОНТЕКСТ РАЗГОВОРА:
+Прочитай ВСЕ сообщения целиком. Определи:
+- О чём разговор в целом? Какая основная тема?
+- Какие решения были приняты?
+- Какие конкретные действия обсуждались?
+НЕ начинай извлечение до понимания общего контекста.
+
+ФАЗА 2 — ИЗВЛЕКИ ЗНАЧИМЫЕ ЭЛЕМЕНТЫ:
+Основываясь на понимании разговора, извлеки:
+- Конкретные факты (должность, компания, контакты)
+- Конкретные обещания и задачи с ясным описанием ЧТО ИМЕННО
+- Связи между людьми/организациями
+
+КРИТИЧНО: Каждый извлечённый элемент должен:
+1. Быть понятен БЕЗ возврата к переписке
+2. Содержать конкретику, а не расплывчатые формулировки
+3. Быть привязан к контексту разговора (проект, тема, цель)
+
+Для каждого найденного факта, события или связи — вызови соответствующий инструмент.
 Посчитай количество успешных вызовов каждого инструмента и заполни итоговую сводку:
 - factsCreated: количество успешных вызовов create_fact
 - eventsCreated: количество успешных вызовов create_event
