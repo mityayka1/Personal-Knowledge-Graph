@@ -171,7 +171,7 @@ export class ProjectMatchingService {
         activityType: In(types),
         status: Not(In(EXCLUDED_STATUSES)),
       },
-      select: ['id', 'name', 'activityType', 'status', 'clientEntityId', 'lastActivityAt'],
+      select: ['id', 'name', 'activityType', 'status', 'clientEntityId', 'lastActivityAt', 'description', 'tags'],
       order: { lastActivityAt: { direction: 'DESC', nulls: 'LAST' } },
     });
 

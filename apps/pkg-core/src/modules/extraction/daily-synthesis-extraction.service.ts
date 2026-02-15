@@ -168,6 +168,7 @@ export class DailySynthesisExtractionService {
       projects: extraction.projects,
       tasks: extraction.tasks,
       commitments: extraction.commitments,
+      inferredRelations: extraction.inferredRelations,
       sourceInteractionId,
       messageRef,
       synthesisDate: params.date,
@@ -178,7 +179,7 @@ export class DailySynthesisExtractionService {
       `[daily-extraction] extractAndSave complete: ` +
         `batch=${drafts.batchId}, ` +
         `${drafts.counts.projects} projects, ${drafts.counts.tasks} tasks, ` +
-        `${drafts.counts.commitments} commitments created as drafts`,
+        `${drafts.counts.commitments} commitments, ${drafts.counts.relations} relations created as drafts`,
     );
 
     return { extraction, drafts };

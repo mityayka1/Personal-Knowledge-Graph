@@ -273,7 +273,8 @@ export class ExtractionController {
       `[extractAndSave] Complete: batch=${result.drafts.batchId}, ` +
         `projects=${result.drafts.counts.projects}, ` +
         `tasks=${result.drafts.counts.tasks}, ` +
-        `commitments=${result.drafts.counts.commitments}`,
+        `commitments=${result.drafts.counts.commitments}, ` +
+        `relations=${result.drafts.counts.relations}`,
     );
 
     return {

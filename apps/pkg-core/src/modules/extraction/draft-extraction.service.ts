@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, In } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -19,18 +19,23 @@ import {
   EntityFactStatus,
   FactSource,
   FactCategory,
+  RelationType,
+  RelationSource,
 } from '@pkg/entities';
 import {
   ExtractedProject,
   ExtractedTask,
   ExtractedCommitment,
   ExtractedFact,
+  InferredRelation,
 } from './daily-synthesis-extraction.types';
 import { ProjectMatchingService } from './project-matching.service';
 import { ClientResolutionService } from './client-resolution.service';
 import { ActivityMemberService } from '../activity/activity-member.service';
 import { FactDeduplicationService } from './fact-deduplication.service';
 import { FactDedupReviewService, ReviewCandidate } from './fact-dedup-review.service';
+import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
+import { ActivityService } from '../activity/activity.service';
 import { SettingsService } from '../settings/settings.service';
 
 /**
@@ -47,6 +52,8 @@ export interface DraftExtractionInput {
   tasks: ExtractedTask[];
   /** Commitments to create as drafts */
   commitments: ExtractedCommitment[];
+  /** Inferred relations to persist */
+  inferredRelations?: InferredRelation[];
   /** Source interaction ID for tracking */
   sourceInteractionId?: string;
   /** Message reference for Telegram updates */
@@ -71,6 +78,7 @@ export interface DraftExtractionResult {
     projects: number;
     tasks: number;
     commitments: number;
+    relations: number;
   };
   /** Count of items skipped due to deduplication */
   skipped: {
@@ -78,6 +86,7 @@ export interface DraftExtractionResult {
     projects: number;
     tasks: number;
     commitments: number;
+    relations: number;
   };
   /** Items that failed to create */
   errors: Array<{ item: string; error: string }>;
@@ -119,6 +128,12 @@ export class DraftExtractionService {
     private readonly factDeduplicationService: FactDeduplicationService,
     private readonly factDedupReviewService: FactDedupReviewService,
     private readonly settingsService: SettingsService,
+    @Optional()
+    @Inject(forwardRef(() => EntityRelationService))
+    private readonly entityRelationService: EntityRelationService | null,
+    @Optional()
+    @Inject(forwardRef(() => ActivityService))
+    private readonly activityService: ActivityService | null,
   ) {}
 
   /**
@@ -140,8 +155,8 @@ export class DraftExtractionService {
     const result: DraftExtractionResult = {
       batchId,
       approvals: [],
-      counts: { facts: 0, projects: 0, tasks: 0, commitments: 0 },
-      skipped: { facts: 0, projects: 0, tasks: 0, commitments: 0 },
+      counts: { facts: 0, projects: 0, tasks: 0, commitments: 0, relations: 0 },
+      skipped: { facts: 0, projects: 0, tasks: 0, commitments: 0, relations: 0 },
       errors: [],
     };
 
@@ -260,6 +275,10 @@ export class DraftExtractionService {
     const projectMap = new Map<string, string>();
 
     // 1. Create draft projects (tasks may reference them)
+    let projectDedupStrong = 0;
+    let projectDedupPending = 0;
+    let projectDedupWeak = 0;
+    let projectDedupCreated = 0;
     for (const project of input.projects) {
       try {
         const normalizedKey = ProjectMatchingService.normalizeName(project.name);
@@ -273,10 +292,13 @@ export class DraftExtractionService {
 
         // DEDUPLICATION: Enhanced check -- pending approvals + two-tier fuzzy match
         // Client boost: passing client name lowers strong threshold from 0.8 to 0.7
+        // Description + tags boosts: help resolve grey zone matches
         const existing = await this.findExistingProjectEnhanced(
           project.name,
           input.ownerEntityId,
           project.client,
+          project.description,
+          project.tags,
         );
         if (existing.found && existing.activityId) {
           this.logger.debug(
@@ -287,6 +309,8 @@ export class DraftExtractionService {
           // Add to projectMap so tasks can still reference the existing activity
           projectMap.set(normalizedKey, existing.activityId);
           result.skipped.projects++;
+          if (existing.source === 'pending_approval') projectDedupPending++;
+          else projectDedupStrong++;
           continue;
         }
 
@@ -300,6 +324,8 @@ export class DraftExtractionService {
         projectMap.set(normalizedKey, activity.id);
         result.approvals.push(approval);
         result.counts.projects++;
+        projectDedupCreated++;
+        if (existing.weakMatch) projectDedupWeak++;
         this.logger.debug(`Created draft project: ${activity.name} (${activity.id})`);
 
         // Create ActivityMember records for project participants
@@ -322,6 +348,14 @@ export class DraftExtractionService {
         result.errors.push({ item: `project:${project.name}`, error: message });
         this.logger.error(`Failed to create draft project "${project.name}": ${message}`);
       }
+    }
+
+    if (input.projects.length > 0) {
+      this.logger.log(
+        `[ProjectDedup] Summary: total=${input.projects.length}, ` +
+          `skipped=${projectDedupStrong + projectDedupPending} (strong=${projectDedupStrong}, pending=${projectDedupPending}), ` +
+          `created=${projectDedupCreated}, weak=${projectDedupWeak}`,
+      );
     }
 
     // 2. Create draft tasks (may link to projects)
@@ -394,10 +428,11 @@ export class DraftExtractionService {
         // Resolve activityId from projectMap or fuzzy match for commitment
         let commitmentActivityId: string | undefined;
         if (commitment.projectName) {
+          // 1st: exact match in current batch's projectMap
           commitmentActivityId = projectMap.get(
             ProjectMatchingService.normalizeName(commitment.projectName),
           );
-          // Fallback: fuzzy match against existing activities (for unified extraction path)
+          // 2nd: fuzzy match against existing activities (two-tier Levenshtein)
           if (!commitmentActivityId) {
             const fuzzyMatch = await this.findExistingProjectEnhanced(
               commitment.projectName,
@@ -406,6 +441,25 @@ export class DraftExtractionService {
             if (fuzzyMatch.found && fuzzyMatch.activityId) {
               commitmentActivityId = fuzzyMatch.activityId;
             }
+          }
+          // 3rd: substring match via ActivityService.findByMention()
+          if (!commitmentActivityId && this.activityService) {
+            const mentionMatch = await this.activityService.findByMention(
+              commitment.projectName,
+            );
+            if (mentionMatch) {
+              commitmentActivityId = mentionMatch.id;
+              this.logger.debug(
+                `Linked commitment "${commitment.what}" to activity "${mentionMatch.name}" via mention match`,
+              );
+            }
+          }
+          // Log unlinked commitments for debugging
+          if (!commitmentActivityId) {
+            this.logger.warn(
+              `Commitment "${commitment.what}" references project "${commitment.projectName}" ` +
+                `but no matching activity found (batch/fuzzy/mention all failed)`,
+            );
           }
         }
 
@@ -426,15 +480,22 @@ export class DraftExtractionService {
       }
     }
 
+    // 4. Create relations from inferred relations
+    if (input.inferredRelations?.length) {
+      await this.createDraftRelations(input.inferredRelations, input.ownerEntityId, result);
+    }
+
     const totalSkipped =
       result.skipped.facts +
       result.skipped.projects +
       result.skipped.tasks +
-      result.skipped.commitments;
+      result.skipped.commitments +
+      result.skipped.relations;
     this.logger.log(
       `Draft extraction complete (batch=${batchId}): ` +
         `${result.counts.facts} facts, ${result.counts.projects} projects, ` +
-        `${result.counts.tasks} tasks, ${result.counts.commitments} commitments ` +
+        `${result.counts.tasks} tasks, ${result.counts.commitments} commitments, ` +
+        `${result.counts.relations} relations ` +
         `(${totalSkipped} skipped as duplicates, ${result.errors.length} errors)`,
     );
 
@@ -841,6 +902,8 @@ export class DraftExtractionService {
     projectName: string,
     ownerEntityId: string,
     clientName?: string,
+    description?: string,
+    tags?: string[],
   ): Promise<{
     found: boolean;
     activityId?: string;
@@ -851,6 +914,11 @@ export class DraftExtractionService {
     // Step 1: Check pending approvals (existing exact ILIKE logic)
     const pendingMatch = await this.findExistingPendingProject(projectName);
     if (pendingMatch) {
+      this.logger.log(
+        `[ProjectDedup] "${projectName}" → decision=skip, ` +
+          `similarity=1.000, descBoost=false, tagsBoost=false, ` +
+          `matchedActivity=pending:${pendingMatch.targetId}, source=pending_approval`,
+      );
       return {
         found: true,
         activityId: pendingMatch.targetId,
@@ -888,38 +956,93 @@ export class DraftExtractionService {
         }
       }
 
+      // Tags overlap boost: add bonus to similarity score when tags overlap
+      let tagsBoost = 0;
+      const existingTags = matchResult.activity.tags;
+      if (tags?.length && existingTags?.length) {
+        const newSet = new Set(tags.map((t) => t.toLowerCase()));
+        const existingSet = new Set(existingTags.map((t) => t.toLowerCase()));
+        const intersection = [...newSet].filter((t) => existingSet.has(t));
+        const union = new Set([...newSet, ...existingSet]);
+        const jaccard = intersection.length / union.size;
+        if (jaccard >= 0.3) {
+          tagsBoost = 0.05;
+        }
+      }
+
+      const boostedSimilarity = matchResult.similarity + tagsBoost;
+
       // Strong match (>= threshold): skip creation
-      if (matchResult.similarity >= effectiveStrongThreshold) {
+      if (boostedSimilarity >= effectiveStrongThreshold) {
+        const source =
+          effectiveStrongThreshold !== DraftExtractionService.STRONG_MATCH_THRESHOLD
+            ? 'fuzzy_match_client_boosted'
+            : tagsBoost > 0
+              ? 'fuzzy_match_tags_boosted'
+              : 'fuzzy_match';
         this.logger.log(
-          `Strong match project "${projectName}" -> "${matchResult.activity.name}" ` +
-            `(similarity: ${matchResult.similarity.toFixed(3)}` +
-            `${effectiveStrongThreshold !== DraftExtractionService.STRONG_MATCH_THRESHOLD ? ', client-boosted' : ''})`,
+          `[ProjectDedup] "${projectName}" → decision=skip, ` +
+            `similarity=${boostedSimilarity.toFixed(3)}, descBoost=false, tagsBoost=${tagsBoost > 0}, ` +
+            `matchedActivity="${matchResult.activity.name}", source=${source}`,
         );
         return {
           found: true,
           activityId: matchResult.activity.id,
-          similarity: matchResult.similarity,
-          source: effectiveStrongThreshold !== DraftExtractionService.STRONG_MATCH_THRESHOLD
-            ? 'fuzzy_match_client_boosted'
-            : 'fuzzy_match',
+          similarity: boostedSimilarity,
+          source,
         };
+      }
+
+      // Grey zone (0.6-effectiveStrongThreshold): try description similarity boost
+      let descBoost = false;
+      if (
+        boostedSimilarity >= DraftExtractionService.WEAK_MATCH_THRESHOLD &&
+        boostedSimilarity < effectiveStrongThreshold &&
+        description &&
+        matchResult.activity.description
+      ) {
+        const descSimilarity = this.projectMatchingService.calculateSimilarity(
+          ProjectMatchingService.normalizeName(description),
+          ProjectMatchingService.normalizeName(matchResult.activity.description),
+        );
+        if (descSimilarity >= 0.5) {
+          descBoost = true;
+          this.logger.log(
+            `[ProjectDedup] "${projectName}" → decision=skip, ` +
+              `similarity=${boostedSimilarity.toFixed(3)}, descBoost=true (descSim=${descSimilarity.toFixed(3)}), tagsBoost=${tagsBoost > 0}, ` +
+              `matchedActivity="${matchResult.activity.name}", source=fuzzy_match_description_boosted`,
+          );
+          return {
+            found: true,
+            activityId: matchResult.activity.id,
+            similarity: boostedSimilarity,
+            source: 'fuzzy_match_description_boosted',
+          };
+        }
       }
 
       // Weak match (0.6-threshold): create but flag as possible duplicate
       this.logger.log(
-        `Weak match project "${projectName}" -> "${matchResult.activity.name}" ` +
-          `(similarity: ${matchResult.similarity.toFixed(3)}) — will create with possibleDuplicate flag`,
+        `[ProjectDedup] "${projectName}" → decision=create_with_flag, ` +
+          `similarity=${boostedSimilarity.toFixed(3)}, descBoost=false, tagsBoost=${tagsBoost > 0}, ` +
+          `matchedActivity="${matchResult.activity.name}", source=weak_match`,
       );
       return {
         found: false,
         weakMatch: {
           matchedActivityId: matchResult.activity.id,
           matchedName: matchResult.activity.name,
-          similarity: matchResult.similarity,
+          similarity: boostedSimilarity,
         },
       };
     }
 
+    // No match found
+    this.logger.log(
+      `[ProjectDedup] "${projectName}" → decision=create, ` +
+        `similarity=0.000, descBoost=false, tagsBoost=false, ` +
+        `matchedActivity=none, source=no_match`,
+    );
     return { found: false };
   }
 
@@ -1103,6 +1226,149 @@ export class DraftExtractionService {
     }
 
     return { found: false };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: Relation Creation
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Create EntityRelation records from inferred relations.
+   *
+   * For each InferredRelation:
+   * 1. Map relation type → RelationType + roles
+   * 2. Resolve entity names → entity IDs
+   * 3. Check for duplicate (EntityRelationService handles this)
+   * 4. Create EntityRelation + EntityRelationMember records
+   */
+  private async createDraftRelations(
+    inferredRelations: InferredRelation[],
+    ownerEntityId: string,
+    result: DraftExtractionResult,
+  ): Promise<void> {
+    if (!this.entityRelationService) {
+      this.logger.warn('EntityRelationService not available, skipping relation creation');
+      return;
+    }
+
+    for (const rel of inferredRelations) {
+      try {
+        if (!rel.entities?.length || rel.entities.length < 2) {
+          this.logger.debug(
+            `Skipping relation "${rel.type}" — need at least 2 entities, got ${rel.entities?.length ?? 0}`,
+          );
+          result.skipped.relations++;
+          continue;
+        }
+
+        if (rel.confidence < 0.5) {
+          this.logger.debug(
+            `Skipping low-confidence relation "${rel.type}" (${rel.confidence})`,
+          );
+          result.skipped.relations++;
+          continue;
+        }
+
+        // Map InferredRelation type → RelationType + role assignments
+        const mapping = this.mapInferredRelationType(rel.type);
+        if (!mapping) {
+          this.logger.debug(`Unknown inferred relation type: "${rel.type}", skipping`);
+          result.skipped.relations++;
+          continue;
+        }
+
+        // Resolve entity names → IDs
+        const resolvedEntities: Array<{ entityId: string; name: string }> = [];
+        for (const entityName of rel.entities) {
+          const entity = await this.findEntityByName(entityName);
+          if (entity) {
+            resolvedEntities.push({ entityId: entity.id, name: entity.name });
+          } else {
+            this.logger.debug(
+              `Could not resolve entity "${entityName}" for relation "${rel.type}", skipping entity`,
+            );
+          }
+        }
+
+        if (resolvedEntities.length < 2) {
+          this.logger.debug(
+            `Only ${resolvedEntities.length} entity resolved for relation "${rel.type}" ` +
+              `(need 2+), entities: [${rel.entities.join(', ')}]`,
+          );
+          result.skipped.relations++;
+          continue;
+        }
+
+        // Create pair-wise relations for 2+ entities
+        // (most common case: exactly 2 entities)
+        const members = resolvedEntities.map((e, idx) => ({
+          entityId: e.entityId,
+          role: mapping.roles[Math.min(idx, mapping.roles.length - 1)],
+          label: e.name,
+        }));
+
+        // EntityRelationService.create() handles deduplication internally
+        await this.entityRelationService.create({
+          relationType: mapping.relationType,
+          members,
+          source: RelationSource.INFERRED,
+          confidence: rel.confidence,
+          metadata: {
+            inferredFrom: 'daily_synthesis',
+            activityName: rel.activityName,
+          },
+        });
+
+        result.counts.relations++;
+        this.logger.debug(
+          `Created relation ${mapping.relationType}: [${resolvedEntities.map((e) => e.name).join(', ')}]` +
+            (rel.activityName ? ` (activity: ${rel.activityName})` : ''),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push({
+          item: `relation:${rel.type}:[${rel.entities.join(',')}]`,
+          error: message,
+        });
+        this.logger.error(
+          `Failed to create relation "${rel.type}" for [${rel.entities.join(', ')}]: ${message}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Map InferredRelation.type to RelationType + role names.
+   */
+  private mapInferredRelationType(
+    type: string,
+  ): { relationType: RelationType; roles: string[] } | null {
+    switch (type) {
+      case 'project_member':
+      case 'works_on':
+        return { relationType: RelationType.TEAM, roles: ['member', 'member'] };
+      case 'client_of':
+        return { relationType: RelationType.CLIENT_VENDOR, roles: ['client', 'vendor'] };
+      case 'responsible_for':
+        return { relationType: RelationType.REPORTING, roles: ['manager', 'subordinate'] };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Find entity by name (case-insensitive ILIKE search).
+   * Returns the most recently updated match.
+   */
+  private async findEntityByName(name: string): Promise<EntityRecord | null> {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const escaped = trimmed.replace(/[%_\\]/g, '\\$&');
+    return this.entityRepo
+      .createQueryBuilder('e')
+      .where('e.name ILIKE :pattern', { pattern: `%${escaped}%` })
+      .orderBy('e.updatedAt', 'DESC')
+      .getOne();
   }
 
   // ─────────────────────────────────────────────────────────────
