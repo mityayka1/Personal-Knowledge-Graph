@@ -1,4 +1,5 @@
 import { Injectable, Logger, ConflictException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not } from 'typeorm';
 import {
@@ -46,6 +47,29 @@ export class EventCleanupService {
     private readonly dataQualityService: DataQualityService,
     private readonly activityService: ActivityService,
   ) {}
+
+  /**
+   * Scheduled daily cleanup at 3:00 AM.
+   */
+  @Cron('0 3 * * *')
+  async scheduledCleanup(): Promise<void> {
+    this.logger.log('Scheduled daily cleanup started');
+    try {
+      const result = await this.autoCleanup({
+        phases: ['dedup', 'match', 'activities'],
+        dryRun: false,
+      });
+      this.logger.log(
+        `Scheduled cleanup done: ` +
+        `dedup=${result.phaseA?.duplicatesRejected ?? 0}+${result.phaseA?.noiseRejected ?? 0}, ` +
+        `matched=${result.phaseB?.matched ?? 0}, ` +
+        `merged=${result.phaseC?.totalMerged ?? 0}, archived=${result.phaseC?.archived ?? 0}`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Scheduled cleanup failed: ${msg}`);
+    }
+  }
 
   /**
    * Run auto-cleanup with selected phases.
