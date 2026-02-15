@@ -152,6 +152,10 @@ export class TopicalSegment {
   @Column({ name: 'merged_into_id', type: 'uuid', nullable: true })
   mergedIntoId: string | null;
 
+  /** IDs связанных сегментов из других чатов (cross-chat linking) */
+  @Column({ name: 'related_segment_ids', type: 'uuid', array: true, default: '{}' })
+  relatedSegmentIds: string[];
+
   /** Уверенность в корректности сегментации (0-1) */
   @Column({ type: 'decimal', precision: 3, scale: 2, default: 0.8 })
   confidence: number;
