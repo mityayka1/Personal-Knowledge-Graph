@@ -9,3 +9,4 @@ export { ContextToolsProvider } from './context-tools.provider';
 export { ActionToolsProvider } from './action-tools.provider';
 export { ActivityToolsProvider } from './activity-tools.provider';
 export { DataQualityToolsProvider } from '../../data-quality/data-quality-tools.provider';
+export { KnowledgeToolsProvider } from '../../segmentation/knowledge-tools.provider';

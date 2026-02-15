@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { TopicalSegment, KnowledgePack } from '@pkg/entities';
+import { TopicalSegment, KnowledgePack, Interaction, Message, EntityFact, Commitment } from '@pkg/entities';
 import { SegmentationService } from './segmentation.service';
 import { SegmentationController } from './segmentation.controller';
 import { TopicBoundaryDetectorService } from './topic-boundary-detector.service';
 import { PackingService } from './packing.service';
 import { PackingController } from './packing.controller';
+import { SegmentationJobService } from './segmentation-job.service';
+import { PackingJobService } from './packing-job.service';
+import { KnowledgeToolsProvider } from './knowledge-tools.provider';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 import { SettingsModule } from '../settings/settings.module';
 
@@ -21,12 +24,12 @@ import { SettingsModule } from '../settings/settings.module';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([TopicalSegment, KnowledgePack]),
+    TypeOrmModule.forFeature([TopicalSegment, KnowledgePack, Interaction, Message, EntityFact, Commitment]),
     ClaudeAgentModule,
     SettingsModule,
   ],
   controllers: [SegmentationController, PackingController],
-  providers: [SegmentationService, TopicBoundaryDetectorService, PackingService],
-  exports: [SegmentationService, TopicBoundaryDetectorService, PackingService],
+  providers: [SegmentationService, TopicBoundaryDetectorService, PackingService, SegmentationJobService, PackingJobService, KnowledgeToolsProvider],
+  exports: [SegmentationService, TopicBoundaryDetectorService, PackingService, KnowledgeToolsProvider],
 })
 export class SegmentationModule {}

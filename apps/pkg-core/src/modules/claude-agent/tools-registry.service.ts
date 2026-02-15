@@ -8,6 +8,7 @@ import {
   ActionToolsProvider,
   ActivityToolsProvider,
   DataQualityToolsProvider,
+  KnowledgeToolsProvider,
   type ToolDefinition,
 } from './tools';
 import type { ToolCategory } from './claude-agent.types';
@@ -48,6 +49,9 @@ export class ToolsRegistryService {
     @Optional()
     @Inject(forwardRef(() => DataQualityToolsProvider))
     private readonly dataQualityToolsProvider: DataQualityToolsProvider | null,
+    @Optional()
+    @Inject(forwardRef(() => KnowledgeToolsProvider))
+    private readonly knowledgeToolsProvider: KnowledgeToolsProvider | null,
   ) {
     // Log availability of context tools
     if (!this.contextToolsProvider?.hasTools()) {
@@ -74,6 +78,7 @@ export class ToolsRegistryService {
         ...(this.actionToolsProvider?.getTools() ?? []),
         ...(this.activityToolsProvider?.getTools() ?? []),
         ...(this.dataQualityToolsProvider?.getTools() ?? []),
+        ...(this.knowledgeToolsProvider?.getTools() ?? []),
       ];
       this.logger.debug(`Aggregated ${this.cachedAllTools.length} tools from all providers`);
     }
@@ -131,6 +136,11 @@ export class ToolsRegistryService {
         case 'data-quality':
           if (this.dataQualityToolsProvider) {
             tools.push(...this.dataQualityToolsProvider.getTools());
+          }
+          break;
+        case 'knowledge':
+          if (this.knowledgeToolsProvider) {
+            tools.push(...this.knowledgeToolsProvider.getTools());
           }
           break;
       }

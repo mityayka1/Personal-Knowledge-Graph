@@ -8,6 +8,8 @@ import {
   EntityRelationshipProfile,
   EntityFact,
   TranscriptSegment,
+  KnowledgePack,
+  PackStatus,
 } from '@pkg/entities';
 import { ContextRequest, ContextResponse, SynthesizedContext, SearchResult } from '@pkg/shared';
 import { EntityService } from '../entity/entity.service';
@@ -36,6 +38,8 @@ export class ContextService {
     private factRepo: Repository<EntityFact>,
     @InjectRepository(TranscriptSegment)
     private segmentRepo: Repository<TranscriptSegment>,
+    @InjectRepository(KnowledgePack)
+    private packRepo: Repository<KnowledgePack>,
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
     private vectorService: VectorService,
@@ -74,6 +78,7 @@ export class ContextService {
           coldDecisionsCount: 0,
           relevantChunksCount: 0,
           factsIncluded: 0,
+          knowledgePacksCount: 0,
         },
         generatedAt: new Date().toISOString(),
       };
@@ -97,6 +102,9 @@ export class ContextService {
     // 5. COLD tier: Entity profile
     const profile = await this.profileRepo.findOne({ where: { entityId } });
 
+    // 5.5. KNOWLEDGE tier: Active knowledge packs for this entity
+    const knowledgePacks = await this.getKnowledgePacks(entityId);
+
     // 6. RELEVANT: Vector search for task_hint
     let relevantChunks: SearchResult[] = [];
     if (taskHint) {
@@ -111,6 +119,7 @@ export class ContextService {
       hotSegments,
       warmSummaries,
       profile,
+      knowledgePacks,
       relevantChunks,
       taskHint,
     });
@@ -155,6 +164,7 @@ export class ContextService {
         coldDecisionsCount: profile?.keyDecisions?.length || 0,
         relevantChunksCount: relevantChunks.length,
         factsIncluded: facts.length,
+        knowledgePacksCount: knowledgePacks.length,
       },
       generatedAt: new Date().toISOString(),
     };
@@ -231,6 +241,19 @@ export class ContextService {
   }
 
   /**
+   * Get KNOWLEDGE tier: Active knowledge packs where entity is a participant
+   */
+  private async getKnowledgePacks(entityId: string): Promise<KnowledgePack[]> {
+    return this.packRepo
+      .createQueryBuilder('kp')
+      .where('kp.status = :status', { status: PackStatus.ACTIVE })
+      .andWhere(':entityId = ANY(kp.participant_ids)', { entityId })
+      .orderBy('kp.created_at', 'DESC')
+      .limit(10)
+      .getMany();
+  }
+
+  /**
    * Build prompt for Claude context synthesis
    */
   private buildSynthesisPrompt(params: {
@@ -240,10 +263,11 @@ export class ContextService {
     hotSegments: TranscriptSegment[];
     warmSummaries: InteractionSummary[];
     profile: EntityRelationshipProfile | null;
+    knowledgePacks: KnowledgePack[];
     relevantChunks: SearchResult[];
     taskHint?: string;
   }): string {
-    const { entity, facts, hotMessages, hotSegments, warmSummaries, profile, relevantChunks, taskHint } = params;
+    const { entity, facts, hotMessages, hotSegments, warmSummaries, profile, knowledgePacks, relevantChunks, taskHint } = params;
 
     const sections: string[] = [];
 
@@ -285,6 +309,21 @@ ${factsSection}`);
 ${milestonesList || '  (нет)'}
 - Key Decisions:
 ${decisionsList || '  (нет)'}`);
+    }
+
+    // KNOWLEDGE: Consolidated knowledge packs
+    if (knowledgePacks.length > 0) {
+      const packsSection = knowledgePacks
+        .map(kp => {
+          const decisions = (kp.decisions || []).slice(0, 3).map(d => `  - ${d.what}`).join('\n');
+          return `### ${kp.title}
+${kp.summary}
+${decisions ? `Key Decisions:\n${decisions}` : ''}`;
+        })
+        .join('\n\n');
+
+      sections.push(`\n## KNOWLEDGE: Consolidated Knowledge Packs
+${packsSection}`);
     }
 
     // WARM: Recent Summaries
