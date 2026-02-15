@@ -432,6 +432,31 @@ export class ExtractionToolsProvider {
             });
           }
 
+          // Smart Fusion: fact was resolved via fusion (CONFIRM, SUPERSEDE, ENRICH, etc.)
+          if (result.fusionActions && result.fusionActions.length > 0) {
+            const fa = result.fusionActions[0];
+            const fusionMessages: Record<string, string> = {
+              confirm: 'Fact confirmed — boosted confidence on existing fact.',
+              supersede: 'New value superseded old fact. Old fact deprecated, new fact created.',
+              enrich: 'Existing fact enriched with complementary information.',
+              conflict: 'Conflict detected — both facts kept for human review.',
+              coexist: 'Both values valid (different time periods). New fact created alongside existing.',
+            };
+            const message = fusionMessages[fa.action] || `Fusion action: ${fa.action}`;
+            this.logger.log(
+              `Smart Fusion [${fa.action}] for ${args.factType}="${args.value}" entity=${args.entityId} ` +
+                `existingFact=${fa.existingFactId} resultFact=${fa.resultFactId ?? 'n/a'} reason="${fa.reason}"`,
+            );
+            return toolSuccess({
+              status: `fusion_${fa.action}`,
+              action: fa.action,
+              existingFactId: fa.existingFactId,
+              resultFactId: fa.resultFactId,
+              reason: fa.reason,
+              message,
+            });
+          }
+
           if (result.skipped.facts > 0) {
             this.logger.debug(
               `Skipped duplicate fact ${args.factType}="${args.value}" for entity ${args.entityId}`,
