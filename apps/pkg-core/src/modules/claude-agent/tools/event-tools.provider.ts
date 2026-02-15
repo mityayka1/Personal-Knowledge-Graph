@@ -1,7 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { toolSuccess, toolEmptyResult, handleToolError, parseDate, type ToolDefinition } from './tool.types';
+import type { ToolsProviderInterface } from './tools-provider.interface';
+import { ToolsRegistryService } from '../tools-registry.service';
 import { EntityEventService } from '../../entity-event/entity-event.service';
 import { EventType, type EntityEvent } from '@pkg/entities';
 
@@ -21,11 +23,18 @@ const DATE_TIMEZONE = 'Europe/Moscow';
  * Implements NestJS Injectable pattern with tool caching
  */
 @Injectable()
-export class EventToolsProvider {
+export class EventToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(EventToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
-  constructor(private readonly entityEventService: EntityEventService) {}
+  constructor(
+    private readonly entityEventService: EntityEventService,
+    private readonly toolsRegistry: ToolsRegistryService,
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('events', this);
+  }
 
   /**
    * Get event tools (cached)

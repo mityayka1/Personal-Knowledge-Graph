@@ -14,7 +14,8 @@ import { EntityModule } from '../entity/entity.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
+import { ContextToolsProvider } from '../claude-agent/tools';
 
 @Module({
   imports: [
@@ -30,10 +31,10 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     forwardRef(() => InteractionModule),
     SearchModule,
     EmbeddingModule,
-    forwardRef(() => ClaudeAgentModule),
+    ClaudeAgentCoreModule,
   ],
   controllers: [ContextController],
-  providers: [ContextService],
+  providers: [ContextService, ContextToolsProvider],
   exports: [ContextService],
 })
 export class ContextModule {}

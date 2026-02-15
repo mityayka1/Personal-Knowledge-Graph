@@ -9,7 +9,7 @@ import { MiniAppEntityController } from './controllers/mini-app-entity.controlle
 import { MiniAppApprovalController } from './controllers/mini-app-approval.controller';
 import { EntityModule } from '../entity/entity.module';
 import { ExtractionModule } from '../extraction/extraction.module';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { ActivityModule } from '../activity/activity.module';
 
@@ -30,7 +30,7 @@ import { ActivityModule } from '../activity/activity.module';
  * Dependencies:
  * - EntityModule for entity profiles
  * - ExtractionModule for extraction services
- * - ClaudeAgentModule for recall sessions
+ * - ClaudeAgentCoreModule for recall sessions
  * - PendingApprovalModule for pending approvals
  * - ActivityModule for commitment details
  */
@@ -39,7 +39,7 @@ import { ActivityModule } from '../activity/activity.module';
     ConfigModule,
     EntityModule,
     ExtractionModule,
-    ClaudeAgentModule,
+    ClaudeAgentCoreModule,
     PendingApprovalModule,
     ActivityModule,
   ],

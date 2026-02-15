@@ -19,7 +19,8 @@ import { EntityRelationService } from './entity-relation/entity-relation.service
 import { MergeSuggestionService } from './merge-suggestion/merge-suggestion.service';
 import { EntityDisambiguationService } from './entity-disambiguation.service';
 import { EmbeddingModule } from '../embedding/embedding.module';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
+import { EntityToolsProvider } from '../claude-agent/tools';
 import { NotificationModule } from '../notification/notification.module';
 
 @Module({
@@ -33,7 +34,7 @@ import { NotificationModule } from '../notification/notification.module';
       DismissedMergeSuggestion,
     ]),
     EmbeddingModule,
-    forwardRef(() => ClaudeAgentModule),
+    ClaudeAgentCoreModule,
     forwardRef(() => NotificationModule),
   ],
   controllers: [MergeSuggestionController, EntityController, EntityRelationController],
@@ -45,6 +46,7 @@ import { NotificationModule } from '../notification/notification.module';
     EntityRelationService,
     MergeSuggestionService,
     EntityDisambiguationService,
+    EntityToolsProvider,
   ],
   exports: [
     EntityService,
