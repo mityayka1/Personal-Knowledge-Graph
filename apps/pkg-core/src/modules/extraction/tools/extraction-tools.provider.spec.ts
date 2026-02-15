@@ -77,6 +77,7 @@ describe('ExtractionToolsProvider', () => {
       mockDraftExtractionService as any,
       { find: jest.fn().mockResolvedValue([]) } as any,
       { findCandidates: jest.fn().mockResolvedValue([]) } as any,
+      null, // EntityDisambiguationService (optional)
     );
   });
 

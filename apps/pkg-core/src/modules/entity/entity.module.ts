@@ -17,6 +17,7 @@ import { EntityFactService } from './entity-fact/entity-fact.service';
 import { FactFusionService } from './entity-fact/fact-fusion.service';
 import { EntityRelationService } from './entity-relation/entity-relation.service';
 import { MergeSuggestionService } from './merge-suggestion/merge-suggestion.service';
+import { EntityDisambiguationService } from './entity-disambiguation.service';
 import { EmbeddingModule } from '../embedding/embedding.module';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 import { NotificationModule } from '../notification/notification.module';
@@ -43,6 +44,7 @@ import { NotificationModule } from '../notification/notification.module';
     FactFusionService,
     EntityRelationService,
     MergeSuggestionService,
+    EntityDisambiguationService,
   ],
   exports: [
     EntityService,
@@ -51,6 +53,7 @@ import { NotificationModule } from '../notification/notification.module';
     FactFusionService,
     EntityRelationService,
     MergeSuggestionService,
+    EntityDisambiguationService,
   ],
 })
 export class EntityModule {}
