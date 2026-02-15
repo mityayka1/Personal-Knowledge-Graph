@@ -37,6 +37,7 @@ import { ActivityModule } from './modules/activity/activity.module';
 import { DataQualityModule } from './modules/data-quality/data-quality.module';
 import { TelegramMiniAppModule } from './modules/telegram-mini-app/telegram-mini-app.module';
 import { PendingApprovalModule } from './modules/pending-approval/pending-approval.module';
+import { SegmentationModule } from './modules/segmentation/segmentation.module';
 
 @Module({
   imports: [
@@ -122,6 +123,7 @@ import { PendingApprovalModule } from './modules/pending-approval/pending-approv
     DataQualityModule,
     TelegramMiniAppModule,
     PendingApprovalModule,
+    SegmentationModule,
   ],
   providers: [
     // Global Combined Auth Guard - supports JWT and API Key
