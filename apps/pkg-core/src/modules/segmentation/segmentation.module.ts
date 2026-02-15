@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TopicalSegment, KnowledgePack, Interaction, Message, EntityFact, Commitment } from '@pkg/entities';
 import { SegmentationService } from './segmentation.service';
@@ -25,7 +25,7 @@ import { SettingsModule } from '../settings/settings.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([TopicalSegment, KnowledgePack, Interaction, Message, EntityFact, Commitment]),
-    ClaudeAgentModule,
+    forwardRef(() => ClaudeAgentModule),
     SettingsModule,
   ],
   controllers: [SegmentationController, PackingController],
