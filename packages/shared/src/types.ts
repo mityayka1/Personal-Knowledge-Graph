@@ -96,6 +96,7 @@ export interface ContextResponse {
     coldDecisionsCount: number;
     relevantChunksCount: number;
     factsIncluded: number;
+    knowledgePacksCount: number;
   };
   generatedAt: string;
 }

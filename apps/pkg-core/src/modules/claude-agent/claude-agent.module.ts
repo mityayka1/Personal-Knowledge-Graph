@@ -16,6 +16,7 @@ import {
   ActionToolsProvider,
   ActivityToolsProvider,
   DataQualityToolsProvider,
+  KnowledgeToolsProvider,
 } from './tools';
 import { SearchModule } from '../search/search.module';
 import { ContextModule } from '../context/context.module';
@@ -25,6 +26,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { ActivityModule } from '../activity/activity.module';
 import { DataQualityModule } from '../data-quality/data-quality.module';
 import { ExtractionModule } from '../extraction/extraction.module';
+import { SegmentationModule } from '../segmentation/segmentation.module';
 
 /**
  * Claude Agent Module
@@ -60,6 +62,8 @@ import { ExtractionModule } from '../extraction/extraction.module';
     forwardRef(() => DataQualityModule),
     // ExtractionModule for DailySynthesisExtractionService
     forwardRef(() => ExtractionModule),
+    // SegmentationModule for KnowledgeToolsProvider
+    forwardRef(() => SegmentationModule),
   ],
   controllers: [ClaudeAgentController, AgentController, ActivityEnrichmentController],
   providers: [
@@ -76,6 +80,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ActionToolsProvider,
     ActivityToolsProvider,
     DataQualityToolsProvider,
+    KnowledgeToolsProvider,
   ],
   exports: [
     ClaudeAgentService,
@@ -90,6 +95,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ActionToolsProvider,
     ActivityToolsProvider,
     DataQualityToolsProvider,
+    KnowledgeToolsProvider,
   ],
 })
 export class ClaudeAgentModule {}

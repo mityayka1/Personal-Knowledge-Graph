@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import {
   KnowledgePack,
   PackType,
@@ -41,6 +41,12 @@ export class PackingService {
     SegmentStatus.CLOSED,
   ];
 
+  /** Max agentic turns for synthesis Claude call */
+  private static readonly SYNTHESIS_MAX_TURNS = 5;
+
+  /** Timeout for synthesis Claude call (ms) — 3 minutes for large synthesis */
+  private static readonly SYNTHESIS_TIMEOUT_MS = 180_000;
+
   constructor(
     @InjectRepository(KnowledgePack)
     private readonly packRepo: Repository<KnowledgePack>,
@@ -48,6 +54,7 @@ export class PackingService {
     private readonly segmentRepo: Repository<TopicalSegment>,
     private readonly segmentationService: SegmentationService,
     private readonly claudeAgentService: ClaudeAgentService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ─────────────────────────────────────────────────────────────
@@ -81,6 +88,9 @@ export class PackingService {
 
     // Collect all participant IDs across segments
     const participantIds = this.collectParticipantIds(segments);
+
+    // Supersede existing ACTIVE packs for this activity
+    await this.supersedeExistingPacks(PackType.ACTIVITY, { activityId });
 
     // Create KnowledgePack
     const pack = await this.createPack({
@@ -131,6 +141,9 @@ export class PackingService {
     const { synthesis, tokensUsed, durationMs } = await this.synthesize(segmentData);
     const { periodStart, periodEnd } = this.computePeriodBounds(segments);
     const participantIds = this.collectParticipantIds(segments);
+
+    // Supersede existing ACTIVE packs for this entity
+    await this.supersedeExistingPacks(PackType.ENTITY, { entityId });
 
     const pack = await this.createPack({
       title: title || synthesis.suggestedTitle,
@@ -251,6 +264,37 @@ export class PackingService {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Pack Supersession
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Supersede existing ACTIVE packs for the same scope before creating a new one.
+   * Prevents duplicate knowledge packs in context retrieval.
+   */
+  private async supersedeExistingPacks(
+    packType: PackType,
+    scope: { activityId?: string; entityId?: string },
+  ): Promise<void> {
+    const qb = this.packRepo.createQueryBuilder('kp')
+      .where('kp.status = :status', { status: PackStatus.ACTIVE })
+      .andWhere('kp.packType = :packType', { packType });
+
+    if (scope.activityId) {
+      qb.andWhere('kp.activityId = :activityId', { activityId: scope.activityId });
+    }
+    if (scope.entityId) {
+      qb.andWhere('kp.entityId = :entityId', { entityId: scope.entityId });
+    }
+
+    const existingPacks = await qb.getMany();
+
+    for (const pack of existingPacks) {
+      await this.supersedePack(pack.id);
+      this.logger.log(`[packing] Superseded existing pack ${pack.id} before re-packing`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Segment Loading
   // ─────────────────────────────────────────────────────────────
 
@@ -306,32 +350,54 @@ export class PackingService {
 
   /**
    * Load message content for each segment to provide context for synthesis.
-   * Returns structured data ready for the Claude prompt.
+   * Uses a single batch query instead of per-segment queries to avoid N+1.
    */
   private async loadSegmentDataForSynthesis(
     segments: TopicalSegment[],
   ): Promise<SegmentSynthesisData[]> {
-    const result: SegmentSynthesisData[] = [];
+    const segmentIds = segments.map((s) => s.id);
 
-    for (const segment of segments) {
-      // Load messages linked to this segment via the join table
-      const messages = await this.segmentRepo
-        .createQueryBuilder('s')
-        .relation(TopicalSegment, 'messages')
-        .of(segment.id)
-        .loadMany();
+    // Batch-load all messages for all segments in one query
+    const rows: Array<{
+      segment_id: string;
+      content: string | null;
+      sender_name: string | null;
+      timestamp: Date;
+    }> = await this.dataSource.query(
+      `SELECT sm.segment_id, m.content, e.name AS sender_name, m.timestamp
+       FROM segment_messages sm
+       JOIN messages m ON m.id = sm.message_id
+       LEFT JOIN entities e ON e.id = m.sender_entity_id
+       WHERE sm.segment_id = ANY($1::uuid[])
+       ORDER BY sm.segment_id, m.timestamp ASC`,
+      [segmentIds],
+    );
 
-      const messageTexts = messages
-        .filter((m: { content?: string }) => m.content)
-        .map((m: { content: string; senderName?: string; timestamp?: Date }) => {
-          const sender = m.senderName || 'Unknown';
+    // Group messages by segment ID
+    const messagesBySegment = new Map<string, typeof rows>();
+    for (const row of rows) {
+      let arr = messagesBySegment.get(row.segment_id);
+      if (!arr) {
+        arr = [];
+        messagesBySegment.set(row.segment_id, arr);
+      }
+      arr.push(row);
+    }
+
+    return segments.map((segment) => {
+      const segmentMessages = messagesBySegment.get(segment.id) || [];
+
+      const messageTexts = segmentMessages
+        .filter((m) => m.content)
+        .map((m) => {
+          const sender = m.sender_name || 'Unknown';
           const time = m.timestamp
             ? new Date(m.timestamp).toISOString().split('T')[0]
             : '';
           return `[${sender}${time ? ' ' + time : ''}]: ${m.content}`;
         });
 
-      result.push({
+      return {
         segmentId: segment.id,
         topic: segment.topic,
         summary: segment.summary || '',
@@ -340,10 +406,8 @@ export class PackingService {
         endedAt: segment.endedAt,
         messageCount: segment.messageCount,
         messages: messageTexts,
-      });
-    }
-
-    return result;
+      };
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -375,12 +439,20 @@ export class PackingService {
       prompt,
       model: 'sonnet',
       schema: PACKING_SYNTHESIS_SCHEMA,
-      maxTurns: 5,
-      timeout: 180000, // 3 minutes for large synthesis
+      maxTurns: PackingService.SYNTHESIS_MAX_TURNS,
+      timeout: PackingService.SYNTHESIS_TIMEOUT_MS,
     });
 
     const durationMs = Date.now() - startTime;
     const tokensUsed = result.usage.inputTokens + result.usage.outputTokens;
+
+    if (!result.data) {
+      this.logger.error(
+        `[packing] Claude returned empty response for knowledge synthesis ` +
+        `(${segmentData.length} segments, ${tokensUsed} tokens, ${durationMs}ms)`,
+      );
+      throw new Error('Knowledge synthesis returned empty response from Claude');
+    }
 
     this.logger.debug(
       `[packing] Synthesis complete: ${tokensUsed} tokens, ${durationMs}ms`,

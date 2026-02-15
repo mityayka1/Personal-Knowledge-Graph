@@ -354,4 +354,5 @@ cd apps/pkg-core && pnpm test -- --testPathPattern="entity.service|activity.serv
 - [Source-Agnostic Architecture Prevention](../integration-issues/source-agnostic-architecture-prevention.md) — паттерн изоляции адаптеров
 - [Entity Soft-Delete Pattern](../architecture-decisions/entity-soft-delete-pattern-20260130.md) — стратегия soft-delete
 - [Soft-Delete Code Review Fixes](../logic-errors/soft-delete-code-review-fixes-entity-20260130.md) — связанные исправления
+- [Vague Extraction Context Understanding](../logic-errors/vague-extraction-context-understanding-ExtractionPipeline-20260215.md) — two-phase prompt, chat title pipeline, vague filter fix
 - [CLAUDE.md](../../../CLAUDE.md) — правила разработки проекта

@@ -133,15 +133,13 @@ export class SegmentationService {
   async linkMessages(segmentId: string, messageIds: string[]): Promise<void> {
     if (!messageIds.length) return;
 
-    const values = messageIds
-      .map((mid) => `('${segmentId}', '${mid}')`)
-      .join(', ');
-
-    await this.dataSource.query(`
-      INSERT INTO segment_messages (segment_id, message_id)
-      VALUES ${values}
-      ON CONFLICT DO NOTHING
-    `);
+    // Use parameterized query with unnest to prevent SQL injection
+    await this.dataSource.query(
+      `INSERT INTO segment_messages (segment_id, message_id)
+       SELECT $1::uuid, unnest($2::uuid[])
+       ON CONFLICT DO NOTHING`,
+      [segmentId, messageIds],
+    );
 
     // Update denormalized message_count
     const [{ count }] = await this.dataSource.query(

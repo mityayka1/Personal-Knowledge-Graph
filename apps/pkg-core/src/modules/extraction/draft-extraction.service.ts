@@ -69,6 +69,8 @@ export interface DraftExtractionInput {
   synthesisDate?: string;
   /** Optional: focus topic for metadata */
   focusTopic?: string;
+  /** Optional: TopicalSegment ID for knowledge traceability */
+  sourceSegmentId?: string;
 }
 
 /**
@@ -835,6 +837,7 @@ export class DraftExtractionService {
       confidence: fact.confidence,
       status: EntityFactStatus.DRAFT,
       sourceInteractionId: input.sourceInteractionId ?? null,
+      sourceSegmentId: input.sourceSegmentId ?? null,
       embedding: embedding ?? null,
     });
 
@@ -905,6 +908,7 @@ export class DraftExtractionService {
         clientEntityId,
         description: project.description ?? null,
         tags: project.tags ?? null,
+        sourceSegmentId: input.sourceSegmentId ?? null,
         lastActivityAt: new Date(),
         depth: 0,
         materializedPath: null,
@@ -1014,6 +1018,7 @@ export class DraftExtractionService {
         ownerEntityId: input.ownerEntityId,
         clientEntityId, // Who requested the task (counterparty)
         deadline: task.deadline ? new Date(task.deadline) : null,
+        sourceSegmentId: input.sourceSegmentId ?? null,
         metadata: {
           extractedFrom: 'daily_synthesis',
           synthesisDate: input.synthesisDate,
@@ -1103,6 +1108,7 @@ export class DraftExtractionService {
       fromEntityId,
       toEntityId,
       activityId: activityId ?? null,
+      sourceSegmentId: input.sourceSegmentId ?? null,
       status: CommitmentStatus.DRAFT,
       priority: this.mapCommitmentPriority(commitment.priority),
       dueDate: commitment.deadline ? new Date(commitment.deadline) : null,

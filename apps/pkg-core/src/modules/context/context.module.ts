@@ -6,6 +6,7 @@ import {
   EntityRelationshipProfile,
   EntityFact,
   TranscriptSegment,
+  KnowledgePack,
 } from '@pkg/entities';
 import { ContextController } from './context.controller';
 import { ContextService } from './context.service';
@@ -23,6 +24,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
       EntityRelationshipProfile,
       EntityFact,
       TranscriptSegment,
+      KnowledgePack,
     ]),
     forwardRef(() => EntityModule),
     forwardRef(() => InteractionModule),

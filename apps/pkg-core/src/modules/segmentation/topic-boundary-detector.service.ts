@@ -20,6 +20,12 @@ const MAX_MESSAGES_PER_BATCH = 200;
 /** Time gap in minutes that suggests a topic boundary */
 const TIME_GAP_MINUTES = 60;
 
+/** Max agentic turns for segmentation Claude call */
+const SEGMENTATION_MAX_TURNS = 3;
+
+/** Timeout for segmentation Claude call (ms) */
+const SEGMENTATION_TIMEOUT_MS = 60_000;
+
 @Injectable()
 export class TopicBoundaryDetectorService {
   private readonly logger = new Logger(TopicBoundaryDetectorService.name);
@@ -116,9 +122,10 @@ export class TopicBoundaryDetectorService {
           this.logger.debug(
             `[segmentation] Created segment "${segment.topic}" with ${messageIds.length} messages`,
           );
-        } catch (error: any) {
+        } catch (error: unknown) {
+          const err = error instanceof Error ? error : new Error(String(error));
           this.logger.warn(
-            `[segmentation] Failed to create segment "${segment.topic}": ${error.message}`,
+            `[segmentation] Failed to create segment "${segment.topic}": ${err.message}`,
           );
         }
       }
@@ -195,9 +202,14 @@ export class TopicBoundaryDetectorService {
       prompt,
       model: 'haiku',
       schema: TOPIC_SEGMENTATION_SCHEMA,
-      maxTurns: 3,
-      timeout: 60000,
+      maxTurns: SEGMENTATION_MAX_TURNS,
+      timeout: SEGMENTATION_TIMEOUT_MS,
     });
+
+    if (!result.data) {
+      this.logger.warn('[segmentation] Claude returned empty response for topic segmentation');
+      return { segments: [], skippedCount: messages.length, tokensUsed: 0 };
+    }
 
     const segments = this.validateSegments(result.data.segments, messages.length);
     const skippedCount = result.data.skippedMessageIndices?.length ?? 0;
