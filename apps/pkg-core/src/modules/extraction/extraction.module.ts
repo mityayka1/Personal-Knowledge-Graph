@@ -35,6 +35,7 @@ import { ClientResolutionService } from './client-resolution.service';
 import { ProjectMatchingService } from './project-matching.service';
 import { FactDedupReviewService } from './fact-dedup-review.service';
 import { GroupExtractionService } from './group-extraction.service';
+import { EventCleanupService } from './event-cleanup.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { InteractionModule } from '../interaction/interaction.module';
@@ -46,6 +47,7 @@ import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
 import { ConfirmationModule } from '../confirmation/confirmation.module';
 import { ActivityModule } from '../activity/activity.module';
+import { DataQualityModule } from '../data-quality/data-quality.module';
 import { JobModule } from '../job/job.module';
 
 @Module({
@@ -80,6 +82,7 @@ import { JobModule } from '../job/job.module';
     EmbeddingModule,
     forwardRef(() => ConfirmationModule),
     ActivityModule,
+    forwardRef(() => DataQualityModule),
     PendingApprovalModule,
     forwardRef(() => JobModule),
   ],
@@ -106,6 +109,7 @@ import { JobModule } from '../job/job.module';
     ProjectMatchingService,
     FactDedupReviewService,
     GroupExtractionService,
+    EventCleanupService,
   ],
   exports: [
     FactExtractionService,

@@ -31,6 +31,8 @@ import {
 import { EntityEventService } from '../entity-event/entity-event.service';
 import { EnrichmentQueueService } from './enrichment-queue.service';
 import { ContextEnrichmentService } from './context-enrichment.service';
+import { EventCleanupService } from './event-cleanup.service';
+import { CleanupPhase } from './event-cleanup.types';
 
 interface ExtractedEventQueryDto {
   status?: ExtractedEventStatus;
@@ -75,7 +77,33 @@ export class ExtractedEventController {
     private entityEventService: EntityEventService,
     private enrichmentQueueService: EnrichmentQueueService,
     private contextEnrichmentService: ContextEnrichmentService,
+    private eventCleanupService: EventCleanupService,
   ) {}
+
+  /**
+   * Auto-cleanup: deduplicate events, match to activities, deduplicate activities.
+   * POST /extracted-events/auto-cleanup?phases=dedup,match,activities&dryRun=true
+   */
+  @Post('auto-cleanup')
+  async autoCleanup(
+    @Query('phases') phases?: string,
+    @Query('dryRun') dryRunParam?: string,
+  ) {
+    const validPhases: CleanupPhase[] = ['dedup', 'match', 'activities'];
+    const phaseList: CleanupPhase[] = phases
+      ? (phases.split(',').filter((p) => validPhases.includes(p as CleanupPhase)) as CleanupPhase[])
+      : validPhases;
+
+    if (phaseList.length === 0) {
+      throw new BadRequestException(`Invalid phases. Valid: ${validPhases.join(', ')}`);
+    }
+
+    const dryRun = dryRunParam === 'true';
+
+    this.logger.log(`Auto-cleanup requested: phases=${phaseList.join(',')}, dryRun=${dryRun}`);
+
+    return this.eventCleanupService.autoCleanup({ phases: phaseList, dryRun });
+  }
 
   /**
    * Get enrichment queue statistics

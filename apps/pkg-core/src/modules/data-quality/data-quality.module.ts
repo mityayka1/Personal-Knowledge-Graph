@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   DataQualityReport,
@@ -33,7 +33,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
       EntityRelation,
     ]),
     ActivityModule,
-    ExtractionModule,
+    forwardRef(() => ExtractionModule),
   ],
   controllers: [DataQualityController],
   providers: [DataQualityService, OrphanResolutionService, DataQualityToolsProvider],

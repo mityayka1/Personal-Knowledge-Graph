@@ -20,7 +20,10 @@ export type ClaudeTaskType =
   | 'unified_extraction'
   | 'group_extraction'
   | 'fact_dedup_review'
-  | 'description_enrichment';
+  | 'description_enrichment'
+  | 'event_cleanup_dedup'
+  | 'event_activity_match'
+  | 'activity_semantic_dedup';
 
 /**
  * Model types
