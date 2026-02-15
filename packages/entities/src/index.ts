@@ -38,3 +38,4 @@ export * from './commitment.entity';
 export * from './data-quality-report.entity';
 // Phase E: Knowledge Segmentation & Packing
 export * from './topical-segment.entity';
+export * from './knowledge-pack.entity';

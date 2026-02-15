@@ -125,6 +125,9 @@ export class EntityFact {
   @JoinColumn({ name: 'source_interaction_id' })
   sourceInteraction: Interaction | null;
 
+  @Column({ name: 'source_segment_id', type: 'uuid', nullable: true })
+  sourceSegmentId: string | null;
+
   // Ranking (Wikidata-style): preferred > normal > deprecated
   @Column({ type: 'varchar', length: 20, default: 'normal' })
   rank: 'preferred' | 'normal' | 'deprecated';

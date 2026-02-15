@@ -38,6 +38,7 @@ import {
   DataQualityReport,
   // Phase E: Knowledge Segmentation & Packing
   TopicalSegment,
+  KnowledgePack,
 } from '@pkg/entities';
 
 /**
@@ -76,4 +77,5 @@ export const ALL_ENTITIES = [
   DataQualityReport,
   // Phase E: Knowledge Segmentation & Packing
   TopicalSegment,
+  KnowledgePack,
 ] as const;

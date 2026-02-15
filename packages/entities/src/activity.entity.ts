@@ -305,6 +305,13 @@ export class Activity {
   recurrenceRule: string | null;
 
   // ─────────────────────────────────────────────────────────────
+  // Traceability (Knowledge Layer)
+  // ─────────────────────────────────────────────────────────────
+
+  @Column({ name: 'source_segment_id', type: 'uuid', nullable: true })
+  sourceSegmentId: string | null;
+
+  // ─────────────────────────────────────────────────────────────
   // Метаданные
   // ─────────────────────────────────────────────────────────────
 
