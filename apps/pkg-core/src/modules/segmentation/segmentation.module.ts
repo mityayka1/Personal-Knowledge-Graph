@@ -4,6 +4,8 @@ import { TopicalSegment, KnowledgePack } from '@pkg/entities';
 import { SegmentationService } from './segmentation.service';
 import { SegmentationController } from './segmentation.controller';
 import { TopicBoundaryDetectorService } from './topic-boundary-detector.service';
+import { PackingService } from './packing.service';
+import { PackingController } from './packing.controller';
 import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
 import { SettingsModule } from '../settings/settings.module';
 
@@ -13,6 +15,7 @@ import { SettingsModule } from '../settings/settings.module';
  * TopicalSegment — семантическая единица обсуждения (группа сообщений по теме).
  * KnowledgePack — консолидированные знания из нескольких сегментов.
  * TopicBoundaryDetector — Claude-based определение границ тем.
+ * PackingService — консолидация сегментов в пакеты знаний через Claude.
  *
  * Phase E: Knowledge Segmentation & Packing
  */
@@ -22,8 +25,8 @@ import { SettingsModule } from '../settings/settings.module';
     ClaudeAgentModule,
     SettingsModule,
   ],
-  controllers: [SegmentationController],
-  providers: [SegmentationService, TopicBoundaryDetectorService],
-  exports: [SegmentationService, TopicBoundaryDetectorService],
+  controllers: [SegmentationController, PackingController],
+  providers: [SegmentationService, TopicBoundaryDetectorService, PackingService],
+  exports: [SegmentationService, TopicBoundaryDetectorService, PackingService],
 })
 export class SegmentationModule {}
