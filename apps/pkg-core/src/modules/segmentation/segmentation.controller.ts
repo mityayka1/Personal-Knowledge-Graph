@@ -10,6 +10,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { SegmentationService } from './segmentation.service';
+import { TopicBoundaryDetectorService } from './topic-boundary-detector.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { SegmentQueryDto } from './dto/segment-query.dto';
@@ -18,7 +19,10 @@ import { SegmentQueryDto } from './dto/segment-query.dto';
 export class SegmentationController {
   private readonly logger = new Logger(SegmentationController.name);
 
-  constructor(private readonly segmentationService: SegmentationService) {}
+  constructor(
+    private readonly segmentationService: SegmentationService,
+    private readonly topicBoundaryDetector: TopicBoundaryDetectorService,
+  ) {}
 
   @Post()
   async createSegment(@Body() dto: CreateSegmentDto) {
@@ -73,6 +77,35 @@ export class SegmentationController {
     @Body() body: { sourceSegmentId: string },
   ) {
     return this.segmentationService.mergeSegments(targetId, body.sourceSegmentId);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Auto-segmentation
+  // ─────────────────────────────────────────────────────────────
+
+  @Post('detect')
+  async detectBoundaries(
+    @Body()
+    body: {
+      chatId: string;
+      interactionId: string;
+      messages: Array<{
+        id: string;
+        content: string;
+        timestamp: string;
+        isOutgoing: boolean;
+        senderEntityName?: string;
+      }>;
+      participantIds: string[];
+      primaryParticipantId?: string;
+      chatTitle?: string;
+      activityId?: string;
+    },
+  ) {
+    this.logger.log(
+      `Auto-segmentation: ${body.messages.length} messages, chat ${body.chatId}`,
+    );
+    return this.topicBoundaryDetector.detectAndCreate(body);
   }
 
   // ─────────────────────────────────────────────────────────────
