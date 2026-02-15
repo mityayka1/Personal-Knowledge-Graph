@@ -125,12 +125,14 @@ if (isNoiseContent(contentToCheck)) {
     'Skip this event — it does not carry actionable real-world information.',
   );
 }
-if (isVagueContent(args.title) && !args.date) {
+if (isVagueContent(args.title)) {
   return toolError(
-    'Event title is too vague without a date anchor',
-    'Rephrase with specifics (who, what, when) or skip.',
+    'Event title is too vague',
+    'Title contains placeholder words (что-то, как-нибудь). ' +
+    'Use specific details from conversation: project name, action object, person.',
   );
 }
+// NOTE: !args.date escape removed in second wave — see cross-reference
 ```
 
 **Почему `toolError()` вместо молчаливого пропуска?** `toolError()` — это in-context learning для Claude Agent SDK. Когда Claude получает ошибку инструмента, он учится не создавать подобные события в рамках текущей сессии. Это значительно эффективнее, чем постфактум очистка.
@@ -315,3 +317,4 @@ toolError() + actionable message → Claude адаптируется в теку
 - [docs/plans/proud-prancing-squid.md](../../plans/proud-prancing-squid.md) — Phase 5 Data Quality Remediation
 - [docs/second-brain/05-JARVIS-FOUNDATION.md](../../second-brain/05-JARVIS-FOUNDATION.md) — Jarvis Foundation (Phase D)
 - [docs/solutions/integration-issues/data-source-mismatch-prevention.md](data-source-mismatch-prevention.md) — Prevention patterns
+- [docs/solutions/logic-errors/vague-extraction-context-understanding-ExtractionPipeline-20260215.md](../logic-errors/vague-extraction-context-understanding-ExtractionPipeline-20260215.md) — Вторая волна: two-phase prompt, chat title pipeline, vague filter fix

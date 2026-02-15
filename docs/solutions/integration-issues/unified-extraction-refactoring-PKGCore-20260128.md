@@ -170,6 +170,8 @@ export interface ExtractionJobData {
 - See also: [structured-output-undefined-agent-mode](./structured-output-undefined-agent-mode-20260124.md) — outputFormat обязателен для structured data
 - See also: [claude-sdk-snake-case-systemic](./claude-sdk-snake-case-systemic-20250125.md) — SDK возвращает snake_case поля
 - See also: [claude-sdk-usage-extraction](./claude-sdk-usage-extraction-20250125.md) — usage в `result` message
+- See also: [vague-extraction-context-understanding](../logic-errors/vague-extraction-context-understanding-ExtractionPipeline-20260215.md) — вторая волна: two-phase prompt, chat title, vague filter fix
+- See also: [extraction-quality-prevention-pipeline](./extraction-quality-prevention-pipeline-20260215.md) — первая волна: noise filtering, commitment dedup, activity context
 
 ## Files Changed
 
