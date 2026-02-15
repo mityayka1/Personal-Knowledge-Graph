@@ -272,9 +272,11 @@ export class DraftExtractionService {
         }
 
         // DEDUPLICATION: Enhanced check -- pending approvals + two-tier fuzzy match
+        // Client boost: passing client name lowers strong threshold from 0.8 to 0.7
         const existing = await this.findExistingProjectEnhanced(
           project.name,
           input.ownerEntityId,
+          project.client,
         );
         if (existing.found && existing.activityId) {
           this.logger.debug(
@@ -340,9 +342,19 @@ export class DraftExtractionService {
           continue;
         }
 
-        const parentId = task.projectName
+        let parentId = task.projectName
           ? projectMap.get(ProjectMatchingService.normalizeName(task.projectName))
           : undefined;
+        // Fallback: fuzzy match against existing activities (for unified extraction path)
+        if (!parentId && task.projectName) {
+          const fuzzyMatch = await this.findExistingProjectEnhanced(
+            task.projectName,
+            input.ownerEntityId,
+          );
+          if (fuzzyMatch.found && fuzzyMatch.activityId) {
+            parentId = fuzzyMatch.activityId;
+          }
+        }
 
         const { activity, approval } = await this.createDraftTask(
           task,
@@ -364,23 +376,37 @@ export class DraftExtractionService {
     // 3. Create draft commitments
     for (const commitment of input.commitments) {
       try {
-        // DEDUPLICATION: Check for existing pending commitment with similar title
-        const existingCommitment = await this.findExistingPendingCommitment(commitment.what);
-        if (existingCommitment) {
+        // DEDUPLICATION: Check pending approvals + fuzzy match against active commitments
+        const existingCommitment = await this.findExistingCommitmentEnhanced(
+          commitment.what,
+          input.ownerEntityId,
+        );
+        if (existingCommitment.found) {
           this.logger.debug(
             `Skipping duplicate commitment "${commitment.what}" - ` +
-              `already pending as ${existingCommitment.targetId}`,
+              `matched via ${existingCommitment.source} (id: ${existingCommitment.commitmentId}, ` +
+              `similarity: ${existingCommitment.similarity?.toFixed(3) ?? 'exact'})`,
           );
           result.skipped.commitments++;
           continue;
         }
 
-        // Resolve activityId from projectMap for commitment
+        // Resolve activityId from projectMap or fuzzy match for commitment
         let commitmentActivityId: string | undefined;
         if (commitment.projectName) {
           commitmentActivityId = projectMap.get(
             ProjectMatchingService.normalizeName(commitment.projectName),
           );
+          // Fallback: fuzzy match against existing activities (for unified extraction path)
+          if (!commitmentActivityId) {
+            const fuzzyMatch = await this.findExistingProjectEnhanced(
+              commitment.projectName,
+              input.ownerEntityId,
+            );
+            if (fuzzyMatch.found && fuzzyMatch.activityId) {
+              commitmentActivityId = fuzzyMatch.activityId;
+            }
+          }
         }
 
         const { entity, approval } = await this.createDraftCommitment(
@@ -814,6 +840,7 @@ export class DraftExtractionService {
   private async findExistingProjectEnhanced(
     projectName: string,
     ownerEntityId: string,
+    clientName?: string,
   ): Promise<{
     found: boolean;
     activityId?: string;
@@ -840,21 +867,45 @@ export class DraftExtractionService {
     });
 
     if (matchResult.matched && matchResult.activity) {
-      // Strong match (>= 0.8): skip creation
-      if (matchResult.similarity >= DraftExtractionService.STRONG_MATCH_THRESHOLD) {
+      // Client boost: lower strong threshold from 0.8 to 0.7 when client matches
+      let effectiveStrongThreshold = DraftExtractionService.STRONG_MATCH_THRESHOLD;
+      if (clientName && matchResult.activity.clientEntityId) {
+        const clientEntity = await this.entityRepo.findOne({
+          where: { id: matchResult.activity.clientEntityId },
+          select: ['id', 'name'],
+        });
+        if (clientEntity) {
+          const clientSimilarity = this.projectMatchingService.calculateSimilarity(
+            ProjectMatchingService.normalizeName(clientName),
+            ProjectMatchingService.normalizeName(clientEntity.name),
+          );
+          if (clientSimilarity >= 0.7) {
+            effectiveStrongThreshold = DraftExtractionService.STRONG_MATCH_THRESHOLD - 0.1;
+            this.logger.debug(
+              `Client boost: "${clientName}" ~ "${clientEntity.name}" (similarity: ${clientSimilarity.toFixed(3)}) → threshold lowered to ${effectiveStrongThreshold}`,
+            );
+          }
+        }
+      }
+
+      // Strong match (>= threshold): skip creation
+      if (matchResult.similarity >= effectiveStrongThreshold) {
         this.logger.log(
           `Strong match project "${projectName}" -> "${matchResult.activity.name}" ` +
-            `(similarity: ${matchResult.similarity.toFixed(3)})`,
+            `(similarity: ${matchResult.similarity.toFixed(3)}` +
+            `${effectiveStrongThreshold !== DraftExtractionService.STRONG_MATCH_THRESHOLD ? ', client-boosted' : ''})`,
         );
         return {
           found: true,
           activityId: matchResult.activity.id,
           similarity: matchResult.similarity,
-          source: 'fuzzy_match',
+          source: effectiveStrongThreshold !== DraftExtractionService.STRONG_MATCH_THRESHOLD
+            ? 'fuzzy_match_client_boosted'
+            : 'fuzzy_match',
         };
       }
 
-      // Weak match (0.6-0.8): create but flag as possible duplicate
+      // Weak match (0.6-threshold): create but flag as possible duplicate
       this.logger.log(
         `Weak match project "${projectName}" -> "${matchResult.activity.name}" ` +
           `(similarity: ${matchResult.similarity.toFixed(3)}) — will create with possibleDuplicate flag`,
@@ -995,6 +1046,65 @@ export class DraftExtractionService {
     return pendingApprovals.find((p) => p.targetId === matchingCommitment.id) ?? null;
   }
 
+  /**
+   * Enhanced commitment dedup: pending ILIKE + fuzzy Levenshtein against active commitments.
+   * Mirrors findExistingTaskEnhanced() pattern.
+   */
+  private async findExistingCommitmentEnhanced(
+    what: string,
+    entityId?: string,
+  ): Promise<{ found: boolean; commitmentId?: string; similarity?: number; source?: string }> {
+    // Step 1: Pending ILIKE (existing exact logic)
+    const pendingMatch = await this.findExistingPendingCommitment(what);
+    if (pendingMatch) {
+      return { found: true, commitmentId: pendingMatch.targetId, source: 'pending_approval' };
+    }
+
+    // Step 2: Fuzzy Levenshtein against active commitments
+    if (!entityId) return { found: false };
+
+    const candidates = await this.commitmentRepo.find({
+      where: {
+        status: In([CommitmentStatus.PENDING, CommitmentStatus.IN_PROGRESS]),
+      },
+      select: ['id', 'title'],
+      take: 100,
+    });
+
+    if (candidates.length === 0) return { found: false };
+
+    const normalizedWhat = ProjectMatchingService.normalizeName(what);
+    let bestMatch: { commitment: Commitment; similarity: number } | null = null;
+
+    for (const c of candidates) {
+      const similarity = this.projectMatchingService.calculateSimilarity(
+        normalizedWhat,
+        ProjectMatchingService.normalizeName(c.title),
+      );
+      if (
+        similarity >= DraftExtractionService.COMMITMENT_DEDUP_THRESHOLD &&
+        (!bestMatch || similarity > bestMatch.similarity)
+      ) {
+        bestMatch = { commitment: c, similarity };
+      }
+    }
+
+    if (bestMatch) {
+      this.logger.log(
+        `Fuzzy matched commitment "${what}" -> "${bestMatch.commitment.title}" ` +
+          `(similarity: ${bestMatch.similarity.toFixed(3)})`,
+      );
+      return {
+        found: true,
+        commitmentId: bestMatch.commitment.id,
+        similarity: bestMatch.similarity,
+        source: 'fuzzy_match',
+      };
+    }
+
+    return { found: false };
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Private: Entity Resolution
   // ─────────────────────────────────────────────────────────────
@@ -1011,6 +1121,8 @@ export class DraftExtractionService {
   private static readonly WEAK_MATCH_THRESHOLD = 0.6;
   /** Task dedup threshold — skip creation if existing task is similar enough */
   private static readonly TASK_DEDUP_THRESHOLD = 0.7;
+  /** Commitment dedup threshold — skip creation if existing commitment is similar enough */
+  private static readonly COMMITMENT_DEDUP_THRESHOLD = 0.7;
 
 
   // ─────────────────────────────────────────────────────────────

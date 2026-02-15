@@ -1,4 +1,7 @@
 import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Activity, ActivityStatus } from '@pkg/entities';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { EntityRelationService } from '../entity/entity-relation/entity-relation.service';
@@ -57,6 +60,8 @@ export class UnifiedExtractionService {
     @Optional()
     @Inject(forwardRef(() => ExtractionToolsProvider))
     private readonly extractionToolsProvider: ExtractionToolsProvider | null,
+    @InjectRepository(Activity)
+    private readonly activityRepo: Repository<Activity>,
   ) {}
 
   /**
@@ -110,11 +115,14 @@ export class UnifiedExtractionService {
     // 2. Get relations context
     const relationsContext = await this.buildRelationsContext(entityId);
 
+    // 2b. Load existing activities for event→activity linking
+    const activitiesContext = await this.buildActivitiesContext();
+
     // 3. Enrich messages with reply-to info and promise recipients
     const enrichedMessages = await this.enrichMessages(validMessages, interactionId, entityId, entityName);
 
     // 4. Build unified prompt
-    const prompt = this.buildUnifiedPrompt(entityName, entityId, entityContext, relationsContext, enrichedMessages);
+    const prompt = this.buildUnifiedPrompt(entityName, entityId, entityContext, relationsContext, activitiesContext, enrichedMessages);
 
     // 5. Get owner entity ID for draft creation
     let ownerEntityId: string | null = null;
@@ -258,6 +266,7 @@ export class UnifiedExtractionService {
     entityId: string,
     entityContext: string,
     relationsContext: string,
+    activitiesContext: string,
     messages: EnrichedMessage[],
   ): string {
     // Format messages block
@@ -367,6 +376,13 @@ ${relationsSection}
 4. Не дублируй уже известные связи (сверяйся с контекстом).
 
 ══════════════════════════════════════════
+§ АКТИВНОСТИ — существующие проекты и задачи
+══════════════════════════════════════════
+Если событие (task/promise) относится к существующей активности, укажи activityId в create_event.
+Если точный activityId неизвестен, укажи projectName — система найдёт ближайшее совпадение.
+${activitiesContext}
+
+══════════════════════════════════════════
 СООБЩЕНИЯ ДЛЯ АНАЛИЗА:
 ══════════════════════════════════════════
 ${messageBlock}
@@ -379,5 +395,51 @@ ${messageBlock}
 - eventsCreated: количество успешных вызовов create_event
 - relationsCreated: количество успешных вызовов create_relation
 - pendingEntities: количество успешных вызовов create_pending_entity`;
+  }
+
+  /**
+   * Load existing activities and format for prompt context.
+   * Reuses the same pattern as DailySynthesisExtractionService.loadExistingActivities().
+   */
+  private async buildActivitiesContext(): Promise<string> {
+    try {
+      const activities = await this.activityRepo
+        .createQueryBuilder('a')
+        .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.description', 'a.tags'])
+        .leftJoin('a.clientEntity', 'client')
+        .addSelect(['client.name'])
+        .where('a.status NOT IN (:...excludedStatuses)', {
+          excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
+        })
+        .orderBy('a.updatedAt', 'DESC')
+        .limit(100)
+        .getMany();
+
+      if (activities.length === 0) return 'Нет известных активностей.';
+
+      const grouped: Record<string, Activity[]> = {};
+      for (const a of activities) {
+        const type = a.activityType;
+        if (!grouped[type]) grouped[type] = [];
+        grouped[type].push(a);
+      }
+
+      const lines: string[] = [];
+      for (const [type, items] of Object.entries(grouped)) {
+        lines.push(`\n${type.toUpperCase()}:`);
+        for (const a of items.slice(0, 15)) {
+          const client = a.clientEntity ? ` (клиент: ${a.clientEntity.name})` : '';
+          const tags = a.tags?.length ? ` [${a.tags.join(', ')}]` : '';
+          lines.push(`  - ${a.name}${client} [${a.status}] (activityId: ${a.id})${tags}`);
+        }
+        if (items.length > 15) {
+          lines.push(`  ... и ещё ${items.length - 15}`);
+        }
+      }
+      return lines.join('\n');
+    } catch (error) {
+      this.logger.warn(`Failed to load activities context: ${error}`);
+      return '';
+    }
   }
 }

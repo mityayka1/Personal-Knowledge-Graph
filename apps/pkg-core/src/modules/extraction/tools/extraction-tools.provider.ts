@@ -16,6 +16,7 @@ import { EntityRelationService } from '../../entity/entity-relation/entity-relat
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { EnrichmentQueueService } from '../enrichment-queue.service';
 import { DraftExtractionService } from '../draft-extraction.service';
+import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import {
   FactSource,
   RelationType,
@@ -571,6 +572,15 @@ export class ExtractionToolsProvider {
           .uuid()
           .optional()
           .describe('UUID получателя обещания (для promise_by_me, берётся из promiseToEntityId сообщения)'),
+        activityId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('UUID существующей активности (проекта/задачи), если событие к ней относится. Берётся из секции АКТИВНОСТИ.'),
+        projectName: z
+          .string()
+          .optional()
+          .describe('Имя проекта, если activityId неизвестен — система найдёт ближайшее совпадение через fuzzy match'),
         metadata: z.record(z.string(), z.unknown()).optional().describe('Доп. данные (participants, location и т.д.)'),
       },
       async (args) => {
@@ -605,6 +615,23 @@ export class ExtractionToolsProvider {
           );
         }
 
+        // Noise / vague content filter
+        const contentToCheck = args.title + (args.description ? ' ' + args.description : '');
+        if (isNoiseContent(contentToCheck)) {
+          this.logger.debug(`[create_event] Filtered noise: "${args.title}"`);
+          return toolError(
+            'Event content is too short or technical noise',
+            'Skip this event — it does not carry actionable real-world information. Focus on concrete tasks, promises and meetings.',
+          );
+        }
+        if (isVagueContent(args.title) && !args.date) {
+          this.logger.debug(`[create_event] Filtered vague: "${args.title}"`);
+          return toolError(
+            'Event title is too vague without a date anchor',
+            'Rephrase with specifics (who, what, when) or skip. Vague events like "что-то сделать" without a deadline are noise.',
+          );
+        }
+
         try {
           // Map event type to appropriate draft entity
           if (args.eventType === 'task') {
@@ -615,6 +642,7 @@ export class ExtractionToolsProvider {
               tasks: [
                 {
                   title: args.title,
+                  projectName: args.projectName,
                   deadline: args.date,
                   status: 'pending',
                   priority: 'medium',
@@ -674,6 +702,7 @@ export class ExtractionToolsProvider {
                 type: commitmentType,
                 deadline: args.date,
                 priority: 'medium',
+                projectName: args.projectName,
                 sourceQuote: args.sourceQuote?.substring(0, 200),
                 confidence: args.confidence,
               },

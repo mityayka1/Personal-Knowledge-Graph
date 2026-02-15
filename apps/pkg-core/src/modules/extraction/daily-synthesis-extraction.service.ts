@@ -12,6 +12,7 @@ import {
   DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
 } from './daily-synthesis-extraction.types';
 import { DraftExtractionService, DraftExtractionResult } from './draft-extraction.service';
+import { VAGUE_PATTERNS } from './extraction-quality.constants';
 
 /**
  * DailySynthesisExtractionService — extracts structured data from /daily synthesis.
@@ -27,21 +28,6 @@ import { DraftExtractionService, DraftExtractionResult } from './draft-extractio
  *
  * Uses oneshot mode with structured output (JSON Schema constrained decoding).
  */
-// Vague pronouns / placeholders that indicate non-specific content
-// Note: \b doesn't work with Cyrillic in JS, using (?<!\p{L}) / (?!\p{L}) instead
-const VAGUE_PATTERNS = [
-  /(?<!\p{L})что[-\s]?то(?!\p{L})/iu,
-  /(?<!\p{L})кое[-\s]?что(?!\p{L})/iu,
-  /(?<!\p{L})кое[-\s]?как(?!\p{L})/iu,
-  /(?<!\p{L})как[-\s]?нибудь(?!\p{L})/iu,
-  /(?<!\p{L})как[-\s]?то(?!\p{L})/iu,
-  /(?<!\p{L})где[-\s]?то(?!\p{L})/iu,
-  /(?<!\p{L})когда[-\s]?нибудь(?!\p{L})/iu,
-  /(?<!\p{L})что[-\s]?нибудь(?!\p{L})/iu,
-  /(?<!\p{L})куда[-\s]?то(?!\p{L})/iu,
-  /(?<!\p{L})че[-\s]?нибудь(?!\p{L})/iu,
-  /(?<!\p{L})че[-\s]?нить(?!\p{L})/iu,
-];
 
 @Injectable()
 export class DailySynthesisExtractionService {
