@@ -80,6 +80,24 @@ export class SegmentationController {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Cross-Chat Topic Linking
+  // ─────────────────────────────────────────────────────────────
+
+  @Get(':id/related')
+  async findRelatedSegments(@Param('id', ParseUUIDPipe) id: string) {
+    return this.segmentationService.findRelatedSegments(id);
+  }
+
+  @Post(':id/link-related')
+  async linkRelatedSegments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { relatedSegmentIds: string[] },
+  ) {
+    await this.segmentationService.linkRelatedSegments(id, body.relatedSegmentIds);
+    return { linked: body.relatedSegmentIds.length };
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Auto-segmentation
   // ─────────────────────────────────────────────────────────────
 

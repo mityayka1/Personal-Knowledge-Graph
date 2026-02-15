@@ -210,6 +210,143 @@ export class SegmentationService {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Cross-Chat Topic Linking
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Find segments related to the given segment using three strategies:
+   * 1. Activity match — segments with the same activityId (different chat)
+   * 2. Keyword overlap — segments sharing 2+ keywords
+   * 3. Participant + time window — overlapping participants within ±24h
+   */
+  async findRelatedSegments(
+    segmentId: string,
+  ): Promise<Array<{ segmentId: string; matchType: string; score: number }>> {
+    const segment = await this.findOneSegment(segmentId);
+
+    const existingRelated = segment.relatedSegmentIds ?? [];
+    const excludeIds = [segmentId, ...existingRelated];
+
+    const results: Map<string, { matchType: string; score: number }> = new Map();
+
+    // Strategy 1: Activity match — same activityId, different chatId
+    if (segment.activityId) {
+      const activityMatches: Array<{ id: string }> = await this.dataSource.query(
+        `SELECT id FROM topical_segments
+         WHERE activity_id = $1
+           AND chat_id != $2
+           AND id != ALL($3::uuid[])
+           AND status != 'merged'`,
+        [segment.activityId, segment.chatId, excludeIds],
+      );
+
+      for (const row of activityMatches) {
+        results.set(row.id, { matchType: 'activity', score: 0.9 });
+      }
+    }
+
+    // Strategy 2: Keyword overlap — segments sharing 2+ keywords
+    if (segment.keywords?.length && segment.keywords.length >= 2) {
+      const keywordMatches: Array<{ id: string; overlap_count: string }> =
+        await this.dataSource.query(
+          `SELECT id, overlap_count FROM (
+             SELECT id,
+                    array_length(
+                      ARRAY(SELECT unnest(keywords) INTERSECT SELECT unnest($1::text[])),
+                      1
+                    ) AS overlap_count
+             FROM topical_segments
+             WHERE keywords && $1::text[]
+               AND id != ALL($2::uuid[])
+               AND status != 'merged'
+           ) sub
+           WHERE overlap_count >= 2`,
+          [segment.keywords, excludeIds],
+        );
+
+      for (const row of keywordMatches) {
+        const overlapCount = parseInt(row.overlap_count, 10);
+        const score = 0.6 + 0.1 * (overlapCount - 2);
+        const existing = results.get(row.id);
+        if (!existing || existing.score < score) {
+          results.set(row.id, { matchType: 'keyword_overlap', score: Math.min(score, 1.0) });
+        }
+      }
+    }
+
+    // Strategy 3: Participant + time window — overlapping participants within ±24h
+    if (segment.participantIds?.length) {
+      const participantMatches: Array<{ id: string }> = await this.dataSource.query(
+        `SELECT id FROM topical_segments
+         WHERE participant_ids && $1::uuid[]
+           AND id != ALL($2::uuid[])
+           AND status != 'merged'
+           AND started_at <= $3::timestamptz + INTERVAL '24 hours'
+           AND ended_at >= $4::timestamptz - INTERVAL '24 hours'`,
+        [segment.participantIds, excludeIds, segment.endedAt, segment.startedAt],
+      );
+
+      for (const row of participantMatches) {
+        const existing = results.get(row.id);
+        if (!existing || existing.score < 0.7) {
+          results.set(row.id, { matchType: 'participant_time', score: 0.7 });
+        }
+      }
+    }
+
+    // Sort by score DESC
+    const sorted = Array.from(results.entries())
+      .map(([sid, match]) => ({ segmentId: sid, matchType: match.matchType, score: match.score }))
+      .sort((a, b) => b.score - a.score);
+
+    this.logger.log(
+      `Found ${sorted.length} related segments for ${segmentId} ` +
+        `(activity: ${sorted.filter((s) => s.matchType === 'activity').length}, ` +
+        `keyword: ${sorted.filter((s) => s.matchType === 'keyword_overlap').length}, ` +
+        `participant: ${sorted.filter((s) => s.matchType === 'participant_time').length})`,
+    );
+
+    return sorted;
+  }
+
+  /**
+   * Bidirectional linking: add relatedIds to source segment
+   * AND add sourceId to each related segment.
+   */
+  async linkRelatedSegments(segmentId: string, relatedIds: string[]): Promise<void> {
+    if (!relatedIds.length) return;
+
+    // Verify source segment exists
+    await this.findOneSegment(segmentId);
+
+    // Add relatedIds to source segment (using array_cat + array_distinct to avoid duplicates)
+    await this.dataSource.query(
+      `UPDATE topical_segments
+       SET related_segment_ids = (
+         SELECT ARRAY(SELECT DISTINCT unnest(related_segment_ids || $2::uuid[]))
+       ),
+       updated_at = NOW()
+       WHERE id = $1`,
+      [segmentId, relatedIds],
+    );
+
+    // Add sourceId to each related segment (bidirectional)
+    for (const relatedId of relatedIds) {
+      await this.dataSource.query(
+        `UPDATE topical_segments
+         SET related_segment_ids = (
+           SELECT ARRAY(SELECT DISTINCT unnest(related_segment_ids || ARRAY[$2]::uuid[]))
+         ),
+         updated_at = NOW()
+         WHERE id = $1`,
+        [relatedId, segmentId],
+      );
+    }
+
+    this.logger.log(`Linked segment ${segmentId} with ${relatedIds.length} related segments`);
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // KnowledgePack CRUD
   // ─────────────────────────────────────────────────────────────
 
