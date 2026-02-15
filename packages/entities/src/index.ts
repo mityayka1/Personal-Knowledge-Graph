@@ -36,3 +36,5 @@ export * from './activity-member.entity';
 export * from './commitment.entity';
 // Phase D: Data Quality
 export * from './data-quality-report.entity';
+// Phase E: Knowledge Segmentation & Packing
+export * from './topical-segment.entity';
