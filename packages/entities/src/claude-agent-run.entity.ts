@@ -26,7 +26,9 @@ export type ClaudeTaskType =
   | 'description_enrichment'
   | 'event_cleanup_dedup'
   | 'event_activity_match'
-  | 'activity_semantic_dedup';
+  | 'activity_semantic_dedup'
+  | 'topic_segmentation'
+  | 'knowledge_packing';
 
 export type ExecutionMode = 'oneshot' | 'agent';
 
