@@ -16,7 +16,6 @@ import {
   ActionToolsProvider,
   ActivityToolsProvider,
   DataQualityToolsProvider,
-  KnowledgeToolsProvider,
 } from './tools';
 import { SearchModule } from '../search/search.module';
 import { ContextModule } from '../context/context.module';
@@ -80,7 +79,7 @@ import { SegmentationModule } from '../segmentation/segmentation.module';
     ActionToolsProvider,
     ActivityToolsProvider,
     DataQualityToolsProvider,
-    KnowledgeToolsProvider,
+    // KnowledgeToolsProvider provided by SegmentationModule (needs TypeORM repos)
   ],
   exports: [
     ClaudeAgentService,
@@ -95,7 +94,7 @@ import { SegmentationModule } from '../segmentation/segmentation.module';
     ActionToolsProvider,
     ActivityToolsProvider,
     DataQualityToolsProvider,
-    KnowledgeToolsProvider,
+    // KnowledgeToolsProvider exported by SegmentationModule
   ],
 })
 export class ClaudeAgentModule {}
