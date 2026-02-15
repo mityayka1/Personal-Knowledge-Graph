@@ -1,177 +1,351 @@
-# Plan: Качество извлечения данных — "Пойми контекст, потом извлекай"
+# Plan: Устранение циклических зависимостей (forwardRef)
 
 ## Context
 
-Extraction pipeline генерирует мусорные данные. Реальный пример:
-- **Извлечено**: Commitment "Переделать что-то в будущем" (conf: 0.7)
-- **Реальный разговор**: обсуждение выбора сервиса транскрипции голосовых для invapp-panavto
-- **Должно было быть**: "Использовать внутренний сервис транскрибации вместо OpenAI для invapp-panavto"
+После деплоя Phase E (Knowledge Packing) получили два каскадных DI-сбоя:
+1. `UndefinedModuleException` — SegmentationModule не мог резолвить ClaudeAgentModule
+2. `UnknownDependenciesException` — KnowledgeToolsProvider не находил TypeORM repos в контексте ClaudeAgentModule
 
-Предыдущие улучшения (noise filtering, fuzzy dedup, activity linking, client boost) уже реализованы и работают на production. Теперь нужно решить **фундаментальную проблему**: Claude анализирует сообщения по одному, вместо того чтобы сначала понять разговор целиком.
+**Корневая причина:** ClaudeAgentModule — "хаб" с 7 forwardRef-импортами, создающий хрупкие циклические зависимости. Каждый новый модуль (SegmentationModule) рискует сломать DI при деплое.
 
-## Root Causes
-
-| # | Причина | Влияние |
-|---|---------|---------|
-| 1 | **Per-message extraction** — промпт говорит "Проанализируй все сообщения" без инструкции понять контекст | Claude извлекает из одного сообщения без контекста беседы |
-| 2 | **Потеря контекста чата** — `chatCategory.title` (напр. "invapp-panavto") доступен, но НЕ передаётся в extraction | Claude не знает тему чата |
-| 3 | **Escape в vague filter** — `isVagueContent(title) && !args.date` пропускает мусор с датой | "что-то в будущем" с датой проходит фильтр |
-| 4 | **Нет anti-pattern примеров** — промпт описывает правила абстрактно, без примеров плохих извлечений | Claude не учится на ошибках |
-
-## Решение: 4 области изменений
-
-### Область 1: Prompt Restructuring — "Пойми, потом извлекай" (PRIMARY)
-
-**Файл:** `apps/pkg-core/src/modules/extraction/unified-extraction.service.ts`
-
-Заменить секцию ЗАДАНИЕ (строки 390-397) двухфазной инструкцией:
+### Текущий граф зависимостей (циклы)
 
 ```
-══════════════════════════════════════════
-ЗАДАНИЕ (2 фазы):
-══════════════════════════════════════════
-
-ФАЗА 1 — ПОЙМИ КОНТЕКСТ РАЗГОВОРА:
-Прочитай ВСЕ сообщения целиком. Определи:
-- О чём разговор в целом? Какая основная тема?
-- Какие решения были приняты?
-- Какие конкретные действия обсуждались?
-НЕ начинай извлечение до понимания общего контекста.
-
-ФАЗА 2 — ИЗВЛЕКИ ЗНАЧИМЫЕ ЭЛЕМЕНТЫ:
-Основываясь на понимании разговора, извлеки:
-- Конкретные факты (должность, компания, контакты)
-- Конкретные обещания и задачи с ясным описанием ЧТО ИМЕННО
-- Связи между людьми/организациями
-
-КРИТИЧНО: Каждый элемент должен:
-1. Быть понятен БЕЗ возврата к переписке
-2. Содержать конкретику, а не расплывчатые формулировки
-3. Быть привязан к контексту разговора (проект, тема, цель)
+ContextModule ──────→ ClaudeAgentModule ──────→ ContextModule       ← CYCLE
+EntityModule ───────→ ClaudeAgentModule ──────→ EntityModule        ← CYCLE
+NotificationModule ─→ ClaudeAgentModule ──────→ NotificationModule  ← CYCLE
+SegmentationModule ─→ ClaudeAgentModule ──────→ SegmentationModule  ← CYCLE
+ExtractionModule ───→ ClaudeAgentModule ──────→ ExtractionModule    ← CYCLE
+SummarizationModule → ClaudeAgentModule                             (one-way, OK)
+TelegramMiniApp ────→ ClaudeAgentModule                             (one-way, OK)
 ```
 
-Добавить anti-pattern примеры в секцию § СОБЫТИЯ (после правила 7, строка ~367):
+**Двойная роль ClaudeAgentModule:**
+1. Предоставляет core AI-сервисы (ClaudeAgentService, SchemaLoaderService) — это нужно всем доменным модулям
+2. Хостит tool providers, зависящие от доменных сервисов — это требует импорта доменных модулей
+
+---
+
+## Решение: Декомпозиция ClaudeAgentModule + Registration Pattern
+
+### Целевой граф зависимостей (без циклов)
 
 ```
-8. АНТИ-ПРИМЕРЫ — НЕ извлекай подобное:
-   ❌ "Переделать что-то в будущем" — нет конкретики. Правильно: "Перенести транскрибацию на внутренний сервис для invapp-panavto"
-   ❌ "Обсудить вопрос" — нет объекта. Правильно: "Согласовать стоимость лицензии $200/мес с клиентом X"
-   ❌ "Сделать задачу" — пересказ, не извлечение. Указывай ЧТО конкретно.
-   Правило: если title можно приложить к ЛЮБОМУ разговору — оно слишком абстрактное.
+ContextModule ──────→ ClaudeAgentCoreModule    (one-way ✅)
+EntityModule ───────→ ClaudeAgentCoreModule    (one-way ✅)
+NotificationModule ─→ ClaudeAgentCoreModule    (one-way ✅)
+SegmentationModule ─→ ClaudeAgentCoreModule    (one-way ✅)
+ExtractionModule ───→ ClaudeAgentCoreModule    (one-way ✅)
+SummarizationModule → ClaudeAgentCoreModule    (one-way ✅)
+TelegramMiniApp ────→ ClaudeAgentCoreModule    (one-way ✅)
+
+ClaudeAgentModule ──→ ClaudeAgentCoreModule    (one-way ✅)
+ClaudeAgentModule ──→ all domain modules       (one-way ✅, домены НЕ импортируют ClaudeAgentModule)
 ```
 
-Также добавить chat title в контекст промпта — новая секция после `${relationsSection}`:
+---
+
+## Шаг 1: Создать ClaudeAgentCoreModule
+
+**Новый файл:** `apps/pkg-core/src/modules/claude-agent/claude-agent-core.module.ts`
+
+Чистый модуль без доменных зависимостей:
 
 ```typescript
-const chatTitleSection = chatTitle
-  ? `\nЧАТ: "${chatTitle}"\nУчитывай название чата как контекст беседы.`
-  : '';
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([ClaudeAgentRun]),
+    // Только ConfigModule (implicit через NestJS)
+  ],
+  providers: [
+    ClaudeAgentService,
+    SchemaLoaderService,
+    RecallSessionService,
+    ToolsRegistryService,  // Refactored — без DI-зависимостей от tool providers
+  ],
+  exports: [
+    ClaudeAgentService,
+    SchemaLoaderService,
+    RecallSessionService,
+    ToolsRegistryService,
+  ],
+})
+export class ClaudeAgentCoreModule {}
 ```
 
-Изменить сигнатуру `buildUnifiedPrompt()` — добавить параметр `chatTitle?: string`.
+**Зависимости провайдеров (подтверждено чтением кода):**
+| Провайдер | Зависимости | Доменные? |
+|-----------|-------------|-----------|
+| ClaudeAgentService | ConfigService, ClaudeAgentRun repo, ToolsRegistryService | Нет ✅ |
+| SchemaLoaderService | ConfigService | Нет ✅ |
+| RecallSessionService | @InjectRedis() | Нет ✅ |
+| ToolsRegistryService | **Текущие:** 8 tool providers через @Optional+forwardRef → **После:** никаких | Нет ✅ |
 
-### Область 2: Chat Title Pipeline — передать название чата в extraction
+---
 
-Цепочка изменений для проброса `chatCategory.title`:
+## Шаг 2: Рефакторинг ToolsRegistryService — Registration Pattern
 
-**Файл 1:** `apps/pkg-core/src/modules/extraction/unified-extraction.types.ts`
-- Добавить `chatTitle?: string` в `UnifiedExtractionParams`
+**Файл:** `apps/pkg-core/src/modules/claude-agent/tools-registry.service.ts`
 
-**Файл 2:** `apps/pkg-core/src/modules/job/processors/fact-extraction.processor.ts`
-- Inject `ChatCategoryService` (из `ChatCategoryModule`)
-- В `processPrivateChat()`: получить `interaction` (уже загружается в `process()`), извлечь `telegram_chat_id` из `sourceMetadata`, вызвать `chatCategoryService.getCategory()`, получить `title`
-- Передать `chatTitle` в `extract()`
-- В `processGroupChat()`: аналогично, заменить `chatName: undefined` на реальный title
+### Было (constructor injection с forwardRef):
 
-**Файл 3:** `apps/pkg-core/src/modules/job/job.module.ts`
-- Добавить `ChatCategoryModule` в imports
+```typescript
+constructor(
+  private readonly searchToolsProvider: SearchToolsProvider,          // direct
+  private readonly entityToolsProvider: EntityToolsProvider,          // direct
+  private readonly eventToolsProvider: EventToolsProvider,            // direct
+  @Optional() @Inject(forwardRef(() => ContextToolsProvider))
+  private readonly contextToolsProvider: ContextToolsProvider | null, // forwardRef
+  @Optional() @Inject(forwardRef(() => ActionToolsProvider))
+  private readonly actionToolsProvider: ActionToolsProvider | null,   // forwardRef
+  // ... ещё 3 forwardRef
+)
+```
 
-**Файл 4:** `apps/pkg-core/src/modules/extraction/unified-extraction.service.ts`
-- В `extract()`: деструктурировать `chatTitle` из params
-- Передать `chatTitle` в `buildUnifiedPrompt()`
+### Стало (registration pattern):
 
-**Стратегия**: Lookup в processor через interaction.sourceMetadata.telegram_chat_id → ChatCategoryService.getCategory(). Это 1 простой indexed query на каждый extraction job (максимум раз в 10 минут), не влияет на performance.
+```typescript
+@Injectable()
+export class ToolsRegistryService {
+  private readonly providers = new Map<ToolCategory, ToolsProviderInterface>();
+  private cachedAllTools: ToolDefinition[] | null = null;
+  private categoryCache = new Map<string, ToolDefinition[]>();
 
-**Оптимизация**: Рефакторить `process()` чтобы всегда передавать loaded `interaction` в обе ветки (private/group), избегая двойной загрузки.
+  constructor() {} // Пустой конструктор — нет доменных зависимостей!
 
-### Область 3: Fix Vague Content Filter
+  /**
+   * Register a tool provider for a category.
+   * Called by tool providers in their onModuleInit().
+   */
+  registerProvider(category: ToolCategory, provider: ToolsProviderInterface): void {
+    this.providers.set(category, provider);
+    this.invalidateCache();
+    this.logger.log(`Registered tool provider for category: ${category}`);
+  }
 
-**Файл:** `apps/pkg-core/src/modules/extraction/tools/extraction-tools.provider.ts`
+  // getAllTools(), getToolsByCategory(), createMcpServer() — API не меняется
+  // Внутри вместо this.searchToolsProvider.getTools() → this.providers.get('search')?.getTools()
+}
+```
 
-Строка 627 — убрать `!args.date` escape:
+### Интерфейс ToolsProviderInterface:
+
+**Новый файл:** `apps/pkg-core/src/modules/claude-agent/tools/tools-provider.interface.ts`
+
+```typescript
+export interface ToolsProviderInterface {
+  getTools(): ToolDefinition[];
+  hasTools?(): boolean;
+}
+```
+
+---
+
+## Шаг 3: Tool Providers — самостоятельная регистрация
+
+Каждый tool provider реализует `OnModuleInit` и регистрируется в `ToolsRegistryService`:
+
+```typescript
+@Injectable()
+export class SearchToolsProvider implements OnModuleInit, ToolsProviderInterface {
+  constructor(
+    private readonly searchService: SearchService,
+    private readonly toolsRegistry: ToolsRegistryService,  // inject from CoreModule
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('search', this);
+  }
+
+  getTools(): ToolDefinition[] { /* ... без изменений ... */ }
+}
+```
+
+### Куда перенести tool providers
+
+| Provider | Текущее расположение | Новый модуль (providers) | Файл остаётся |
+|----------|---------------------|--------------------------|----------------|
+| SearchToolsProvider | ClaudeAgentModule | ClaudeAgentModule* | `claude-agent/tools/` |
+| EntityToolsProvider | ClaudeAgentModule | EntityModule | `claude-agent/tools/` |
+| EventToolsProvider | ClaudeAgentModule | ClaudeAgentModule* | `claude-agent/tools/` |
+| ContextToolsProvider | ClaudeAgentModule | ContextModule | `claude-agent/tools/` |
+| ActionToolsProvider | ClaudeAgentModule | NotificationModule | `claude-agent/tools/` |
+| ActivityToolsProvider | ClaudeAgentModule | ActivityModule | `claude-agent/tools/` |
+| DataQualityToolsProvider | DataQualityModule | DataQualityModule | `data-quality/` (уже там) |
+| KnowledgeToolsProvider | SegmentationModule | SegmentationModule | `segmentation/` (уже там) |
+
+*SearchToolsProvider и EventToolsProvider остаются в ClaudeAgentModule, т.к. SearchModule и EntityEventModule не создают циклов.
+
+**Физические файлы НЕ перемещаются** — только меняется, в каком модуле они зарегистрированы как providers. Это минимизирует diff и риск.
+
+---
+
+## Шаг 4: Обновить доменные модули
+
+### 4a. Заменить импорт ClaudeAgentModule → ClaudeAgentCoreModule
+
+Для модулей, которым нужен только ClaudeAgentService/SchemaLoader:
+
+| Модуль | Файл | Было | Стало |
+|--------|------|------|-------|
+| ContextModule | `context/context.module.ts` | `forwardRef(() => ClaudeAgentModule)` | `ClaudeAgentCoreModule` |
+| EntityModule | `entity/entity.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
+| NotificationModule | `notification/notification.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
+| SegmentationModule | `segmentation/segmentation.module.ts` | `forwardRef(() => ClaudeAgentModule)` | `ClaudeAgentCoreModule` |
+| ExtractionModule | `extraction/extraction.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
+| SummarizationModule | `summarization/summarization.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
+| TelegramMiniApp | `telegram-mini-app/telegram-mini-app.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
+
+### 4b. Добавить tool providers в доменные модули
+
+Модули, принимающие tool providers, должны:
+1. Импортировать `ClaudeAgentCoreModule` (для ToolsRegistryService)
+2. Добавить tool provider в `providers` array
+
+Пример для ContextModule:
+
+```typescript
+@Module({
+  imports: [
+    ClaudeAgentCoreModule,  // для ClaudeAgentService + ToolsRegistryService
+    // ... остальные импорты
+  ],
+  providers: [
+    ContextService,
+    ContextToolsProvider,  // NEW — раньше был в ClaudeAgentModule
+  ],
+  exports: [ContextService],
+})
+```
+
+### 4c. Убрать @Optional() + forwardRef() из tool providers
+
+Пример для ContextToolsProvider:
 
 ```typescript
 // БЫЛО:
-if (isVagueContent(args.title) && !args.date) {
+@Optional()
+@Inject(forwardRef(() => ContextService))
+private readonly contextService: ContextService | null,
 
-// СТАЛО:
-if (isVagueContent(args.title)) {
+// СТАЛО (ContextToolsProvider теперь в ContextModule, ContextService доступен напрямую):
+private readonly contextService: ContextService,
 ```
 
-**Обоснование**: "Переделать что-то в будущем" с любой датой — всё ещё мусор. Дата не компенсирует неконкретный title. Claude получит toolError и переформулирует с конкретикой.
+---
 
-Обновить сообщение об ошибке для лучшего in-context learning:
+## Шаг 5: Упростить ClaudeAgentModule
+
+**Файл:** `apps/pkg-core/src/modules/claude-agent/claude-agent.module.ts`
 
 ```typescript
-return toolError(
-  'Event title is too vague',
-  'Title contains placeholder words (что-то, как-нибудь). ' +
-  'Use specific details from conversation: project name, action object, person.',
-);
+@Module({
+  imports: [
+    ClaudeAgentCoreModule,
+    SearchModule,
+    EntityEventModule,
+    // Больше НЕ нужны forwardRef — домены не импортируют ClaudeAgentModule
+  ],
+  controllers: [
+    ClaudeAgentController,
+    AgentController,
+    ActivityEnrichmentController,
+  ],
+  providers: [
+    SearchToolsProvider,   // остаётся здесь (SearchModule не создаёт цикл)
+    EventToolsProvider,    // остаётся здесь (EntityEventModule не создаёт цикл)
+  ],
+  exports: [ClaudeAgentCoreModule],  // re-export Core для app.module
+})
+export class ClaudeAgentModule {}
 ```
 
-### Область 4: Аналогичные изменения для Group Extraction
+**Результат:** 0 forwardRef в ClaudeAgentModule (было 7).
 
-**Файл:** `apps/pkg-core/src/modules/extraction/group-extraction.service.ts`
+---
 
-Применить ту же двухфазную инструкцию в `buildGroupPrompt()` (строки 417-423):
-- Заменить ЗАДАНИЕ на двухфазную версию
-- Добавить anti-pattern примеры в секцию СОБЫТИЯ
+## Шаг 6: Обновить AppModule
 
-Chat title уже передаётся в group extraction через параметр `chatName`, но сейчас всегда `undefined` — это исправлено в Области 2.
+**Файл:** `apps/pkg-core/src/app.module.ts`
+
+Оставить `ClaudeAgentModule` в imports — он теперь re-экспортирует CoreModule + предоставляет контроллеры.
+
+---
+
+## Файлы для изменения
+
+| Файл | Тип | Описание |
+|------|-----|----------|
+| `claude-agent/claude-agent-core.module.ts` | CREATE | Новый Core-модуль |
+| `claude-agent/tools/tools-provider.interface.ts` | CREATE | Интерфейс для tool providers |
+| `claude-agent/tools-registry.service.ts` | MODIFY | Registration pattern вместо DI injection |
+| `claude-agent/claude-agent.module.ts` | MODIFY | Убрать 7 forwardRef, оставить Core + controllers |
+| `claude-agent/tools/search-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
+| `claude-agent/tools/entity-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
+| `claude-agent/tools/event-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
+| `claude-agent/tools/context-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider(), убрать @Optional |
+| `claude-agent/tools/action-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider(), убрать @Optional |
+| `claude-agent/tools/activity-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
+| `data-quality/data-quality-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
+| `segmentation/knowledge-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
+| `context/context.module.ts` | MODIFY | CoreModule + ContextToolsProvider |
+| `entity/entity.module.ts` | MODIFY | CoreModule + EntityToolsProvider |
+| `notification/notification.module.ts` | MODIFY | CoreModule + ActionToolsProvider |
+| `activity/activity.module.ts` | MODIFY | CoreModule + ActivityToolsProvider |
+| `segmentation/segmentation.module.ts` | MODIFY | CoreModule (уже KnowledgeToolsProvider) |
+| `data-quality/data-quality.module.ts` | MODIFY | CoreModule (уже DataQualityToolsProvider) |
+| `extraction/extraction.module.ts` | MODIFY | CoreModule |
+| `summarization/summarization.module.ts` | MODIFY | CoreModule |
+| `telegram-mini-app/telegram-mini-app.module.ts` | MODIFY | CoreModule |
+
+---
 
 ## Порядок реализации
 
-| # | Изменение | Файлы | Зависимости |
-|---|-----------|-------|-------------|
-| 1 | `chatTitle` в types | `unified-extraction.types.ts` | Нет |
-| 2 | Chat title lookup в processor | `fact-extraction.processor.ts`, `job.module.ts` | #1 |
-| 3 | Prompt restructuring + chat title | `unified-extraction.service.ts` | #1 |
-| 4 | Fix vague filter | `extraction-tools.provider.ts` | Нет |
-| 5 | Group extraction prompt | `group-extraction.service.ts` | Нет |
+| # | Шаг | Зависимости | Риск |
+|---|-----|-------------|------|
+| 1 | Создать `ToolsProviderInterface` | Нет | Низкий |
+| 2 | Рефакторинг `ToolsRegistryService` → registration pattern | #1 | Средний |
+| 3 | Создать `ClaudeAgentCoreModule` | #2 | Низкий |
+| 4 | Обновить все tool providers (+ OnModuleInit) | #1, #2 | Средний |
+| 5 | Обновить доменные модули (импорты + providers) | #3, #4 | Высокий |
+| 6 | Упростить `ClaudeAgentModule` | #5 | Средний |
+| 7 | Компиляция + тесты | #6 | — |
 
-Шаги 1→2→3 последовательны. Шаги 4 и 5 независимы.
+Шаги 1-3 можно делать без ломающих изменений. Шаги 4-6 нужно делать атомарно (одним коммитом), т.к. промежуточные состояния не скомпилируются.
 
-## Итого: файлы
-
-| Файл | Изменение |
-|------|-----------|
-| `unified-extraction.types.ts` | +1 строка: `chatTitle?: string` |
-| `fact-extraction.processor.ts` | +25 строк: DI ChatCategoryService, title lookup, передача в extract |
-| `job.module.ts` | +2 строки: import + ChatCategoryModule в imports |
-| `unified-extraction.service.ts` | ~40 строк: chatTitle param, промпт restructuring, anti-patterns |
-| `extraction-tools.provider.ts` | ~5 строк: убрать `!args.date`, обновить error message |
-| `group-extraction.service.ts` | ~20 строк: двухфазная инструкция + anti-patterns |
+---
 
 ## Существующие функции для reuse
 
-| Функция | Файл | Назначение |
-|---------|------|------------|
-| `ChatCategoryService.getCategory(telegramChatId)` | `chat-category.service.ts:206` | Получить ChatCategoryRecord с title |
-| `isVagueContent(text)` | `extraction-quality.constants.ts:37` | Проверка на vague patterns |
-| `isNoiseContent(text)` | `extraction-quality.constants.ts:42` | Проверка на noise patterns |
-| `InteractionService.findOne(id)` | interaction module | Загрузка interaction с sourceMetadata |
+| Функция/Сервис | Файл | Использование |
+|----------------|------|---------------|
+| `ToolDefinition` type | `claude-agent/tools/tool.types.ts` | Типизация tools |
+| `toolSuccess/toolError/toolEmptyResult` | `claude-agent/tools/tool.types.ts` | Результаты tools |
+| `ToolCategory` type | `claude-agent/claude-agent.types.ts` | Категории для registry |
+| `createSdkMcpServer` | `@anthropic-ai/claude-agent-sdk` | MCP server creation |
+
+---
 
 ## Verification
 
-1. **Компиляция**: `cd apps/pkg-core && npx tsc --noEmit` — без ошибок
-2. **Vague filter тест**: Вручную проверить `isVagueContent("Переделать что-то")` — должен отклоняться даже с датой
-3. **Chat title**: Запустить extraction на interaction с known telegram_chat_id — title должен появиться в промпте (через debug лог)
-4. **Production тест**: Отправить сообщения в чат invapp-panavto → extraction должен использовать контекст чата для извлечений
-5. **Anti-patterns**: Попытка создать "Сделать что-то" через create_event → должен получить toolError
+1. **Компиляция:** `cd apps/pkg-core && npx tsc --noEmit` — без ошибок
+2. **Grep проверка:** `grep -r "forwardRef" src/modules/claude-agent/` — должен быть 0 результатов в claude-agent
+3. **Unit тесты:** `cd apps/pkg-core && npx jest --passWithNoTests` — все проходят
+4. **Runtime проверка:** `pnpm dev` → проверить что все tool categories доступны через агент
+5. **Tool registration:** Добавить лог в ToolsRegistryService.registerProvider() → при старте должны зарегистрироваться все 8 категорий
+6. **Agent call:** POST `/agent/recall` с query — должен использовать search tools
+7. **Production deploy:** `docker compose build --no-cache pkg-core && docker compose up -d pkg-core` — container healthy
+
+---
 
 ## Ожидаемый результат
 
-**До**: Claude видит "надо переделать" в одном сообщении → извлекает "Переделать что-то в будущем"
-
-**После**: Claude видит все сообщения + название чата "invapp-panavto" → понимает что разговор о выборе сервиса транскрипции → извлекает "Использовать внутренний сервис транскрибации вместо OpenAI для invapp-panavto"
+| Метрика | До | После |
+|---------|-----|-------|
+| forwardRef в claude-agent.module.ts | 7 | 0 |
+| @Optional+forwardRef в tools-registry | 5 | 0 |
+| @Optional+forwardRef в tool providers | 3+ | 0 |
+| Циклических зависимостей через ClaudeAgentModule | 5 | 0 |
+| Модулей | 1 (ClaudeAgentModule) | 2 (Core + Tools/Controllers) |
+| Риск DI-сбоя при добавлении нового модуля | Высокий | Низкий |
