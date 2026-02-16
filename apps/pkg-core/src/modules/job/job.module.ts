@@ -11,6 +11,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { ExtractionModule } from '../extraction/extraction.module';
 import { EntityModule } from '../entity/entity.module';
 import { ChatCategoryModule } from '../chat-category/chat-category.module';
+import { SegmentationModule } from '../segmentation/segmentation.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { ChatCategoryModule } from '../chat-category/chat-category.module';
     forwardRef(() => ExtractionModule),
     forwardRef(() => EntityModule),
     ChatCategoryModule,
+    forwardRef(() => SegmentationModule),
   ],
   providers: [JobService, EmbeddingProcessor, FactExtractionProcessor],
   exports: [JobService],

@@ -2,12 +2,17 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, forwardRef, Logger, Optional } from '@nestjs/common';
 import { Job as BullJob } from 'bullmq';
 import { Interaction } from '@pkg/entities';
+import { DataSource } from 'typeorm';
 import { UnifiedExtractionService } from '../../extraction/unified-extraction.service';
 import { GroupExtractionService } from '../../extraction/group-extraction.service';
 import { EntityService } from '../../entity/entity.service';
 import { InteractionService } from '../../interaction/interaction.service';
 import { ChatCategoryService } from '../../chat-category/chat-category.service';
+import { TopicBoundaryDetectorService } from '../../segmentation/topic-boundary-detector.service';
+import { SegmentationService } from '../../segmentation/segmentation.service';
+import { OrphanSegmentLinkerService } from '../../segmentation/orphan-segment-linker.service';
 import { ExtractionJobData } from '../job.service';
+import { MessageData } from '../../extraction/extraction.types';
 
 @Processor('fact-extraction')
 export class FactExtractionProcessor extends WorkerHost {
@@ -25,6 +30,10 @@ export class FactExtractionProcessor extends WorkerHost {
     @Optional()
     @Inject(forwardRef(() => ChatCategoryService))
     private chatCategoryService: ChatCategoryService | null,
+    private readonly topicDetector: TopicBoundaryDetectorService,
+    private readonly segmentationService: SegmentationService,
+    private readonly orphanLinker: OrphanSegmentLinkerService,
+    private readonly dataSource: DataSource,
   ) {
     super();
   }
@@ -41,10 +50,14 @@ export class FactExtractionProcessor extends WorkerHost {
       let interaction: Interaction | null = null;
       try {
         interaction = await this.interactionService.findOne(interactionId);
-      } catch (e) {
-        this.logger.warn(
-          `Could not load interaction ${interactionId}, falling back to private chat flow`,
+      } catch (e: unknown) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        this.logger.error(
+          `Failed to load interaction ${interactionId}: ${err.message}. ` +
+            `Refusing to process — wrong chat type would corrupt data.`,
+          err.stack,
         );
+        throw err;
       }
 
       const chatType = interaction?.sourceMetadata?.chat_type;
@@ -92,6 +105,11 @@ export class FactExtractionProcessor extends WorkerHost {
         `${result.pendingEntities} pending entities`,
     );
 
+    // Fire-and-forget: trigger segmentation for processed messages
+    this.triggerSegmentation(interactionId, messages, chatTitle).catch((err) =>
+      this.logger.error(`[segmentation] Post-extraction segmentation failed for interaction ${interactionId}: ${err.message}`, err.stack),
+    );
+
     return {
       success: true,
       factsCreated: result.factsCreated,
@@ -119,6 +137,11 @@ export class FactExtractionProcessor extends WorkerHost {
         `${result.pendingEntities} pending entities`,
     );
 
+    // Fire-and-forget: trigger segmentation for processed messages
+    this.triggerSegmentation(interactionId, messages, chatTitle).catch((err) =>
+      this.logger.error(`[segmentation] Post-extraction segmentation failed for interaction ${interactionId}: ${err.message}`, err.stack),
+    );
+
     return {
       success: true,
       factsCreated: result.factsCreated,
@@ -126,6 +149,88 @@ export class FactExtractionProcessor extends WorkerHost {
       relationsCreated: result.relationsCreated,
       pendingEntities: result.pendingEntities,
     };
+  }
+
+  /**
+   * Trigger topical segmentation for messages processed by extraction.
+   * Runs after extraction completes — detects topic boundaries and creates TopicalSegments.
+   * Also links related segments across chats for cross-chat discovery.
+   */
+  private async triggerSegmentation(
+    interactionId: string,
+    messages: MessageData[],
+    chatTitle?: string,
+  ): Promise<void> {
+    // Resolve chatId and participants from the interaction
+    const interactionRows: Array<{ source_metadata: Record<string, unknown> }> =
+      await this.dataSource.query(
+        `SELECT source_metadata FROM interactions WHERE id = $1`,
+        [interactionId],
+      );
+
+    const chatId = interactionRows[0]?.source_metadata?.telegram_chat_id as string | undefined;
+    if (!chatId) {
+      this.logger.debug(`[segmentation] No telegram_chat_id for interaction ${interactionId}, skipping`);
+      return;
+    }
+
+    // Get participant entity IDs
+    const participants: Array<{ entity_id: string }> = await this.dataSource.query(
+      `SELECT DISTINCT ip.entity_id
+       FROM interaction_participants ip
+       WHERE ip.interaction_id = $1
+         AND ip.entity_id IS NOT NULL`,
+      [interactionId],
+    );
+    const participantIds = participants.map((p) => p.entity_id);
+
+    this.logger.log(
+      `[segmentation] Triggering post-extraction segmentation for interaction ${interactionId}: ` +
+        `${messages.length} messages, ${participantIds.length} participants`,
+    );
+
+    // Detect topics and create segments
+    const result = await this.topicDetector.detectAndCreate({
+      chatId,
+      interactionId,
+      messages,
+      participantIds,
+      chatTitle,
+    });
+
+    // Link related segments for cross-chat discovery
+    for (const segmentId of result.segmentIds) {
+      try {
+        const related = await this.segmentationService.findRelatedSegments(segmentId);
+        if (related.length > 0) {
+          const relatedIds = related.map((r) => r.segmentId);
+          await this.segmentationService.linkRelatedSegments(segmentId, relatedIds);
+        }
+      } catch (error: unknown) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn(
+          `[segmentation] Failed to link related segments for ${segmentId}: ${err.message}`,
+        );
+      }
+    }
+
+    // Sequentially link orphan segments (no activityId) to Activities
+    for (const segmentId of result.segmentIds) {
+      try {
+        await this.orphanLinker.linkOrphanSegment(segmentId);
+      } catch (err) {
+        this.logger.warn(
+          `[segmentation] Failed to link orphan segment ${segmentId}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    if (result.segmentCount > 0) {
+      this.logger.log(
+        `[segmentation] Post-extraction segmentation completed for interaction ${interactionId}: ` +
+          `${result.segmentCount} segments created, ${result.messagesAssigned} messages assigned`,
+      );
+    }
   }
 
   /**

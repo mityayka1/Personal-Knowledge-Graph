@@ -12,6 +12,8 @@ import {
   DAILY_SYNTHESIS_EXTRACTION_SCHEMA,
 } from './daily-synthesis-extraction.types';
 import { DraftExtractionService, DraftExtractionResult } from './draft-extraction.service';
+import { ProjectMatchingService } from './project-matching.service';
+import { PendingApprovalService } from '../pending-approval/pending-approval.service';
 import { VAGUE_PATTERNS } from './extraction-quality.constants';
 
 /**
@@ -33,9 +35,14 @@ import { VAGUE_PATTERNS } from './extraction-quality.constants';
 export class DailySynthesisExtractionService {
   private readonly logger = new Logger(DailySynthesisExtractionService.name);
 
+  /** Threshold above which we consider a project match strong enough to skip creation */
+  private static readonly MATCH_THRESHOLD = 0.8;
+
   constructor(
     private readonly claudeAgentService: ClaudeAgentService,
     private readonly settingsService: SettingsService,
+    private readonly projectMatchingService: ProjectMatchingService,
+    private readonly pendingApprovalService: PendingApprovalService,
     @InjectRepository(Activity)
     private readonly activityRepo: Repository<Activity>,
     @Optional()
@@ -190,10 +197,11 @@ export class DailySynthesisExtractionService {
    * Used by Telegram adapter to display approval UI.
    */
   async getPendingApprovalsForBatch(batchId: string): Promise<PendingApproval[]> {
-    // This will be implemented via PendingApprovalService
-    // For now, this is a placeholder showing the intended integration point
-    this.logger.debug(`[daily-extraction] getPendingApprovalsForBatch(${batchId})`);
-    return [];
+    const { items } = await this.pendingApprovalService.list({ batchId });
+    this.logger.debug(
+      `[daily-extraction] getPendingApprovalsForBatch(${batchId}): ${items.length} approvals`,
+    );
+    return items;
   }
 
   /**
@@ -479,38 +487,47 @@ ${synthesisText}
   }
 
   /**
-   * Match extracted projects to existing activities.
+   * Match extracted projects to existing activities using ProjectMatchingService.
+   *
+   * Uses Levenshtein-based fuzzy matching (threshold 0.8) instead of simple
+   * substring includes() to avoid false positives (e.g. "PKG" matching "PKG Dashboard").
+   * Projects that don't match strongly are left for DraftExtractionService.createDrafts()
+   * which has even more sophisticated matching with client/tags/description boosts.
    */
   private async matchProjectsToActivities(
     projects: DailySynthesisExtractionResponse['projects'],
     existingActivities: Activity[],
   ): Promise<DailySynthesisExtractionResponse['projects']> {
-    return projects.map((project) => {
+    const results: DailySynthesisExtractionResponse['projects'] = [];
+
+    for (const project of projects) {
       // If already matched by LLM, keep it
       if (project.existingActivityId) {
-        return project;
+        results.push(project);
+        continue;
       }
 
-      // Try fuzzy matching by name
-      const normalizedName = project.name.toLowerCase().trim();
-      const match = existingActivities.find((a) => {
-        const existingName = a.name.toLowerCase().trim();
-        return (
-          existingName === normalizedName ||
-          existingName.includes(normalizedName) ||
-          normalizedName.includes(existingName)
-        );
-      });
+      // Use ProjectMatchingService for fuzzy Levenshtein matching
+      const match = this.projectMatchingService.findBestMatchInList(
+        project.name,
+        existingActivities,
+      );
 
-      if (match) {
-        return {
+      if (match && match.similarity >= DailySynthesisExtractionService.MATCH_THRESHOLD) {
+        this.logger.debug(
+          `[daily-extraction] Matched project "${project.name}" → ` +
+            `"${match.activity.name}" (similarity: ${match.similarity.toFixed(3)})`,
+        );
+        results.push({
           ...project,
           isNew: false,
-          existingActivityId: match.id,
-        };
+          existingActivityId: match.activity.id,
+        });
+      } else {
+        results.push(project);
       }
+    }
 
-      return project;
-    });
+    return results;
   }
 }
