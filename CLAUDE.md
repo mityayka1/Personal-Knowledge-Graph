@@ -217,14 +217,29 @@ export class MyToolsProvider {
 }
 ```
 
-### Circular Dependencies
+### Tool Provider Registration Pattern
+
+Tool providers регистрируются через `ToolsProviderInterface` и `onModuleInit()`:
 
 ```typescript
-// При циклических зависимостях используй @Optional + forwardRef
-@Optional()
-@Inject(forwardRef(() => ContextService))
-private readonly contextService: ContextService | null,
+@Injectable()
+export class MyToolsProvider implements OnModuleInit, ToolsProviderInterface {
+  constructor(
+    private readonly myService: MyService,
+    private readonly toolsRegistry: ToolsRegistryService,
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('my-category', this);
+  }
+
+  getTools(): ToolDefinition[] { /* ... */ }
+}
 ```
+
+**Архитектура:** `ClaudeAgentCoreModule` экспортирует core-сервисы (ClaudeAgentService, ToolsRegistryService), доменные модули импортируют его и регистрируют свои tool providers. Циклических зависимостей нет.
+
+**ВАЖНО:** Никогда не используй `| null` union типы в конструкторах NestJS providers — TypeScript `reflect-metadata` генерирует `Object` вместо реального класса, что ломает DI. Подробнее: [docs/solutions/runtime-errors/typescript-null-union-nestjs-di-resolution-20260216.md](docs/solutions/runtime-errors/typescript-null-union-nestjs-di-resolution-20260216.md)
 
 ### Tool Categories
 
@@ -236,6 +251,10 @@ private readonly contextService: ContextService | null,
 | `entities` | get_entity_details, list_entities | Работа с людьми/организациями |
 | `events` | create_reminder, list_events | Напоминания, события |
 | `context` | get_entity_context | Синтез контекста |
+| `activities` | find_activity, create/update activities | Работа с проектами/задачами |
+| `actions` | draft_message, send_telegram | Отправка сообщений |
+| `data-quality` | audit, merge, resolve issues | Качество данных |
+| `knowledge` | segment, pack, find knowledge | Сегментация и упаковка знаний |
 | `all` | Все tools | Только если реально нужны все |
 
 ### Code Review Checklist

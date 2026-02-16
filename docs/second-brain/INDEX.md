@@ -20,8 +20,9 @@
 | [02-PHASE-C-EXTRACT-REACT.md](./02-PHASE-C-EXTRACT-REACT.md) | Фаза C: Extract & React (события, уведомления) | ✅ Completed |
 | [03-PHASE-A-ACT.md](./03-PHASE-A-ACT.md) | Фаза A: Act Capabilities (отправка сообщений) | 🔄 In Progress |
 | [04-TIMELINE-METRICS.md](./04-TIMELINE-METRICS.md) | Timeline, Success Metrics, Risk Mitigation | Reference |
-| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | 🔄 In Progress (Phase 1-5, DQ Remediation Completed) |
-| [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | 📋 Planned |
+| [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | ✅ Completed (Phase 1-6) |
+| [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | ✅ Completed |
+| [Knowledge System Evolution](../plans/2026-02-15-knowledge-system-evolution-plan.md) | Эволюция системы знаний — 3 волны улучшений | ✅ Completed |
 
 ---
 
@@ -50,7 +51,7 @@
 - Approval Flow через Telegram
 - Proactive action buttons
 
-### Phase D: Jarvis Foundation 🔄
+### Phase D: Jarvis Foundation ✅
 **Цель:** Полноценный проактивный ассистент
 
 - **Activity entity** — иерархическая модель всех дел (AREA → BUSINESS → PROJECT → TASK)
@@ -133,7 +134,7 @@
 
 Детали: [`docs/API_CONTRACTS.md`](../API_CONTRACTS.md) -- Data Quality API section
 
-### Phase E: Knowledge Packing 📋
+### Phase E: Knowledge Packing ✅
 **Цель:** Сегментация обсуждений по темам и ретроспективная упаковка знаний
 
 - **TopicalSegment entity** — семантические сегменты обсуждений (many-to-many с messages)
@@ -142,6 +143,28 @@
 - **PackingService** — еженедельная упаковка сегментов в знания
 - **Conflict Detection** — обнаружение противоречий между фактами
 - **Knowledge Traceability** — связь фактов с исходными обсуждениями
+
+#### Knowledge System Evolution — Completed
+
+3 волны улучшений системы знаний, реализованные после базовой Phase E.
+
+| Волна | Описание | Статус |
+|-------|----------|--------|
+| **Wave 1 — Fix Broken Links** | Persist InferredRelations, fix Commitment↔Activity linking, strengthen project dedup | ✅ Completed |
+| **Wave 2 — Deepen Extraction** | Activity enrichment, semantic dedup (embeddings), find_activity tool | ✅ Completed |
+| **Wave 3 — Knowledge Layer** | TopicBoundaryDetector, PackingService, Smart Fusion, Cross-Chat Linking, Entity Disambiguation | ✅ Completed |
+
+#### Architecture Refactoring — Completed
+
+| Компонент | Описание |
+|-----------|----------|
+| **ClaudeAgentCoreModule** | Чистый модуль без доменных зависимостей (ClaudeAgentService, SchemaLoader, ToolsRegistry) |
+| **Registration Pattern** | Tool providers самостоятельно регистрируются через `onModuleInit()` → `toolsRegistry.registerProvider()` |
+| **ToolsProviderInterface** | Декаплинг-интерфейс для tool providers |
+
+Результат: 0 forwardRef (было 7), 0 циклических зависимостей, 8/8 tool providers регистрируются.
+
+Детали: [`docs/plans/fuzzy-tinkering-allen.md`](../plans/fuzzy-tinkering-allen.md)
 
 ---
 
