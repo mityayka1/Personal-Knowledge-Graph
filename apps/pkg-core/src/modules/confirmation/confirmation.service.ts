@@ -217,7 +217,7 @@ export class ConfirmationService {
         `Failed to dispatch resolution for confirmation ${confirmation.id}: ${err.message}`,
         err.stack,
       );
-      // Record handler failure on confirmation so callers know the side-effect failed
+      // Record handler failure on confirmation so callers can check resolution.handlerError
       await this.repo.update(confirmation.id, {
         resolution: {
           ...(confirmation.resolution as Record<string, unknown> ?? {}),
@@ -225,7 +225,7 @@ export class ConfirmationService {
           handlerFailedAt: new Date().toISOString(),
         },
       });
-      throw error;
+      // Don't rethrow — error is recorded in DB; rethrowing breaks Telegram approval flow
     }
   }
 

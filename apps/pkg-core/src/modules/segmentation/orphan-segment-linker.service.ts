@@ -240,7 +240,9 @@ export class OrphanSegmentLinkerService {
       [segment.interactionId],
     );
 
-    return participants.map((p) => p.entity_id);
+    return participants
+      .filter((p) => p.entity_id && typeof p.entity_id === 'string')
+      .map((p) => p.entity_id);
   }
 
   /**

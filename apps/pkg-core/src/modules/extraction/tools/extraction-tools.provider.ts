@@ -553,8 +553,14 @@ export class ExtractionToolsProvider {
             }
             this.logger.warn(
               `[create_fact] TOCTOU: dedup found existing fact ${dedupResult.existingFactId} but it was not found in DB. ` +
-                `Falling through to draft creation for ${factType}="${factValue}" entity=${args.entityId}`,
+                `Skipping duplicate for ${factType}="${factValue}" entity=${args.entityId}`,
             );
+            return toolSuccess({
+              status: 'skipped_duplicate_toctou',
+              existingFactId: dedupResult.existingFactId,
+              reason: 'Existing fact was deleted between dedup check and load (TOCTOU). Skipping to avoid duplicate.',
+              message: 'Duplicate detected but original fact no longer exists. Skipped safely.',
+            });
           }
 
           // Grey zone (review) — also check via fusion if possible
