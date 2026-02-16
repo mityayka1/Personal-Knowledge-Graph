@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import {
@@ -7,6 +7,8 @@ import {
   handleToolError,
   type ToolDefinition,
 } from '../claude-agent/tools/tool.types';
+import type { ToolsProviderInterface } from '../claude-agent/tools/tools-provider.interface';
+import { ToolsRegistryService } from '../claude-agent/tools-registry.service';
 import { DataQualityService } from './data-quality.service';
 
 /**
@@ -21,11 +23,18 @@ import { DataQualityService } from './data-quality.service';
  * - Auto-fix detected data quality issues (duplicates, orphans, missing clients)
  */
 @Injectable()
-export class DataQualityToolsProvider {
+export class DataQualityToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(DataQualityToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
-  constructor(private readonly dataQualityService: DataQualityService) {}
+  constructor(
+    private readonly dataQualityService: DataQualityService,
+    private readonly toolsRegistry: ToolsRegistryService,
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('data-quality', this);
+  }
 
   /**
    * Check if tools are available

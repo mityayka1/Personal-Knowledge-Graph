@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -18,6 +18,8 @@ import {
   handleToolError,
   type ToolDefinition,
 } from '../claude-agent/tools/tool.types';
+import type { ToolsProviderInterface } from '../claude-agent/tools/tools-provider.interface';
+import { ToolsRegistryService } from '../claude-agent/tools-registry.service';
 import { SegmentationService } from './segmentation.service';
 
 /**
@@ -35,7 +37,7 @@ const MAX_MESSAGE_PREVIEW_LENGTH = 300;
  * - Trace facts and commitments back to source discussion segments
  */
 @Injectable()
-export class KnowledgeToolsProvider {
+export class KnowledgeToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(KnowledgeToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
@@ -50,7 +52,12 @@ export class KnowledgeToolsProvider {
     @InjectRepository(Commitment)
     private readonly commitmentRepo: Repository<Commitment>,
     private readonly dataSource: DataSource,
+    private readonly toolsRegistry: ToolsRegistryService,
   ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('knowledge', this);
+  }
 
   /**
    * Check if tools are available

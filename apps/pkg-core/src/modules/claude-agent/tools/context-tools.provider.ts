@@ -1,52 +1,40 @@
-import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { toolSuccess, handleToolError, type ToolDefinition } from './tool.types';
+import type { ToolsProviderInterface } from './tools-provider.interface';
+import { ToolsRegistryService } from '../tools-registry.service';
 import { ContextService } from '../../context/context.service';
 
 /**
- * Provider for context-related tools
- *
- * Uses @Optional + forwardRef injection to handle bidirectional module imports:
- * - ContextModule imports ClaudeAgentModule (for ClaudeAgentService)
- * - ClaudeAgentModule imports ContextModule (for ContextService here)
- *
- * If ContextService is not available during DI resolution (due to module
- * initialization order), context tools will be disabled gracefully.
+ * Provider for context-related tools.
+ * Registered in ContextModule, self-registers with ToolsRegistryService.
  */
 @Injectable()
-export class ContextToolsProvider {
+export class ContextToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(ContextToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
-  private readonly isAvailable: boolean;
 
   constructor(
-    @Optional()
-    @Inject(forwardRef(() => ContextService))
-    private readonly contextService: ContextService | null,
-  ) {
-    this.isAvailable = contextService !== null;
-    if (!this.isAvailable) {
-      this.logger.warn('ContextService not available - context tools will be disabled');
-    }
+    private readonly contextService: ContextService,
+    private readonly toolsRegistry: ToolsRegistryService,
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('context', this);
   }
 
   /**
    * Check if context tools are available
    */
   hasTools(): boolean {
-    return this.isAvailable;
+    return true;
   }
 
   /**
    * Get context tools (cached)
-   * Returns empty array if ContextService is not available
    */
   getTools(): ToolDefinition[] {
-    if (!this.isAvailable) {
-      return [];
-    }
-
     if (!this.cachedTools) {
       this.cachedTools = this.createTools();
       this.logger.debug(`Created ${this.cachedTools.length} context tools`);
@@ -58,12 +46,6 @@ export class ContextToolsProvider {
    * Create tool definitions
    */
   private createTools() {
-    // Capture in local variable for type safety in closure
-    const contextService = this.contextService;
-    if (!contextService) {
-      return [];
-    }
-
     return [
       tool(
         'get_entity_context',
@@ -79,7 +61,7 @@ Uses tiered data retrieval: recent messages (< 7 days), summaries (7-90 days), a
         },
         async (args) => {
           try {
-            const context = await contextService.generateContext({
+            const context = await this.contextService.generateContext({
               entityId: args.entityId,
               taskHint: args.taskHint,
             });

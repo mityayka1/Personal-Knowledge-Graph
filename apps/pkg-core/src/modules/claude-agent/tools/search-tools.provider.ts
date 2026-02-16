@@ -1,7 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { toolSuccess, toolEmptyResult, handleToolError, type ToolDefinition } from './tool.types';
+import type { ToolsProviderInterface } from './tools-provider.interface';
+import { ToolsRegistryService } from '../tools-registry.service';
 import { SearchService } from '../../search/search.service';
 
 /**
@@ -14,11 +16,18 @@ const MAX_CONTENT_PREVIEW_LENGTH = 500;
  * Implements NestJS Injectable pattern with tool caching
  */
 @Injectable()
-export class SearchToolsProvider {
+export class SearchToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(SearchToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
-  constructor(private readonly searchService: SearchService) {}
+  constructor(
+    private readonly searchService: SearchService,
+    private readonly toolsRegistry: ToolsRegistryService,
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('search', this);
+  }
 
   /**
    * Get search tools (cached)

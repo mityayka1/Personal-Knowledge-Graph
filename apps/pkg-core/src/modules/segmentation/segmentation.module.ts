@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TopicalSegment, KnowledgePack, Interaction, Message, EntityFact, Commitment } from '@pkg/entities';
 import { SegmentationService } from './segmentation.service';
@@ -9,7 +9,7 @@ import { PackingController } from './packing.controller';
 import { SegmentationJobService } from './segmentation-job.service';
 import { PackingJobService } from './packing-job.service';
 import { KnowledgeToolsProvider } from './knowledge-tools.provider';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
 import { SettingsModule } from '../settings/settings.module';
 
 /**
@@ -25,7 +25,7 @@ import { SettingsModule } from '../settings/settings.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([TopicalSegment, KnowledgePack, Interaction, Message, EntityFact, Commitment]),
-    forwardRef(() => ClaudeAgentModule),
+    ClaudeAgentCoreModule,
     SettingsModule,
   ],
   controllers: [SegmentationController, PackingController],

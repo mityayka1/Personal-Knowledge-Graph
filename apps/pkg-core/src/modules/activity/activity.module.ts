@@ -6,6 +6,8 @@ import { ActivityMemberService } from './activity-member.service';
 import { ActivityValidationService } from './activity-validation.service';
 import { CommitmentService } from './commitment.service';
 import { ActivityController } from './activity.controller';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
+import { ActivityToolsProvider } from '../claude-agent/tools';
 
 /**
  * ActivityModule — модуль для управления активностями.
@@ -22,9 +24,10 @@ import { ActivityController } from './activity.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Activity, ActivityMember, Commitment, EntityRecord]),
+    ClaudeAgentCoreModule,
   ],
   controllers: [ActivityController],
-  providers: [ActivityService, ActivityMemberService, ActivityValidationService, CommitmentService],
-  exports: [ActivityService, ActivityMemberService, ActivityValidationService, CommitmentService],
+  providers: [ActivityService, ActivityMemberService, ActivityValidationService, CommitmentService, ActivityToolsProvider],
+  exports: [ActivityService, ActivityMemberService, ActivityValidationService, CommitmentService, ActivityToolsProvider],
 })
 export class ActivityModule {}

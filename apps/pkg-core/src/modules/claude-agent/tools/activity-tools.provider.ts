@@ -1,7 +1,9 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { toolSuccess, toolEmptyResult, handleToolError, type ToolDefinition } from './tool.types';
+import type { ToolsProviderInterface } from './tools-provider.interface';
+import { ToolsRegistryService } from '../tools-registry.service';
 import { ActivityService } from '../../activity/activity.service';
 import { ActivityValidationService } from '../../activity/activity-validation.service';
 import { ActivityMemberService } from '../../activity/activity-member.service';
@@ -24,20 +26,21 @@ import {
  * - Get upcoming deadlines
  */
 @Injectable()
-export class ActivityToolsProvider {
+export class ActivityToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(ActivityToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
   constructor(
-    @Inject(forwardRef(() => ActivityService))
     private readonly activityService: ActivityService,
-    @Inject(forwardRef(() => ActivityValidationService))
     private readonly activityValidationService: ActivityValidationService,
-    @Inject(forwardRef(() => ActivityMemberService))
     private readonly activityMemberService: ActivityMemberService,
-    @Inject(forwardRef(() => CommitmentService))
     private readonly commitmentService: CommitmentService,
+    private readonly toolsRegistry: ToolsRegistryService,
   ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('activities', this);
+  }
 
   /**
    * Check if tools are available

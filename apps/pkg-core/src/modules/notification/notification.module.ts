@@ -33,7 +33,10 @@ import { FactConflictService } from './fact-conflict.service';
 import { FactConflictController } from './fact-conflict.controller';
 import { SettingsModule } from '../settings/settings.module';
 import { EntityModule } from '../entity/entity.module';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
+import { ActionToolsProvider } from '../claude-agent/tools';
+import { EntityEventModule } from '../entity-event/entity-event.module';
+import { ContextModule } from '../context/context.module';
 
 @Module({
   imports: [
@@ -61,7 +64,9 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     }),
     SettingsModule,
     forwardRef(() => EntityModule),
-    forwardRef(() => ClaudeAgentModule),
+    ClaudeAgentCoreModule,
+    EntityEventModule,
+    ContextModule,
   ],
   controllers: [NotificationTriggerController, DigestActionController, ApprovalController, BriefController, FactConflictController],
   providers: [
@@ -77,6 +82,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
     BriefStateService,
     BriefService,
     FactConflictService,
+    ActionToolsProvider,
   ],
   exports: [
     TelegramNotifierService,

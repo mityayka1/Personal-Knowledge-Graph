@@ -13,6 +13,7 @@ import { DataQualityController } from './data-quality.controller';
 import { OrphanResolutionService } from './orphan-resolution.service';
 import { ActivityModule } from '../activity/activity.module';
 import { ExtractionModule } from '../extraction/extraction.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
 
 /**
  * DataQualityModule -- data quality auditing and issue resolution.
@@ -34,6 +35,7 @@ import { ExtractionModule } from '../extraction/extraction.module';
     ]),
     ActivityModule,
     forwardRef(() => ExtractionModule),
+    ClaudeAgentCoreModule,
   ],
   controllers: [DataQualityController],
   providers: [DataQualityService, OrphanResolutionService, DataQualityToolsProvider],

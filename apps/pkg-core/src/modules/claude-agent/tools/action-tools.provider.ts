@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import {
@@ -7,6 +7,8 @@ import {
   handleToolError,
   type ToolDefinition,
 } from './tool.types';
+import type { ToolsProviderInterface } from './tools-provider.interface';
+import { ToolsRegistryService } from '../tools-registry.service';
 import { EntityService } from '../../entity/entity.service';
 import { EntityEventService } from '../../entity-event/entity-event.service';
 import { ContextService } from '../../context/context.service';
@@ -32,25 +34,21 @@ const DRAFT_SCHEMA = {
  * It creates a pending approval that must be confirmed by the user.
  */
 @Injectable()
-export class ActionToolsProvider {
+export class ActionToolsProvider implements OnModuleInit, ToolsProviderInterface {
   private readonly logger = new Logger(ActionToolsProvider.name);
   private cachedTools: ToolDefinition[] | null = null;
 
   constructor(
-    @Inject(forwardRef(() => EntityService))
     private readonly entityService: EntityService,
     private readonly entityEventService: EntityEventService,
-    @Optional()
-    @Inject(forwardRef(() => ContextService))
-    private readonly contextService: ContextService | null,
-    @Optional()
-    @Inject(forwardRef(() => ClaudeAgentService))
-    private readonly claudeAgentService: ClaudeAgentService | null,
-    @Optional()
-    @Inject(forwardRef(() => ApprovalService))
-    private readonly approvalService: ApprovalService | null,
-  ) {
-    this.logger.log(`ActionToolsProvider initialized. ApprovalService available: ${!!this.approvalService}`);
+    private readonly contextService: ContextService,
+    private readonly claudeAgentService: ClaudeAgentService,
+    private readonly approvalService: ApprovalService,
+    private readonly toolsRegistry: ToolsRegistryService,
+  ) {}
+
+  onModuleInit() {
+    this.toolsRegistry.registerProvider('actions', this);
   }
 
   /**

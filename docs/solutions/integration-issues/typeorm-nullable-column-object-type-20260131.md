@@ -101,6 +101,10 @@ grep -n "design:type.*Object" packages/entities/dist/*.js
 - `packages/entities/src/pending-approval.entity.ts` - исправленная entity
 - `apps/pkg-core/src/database/migrations/*-add-pending-approval.ts` - миграция
 
+## Related Issues
+
+- See also: [TypeScript null union breaks NestJS DI](../runtime-errors/typescript-null-union-nestjs-di-resolution-20260216.md) — same `reflect-metadata` root cause but for NestJS constructor DI instead of TypeORM columns
+
 ## Ссылки
 
 - [TypeORM Column Types](https://typeorm.io/entities#column-types)

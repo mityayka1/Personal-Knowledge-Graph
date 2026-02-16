@@ -41,7 +41,7 @@ import { PendingApprovalModule } from '../pending-approval/pending-approval.modu
 import { InteractionModule } from '../interaction/interaction.module';
 import { EntityModule } from '../entity/entity.module';
 import { EntityEventModule } from '../entity-event/entity-event.module';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
 import { SettingsModule } from '../settings/settings.module';
 import { SearchModule } from '../search/search.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
@@ -76,7 +76,7 @@ import { JobModule } from '../job/job.module';
     forwardRef(() => InteractionModule),
     forwardRef(() => EntityModule),
     EntityEventModule,
-    forwardRef(() => ClaudeAgentModule),
+    ClaudeAgentCoreModule,
     SettingsModule,
     SearchModule,
     EmbeddingModule,

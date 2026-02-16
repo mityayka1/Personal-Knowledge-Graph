@@ -14,7 +14,7 @@ import { SummarizationProcessor } from './summarization.processor';
 import { SummarizationController } from './summarization.controller';
 import { EntityProfileService } from './entity-profile.service';
 import { EntityProfileProcessor } from './entity-profile.processor';
-import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
+import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
 
 @Module({
   imports: [
@@ -44,7 +44,7 @@ import { ClaudeAgentModule } from '../claude-agent/claude-agent.module';
         backoff: { type: 'exponential', delay: 120000 },
       },
     }),
-    ClaudeAgentModule,
+    ClaudeAgentCoreModule,
   ],
   controllers: [SummarizationController],
   providers: [
