@@ -1,9 +1,12 @@
 # Morning Brief Integration Fixes — План исправления
 
-> **Статус:** 📋 Обсуждение с командой
+> **Статус:** ✅ Completed (verified 2026-02-16)
 > **Дата:** 2026-01-30
 > **Ветка:** feat/activity-foundation
 > **Ревью:** Architecture + Business Logic + Data Integrity
+>
+> **Результат аудита 2026-02-16:** Все критические и архитектурные фиксы реализованы.
+> Оставшиеся задачи (FK constraints #18, PAUSED documentation #14) — product decisions.
 
 ---
 
@@ -13,17 +16,14 @@
 
 ---
 
-## Фаза 1: Critical Fixes (блокируют релиз)
+## Фаза 1: Critical Fixes (блокируют релиз) — ✅ ALL DONE
 
-| # | Задача | Severity | Effort |
-|---|--------|----------|--------|
-| #19 | Дедупликация EntityEvent vs Commitment | 🔴 CRITICAL | 2h |
-| #15 | Status handlers для Activity/Commitment | 🔴 CRITICAL | 2h |
-| #13 | Фильтр dueDate: IsNull() в commitments | 🔴 CRITICAL | 30m |
-| #17 | Обработка NULL deadline | 🔴 CRITICAL | 1h |
-
-**Общее время:** ~6 часов
-**Результат:** Brief работает корректно, данные не дублируются, статусы обновляются
+| # | Задача | Severity | Статус | Где реализовано |
+|---|--------|----------|--------|-----------------|
+| #19 | Дедупликация EntityEvent vs Commitment | 🔴 CRITICAL | ✅ Done | `digest.service.ts:211-224` — `seenSourceMessageIds` Set |
+| #15 | Status handlers для Activity/Commitment | 🔴 CRITICAL | ✅ Done | `brief.service.ts:209-231` — cases 'activity' и 'commitment' |
+| #13 | Фильтр dueDate: IsNull() в commitments | 🔴 CRITICAL | ✅ Done | `brief-data-provider.service.ts:157` — `And(Not(IsNull()), LessThan(now))` |
+| #17 | Обработка NULL deadline | 🔴 CRITICAL | ✅ Done | `brief-data-provider.service.ts:183-189` — отдельная секция для commitments без dueDate |
 
 ### Детали решений
 
@@ -70,41 +70,23 @@ case 'commitment':
 
 ---
 
-## Фаза 2: Architecture Improvements
+## Фаза 2: Architecture Improvements — ✅ ALL DONE
 
-| # | Задача | Severity | Effort | Blocked By |
-|---|--------|----------|--------|------------|
-| #16 | Extract BriefDataProvider | 🟠 HIGH | 4h | #19, #13 |
-| #20 | Priority sorting | 🟡 MEDIUM | 1h | — |
-| #11 | UTC timezone | 🟡 MEDIUM | 1h | — |
-
-**Общее время:** ~6 часов
-**Результат:** Чистая архитектура, корректные timezone, приоритеты в UI
-
-### BriefDataProvider Interface
-```typescript
-@Injectable()
-export class BriefDataProvider {
-  async getMorningBriefData(): Promise<MorningBriefData> {
-    // Все 7 запросов здесь
-    // Дедупликация здесь
-    // Сортировка по приоритету здесь
-  }
-}
-```
+| # | Задача | Severity | Статус | Где реализовано |
+|---|--------|----------|--------|-----------------|
+| #16 | Extract BriefDataProvider | 🟠 HIGH | ✅ Done | `brief-data-provider.service.ts` — отдельный сервис, 5 консолидированных запросов |
+| #20 | Priority sorting | 🟡 MEDIUM | ✅ Done | `digest.service.ts:249-263` — overdue first → meetings → alphabetical |
+| #11 | UTC timezone | 🟡 MEDIUM | ✅ Done | `digest.service.ts:53-64` — `startOf('day')` в UTC |
 
 ---
 
-## Фаза 3: Long-term & Data Integrity
+## Фаза 3: Long-term & Data Integrity — PARTIAL (product decisions pending)
 
-| # | Задача | Severity | Effort | Notes |
+| # | Задача | Severity | Статус | Notes |
 |---|--------|----------|--------|-------|
-| #18 | FK constraints migration | 🟠 HIGH | 2h | Требует product decision |
-| #12 | Consolidate queries | 🟡 MEDIUM | 2h | Blocked by #16 |
-| #14 | Document PAUSED decision | 🟡 MEDIUM | 30m | Product decision |
-
-**Общее время:** ~5 часов
-**Результат:** Data integrity, оптимизация запросов
+| #18 | FK constraints migration | 🟠 HIGH | ⏳ Pending | Требует product decision (ON DELETE strategy) |
+| #12 | Consolidate queries | 🟡 MEDIUM | ✅ Done | Консолидировано в `brief-data-provider.service.ts` |
+| #14 | Document PAUSED decision | 🟡 MEDIUM | ⏳ Pending | Product decision — показывать ли PAUSED с просроченным дедлайном |
 
 ---
 

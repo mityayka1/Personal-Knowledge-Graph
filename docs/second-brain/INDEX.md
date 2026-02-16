@@ -166,6 +166,67 @@
 
 Детали: [`docs/plans/fuzzy-tinkering-allen.md`](../plans/fuzzy-tinkering-allen.md)
 
+#### Morning Brief Integration Fixes — Completed (verified 2026-02-16)
+
+Все критические и архитектурные фиксы реализованы. Оставшиеся задачи — product decisions (FK constraints, PAUSED status).
+
+Детали: [`docs/plans/brief-integration-fixes.md`](../plans/brief-integration-fixes.md)
+
+---
+
+## Известные пробелы и технический долг (аудит 2026-02-16)
+
+### Extraction Pipeline — разрыв функциональности между путями
+
+Система имеет три пути extraction, но **функциональность распределена неравномерно**:
+
+| Возможность | DraftExtraction (oneshot) | UnifiedExtraction (agent) | SecondBrainExtraction |
+|-------------|:-------------------------:|:-------------------------:|:---------------------:|
+| Smart Fusion (FactFusionService) | ✅ | ❌ | ✅ (через Draft) |
+| ProjectMatchingService | ✅ | ❌ | ✅ (через Draft) |
+| Task Dedup (Levenshtein) | ✅ | ❌ | ✅ (через Draft) |
+| Semantic Dedup (embeddings) | ✅ | ❌ | ✅ (через Draft) |
+| ClientResolutionService | ✅ | ❌ | ✅ (через Draft) |
+| ActivityMember wiring | ✅ | ❌ | ✅ (через Draft) |
+| create_fact без дедупликации | — | ⚠️ Да | — |
+
+**Риск:** UnifiedExtractionService (agent mode, приватные чаты) создаёт факты без dedup и fusion → дубликаты в БД.
+
+### Другие пробелы
+
+| Проблема | Файл | Описание |
+|----------|------|----------|
+| `getPendingApprovalsForBatch()` — stub | `daily-synthesis-extraction.service.ts:192-197` | Возвращает `[]`, approval flow не интегрирован |
+| `matchProjectsToActivities()` — substring only | `daily-synthesis-extraction.service.ts:484-515` | Не использует ProjectMatchingService (fuzzy matching) |
+| Orphaned TopicalSegments | `packing-job.service.ts` | Сегменты без activityId логируются, но не линкуются автоматически |
+| Birthday lookup — TODO | `brief-data-provider.service.ts:103` | Комментарий TODO, поиск дней рождения не реализован |
+
+### Confirmation System — неполные обработчики
+
+В `confirmation.service.ts` реализован только обработчик `fact_created`. Три типа событий остаются без обработки:
+
+| Handler | Статус | Влияние |
+|---------|--------|---------|
+| `fact_created` | ✅ Реализован | — |
+| `fact_value` | ❌ TODO | Изменения значений фактов не подтверждаются |
+| `identifier_attributed` | ❌ TODO | Привязка идентификаторов не подтверждается |
+| `entity_merged` | ❌ TODO | Слияние сущностей не подтверждается |
+
+### Segmentation Pipeline — не интегрирован в extraction
+
+Сегментация (Phase E) **реализована**, но **не вызывается из extraction pipeline**:
+- `SegmentationJobService` работает только по cron (каждый час)
+- После extraction фактов/событий TopicalSegments НЕ создаются
+- PackingJobService (weekly) пакует только сегменты с `activityId`, orphans пропускает
+- **Результат:** Knowledge Packing фактически бездействует — нет входных данных
+
+### Тест-покрытие контроллеров — 23%
+
+Из 39 контроллеров только 9 имеют `.spec.ts` файлы. Непокрытые критические контроллеры:
+- `message.controller.ts`, `interaction.controller.ts`
+- `topical-segment.controller.ts`, `knowledge-pack.controller.ts`
+- `entity-fact.controller.ts`, `entity-relation.controller.ts`
+
 ---
 
 ## Quick Links
