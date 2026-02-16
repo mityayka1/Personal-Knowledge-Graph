@@ -32,7 +32,7 @@ import { SegmentationModule } from '../segmentation/segmentation.module';
     forwardRef(() => ExtractionModule),
     forwardRef(() => EntityModule),
     ChatCategoryModule,
-    SegmentationModule,
+    forwardRef(() => SegmentationModule),
   ],
   providers: [JobService, EmbeddingProcessor, FactExtractionProcessor],
   exports: [JobService],

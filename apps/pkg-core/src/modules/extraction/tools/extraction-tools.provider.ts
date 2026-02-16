@@ -539,7 +539,7 @@ export class ExtractionToolsProvider {
               }
             }
 
-            // Existing fact not found (deleted between dedup check and load) — fall through to create
+            // No fusion service available — treat as simple duplicate skip
             if (!this.factFusionService) {
               this.logger.debug(
                 `[create_fact] Skipped duplicate ${factType}="${factValue}" for entity ${args.entityId} — no fusion service`,

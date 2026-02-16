@@ -69,7 +69,7 @@ const SIMILARITY_THRESHOLD = 0.8;
  * 1. Из сегмента получает interactionId → participants → entityIds
  * 2. Для каждого участника ищет его активные Activities (PROJECT/TASK/INITIATIVE)
  * 3. Сравнивает summary/topic сегмента с name/description Activity (Levenshtein similarity)
- * 4. Если similarity >= 0.6 — привязывает сегмент к лучшей Activity
+ * 4. Если similarity >= 0.8 — привязывает сегмент к лучшей Activity
  *
  * Phase E: Knowledge Segmentation & Packing
  */
