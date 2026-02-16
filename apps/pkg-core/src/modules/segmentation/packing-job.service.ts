@@ -4,12 +4,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TopicalSegment, SegmentStatus } from '@pkg/entities';
 import { PackingService } from './packing.service';
+import { OrphanSegmentLinkerService } from './orphan-segment-linker.service';
 import { SettingsService } from '../settings/settings.service';
 
 /**
  * PackingJobService — weekly cron job for auto-packing segments into KnowledgePacks.
  *
  * Runs every Sunday at 03:00 Moscow time.
+ * Before packing, attempts to link orphan segments to Activities via OrphanSegmentLinkerService.
  * For each Activity with >= MIN_SEGMENTS packable segments,
  * calls PackingService.packByActivity() to synthesize consolidated knowledge.
  *
@@ -27,6 +29,7 @@ export class PackingJobService {
     @InjectRepository(TopicalSegment)
     private readonly segmentRepo: Repository<TopicalSegment>,
     private readonly packingService: PackingService,
+    private readonly orphanLinker: OrphanSegmentLinkerService,
     private readonly settingsService: SettingsService,
   ) {}
 
@@ -77,7 +80,7 @@ export class PackingJobService {
         `(${eligible.length} eligible, ${skipped} skipped < ${PackingJobService.MIN_SEGMENTS} segments)`,
       );
 
-      // Log orphan segments (no activityId) — they need manual linking
+      // Attempt to link orphan segments to Activities before packing
       const orphanCount = await this.segmentRepo
         .createQueryBuilder('s')
         .where('s.activity_id IS NULL')
@@ -87,9 +90,50 @@ export class PackingJobService {
         .getCount();
 
       if (orphanCount > 0) {
-        this.logger.warn(
-          `[packing-job] ${orphanCount} orphan segments without activityId — need manual linking`,
+        this.logger.log(
+          `[packing-job] Found ${orphanCount} orphan segments — attempting auto-linking`,
         );
+
+        try {
+          const linkResult = await this.orphanLinker.linkAllOrphans();
+          this.logger.log(
+            `[packing-job] Orphan linking completed: ${linkResult.linked}/${linkResult.total} linked, ` +
+              `${linkResult.errors} errors`,
+          );
+
+          // Re-query activities after linking — some may now have enough segments
+          if (linkResult.linked > 0) {
+            const updatedActivityRows = await this.segmentRepo
+              .createQueryBuilder('s')
+              .select('s.activity_id', 'activityId')
+              .addSelect('COUNT(*)::int', 'segmentCount')
+              .where('s.activity_id IS NOT NULL')
+              .andWhere('s.status IN (:...statuses)', {
+                statuses: [SegmentStatus.ACTIVE, SegmentStatus.CLOSED],
+              })
+              .groupBy('s.activity_id')
+              .getRawMany<{ activityId: string; segmentCount: number }>();
+
+            // Merge newly eligible activities into the eligible list
+            const existingIds = new Set(eligible.map((r) => r.activityId));
+            for (const row of updatedActivityRows) {
+              if (row.segmentCount >= PackingJobService.MIN_SEGMENTS && !existingIds.has(row.activityId)) {
+                eligible.push(row);
+                existingIds.add(row.activityId);
+              }
+            }
+
+            this.logger.log(
+              `[packing-job] After orphan linking: ${eligible.length} eligible activities for packing`,
+            );
+          }
+        } catch (error: unknown) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          this.logger.error(
+            `[packing-job] Orphan linking failed (non-fatal): ${err.message}`,
+            err.stack,
+          );
+        }
       }
 
       // Pack each eligible activity

@@ -204,6 +204,36 @@ export class ProjectMatchingService {
   }
 
   /**
+   * Find the best matching activity from an in-memory list (no DB query).
+   *
+   * Useful when activities are already loaded (e.g. in DailySynthesisExtraction).
+   * Returns the best candidate with its similarity score, or null if no match.
+   */
+  findBestMatchInList(
+    name: string,
+    activities: Activity[],
+  ): { activity: Activity; similarity: number } | null {
+    if (activities.length === 0) return null;
+
+    const normalizedName = ProjectMatchingService.normalizeName(name);
+    let bestActivity: Activity | null = null;
+    let bestSimilarity = 0;
+
+    for (const activity of activities) {
+      const similarity = this.calculateSimilarity(
+        normalizedName,
+        ProjectMatchingService.normalizeName(activity.name),
+      );
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        bestActivity = activity;
+      }
+    }
+
+    return bestActivity ? { activity: bestActivity, similarity: bestSimilarity } : null;
+  }
+
+  /**
    * Calculate similarity between two strings using normalized Levenshtein distance.
    *
    * Returns a value in [0, 1] where:

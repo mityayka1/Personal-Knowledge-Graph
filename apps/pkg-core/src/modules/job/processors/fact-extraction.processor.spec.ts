@@ -1,10 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Job as BullJob } from 'bullmq';
+import { DataSource } from 'typeorm';
 import { FactExtractionProcessor } from './fact-extraction.processor';
 import { UnifiedExtractionService } from '../../extraction/unified-extraction.service';
 import { GroupExtractionService } from '../../extraction/group-extraction.service';
 import { EntityService } from '../../entity/entity.service';
 import { InteractionService } from '../../interaction/interaction.service';
+import { TopicBoundaryDetectorService } from '../../segmentation/topic-boundary-detector.service';
+import { SegmentationService } from '../../segmentation/segmentation.service';
 import { ExtractionJobData } from '../job.service';
 
 describe('FactExtractionProcessor', () => {
@@ -30,6 +33,26 @@ describe('FactExtractionProcessor', () => {
     findOne: jest.fn(),
   };
 
+  const mockTopicDetector = {
+    detectAndCreate: jest.fn().mockResolvedValue({
+      segmentIds: [],
+      segmentCount: 0,
+      messagesAssigned: 0,
+      messagesSkipped: 0,
+      tokensUsed: 0,
+      durationMs: 0,
+    }),
+  };
+
+  const mockSegmentationService = {
+    findRelatedSegments: jest.fn().mockResolvedValue([]),
+    linkRelatedSegments: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockDataSource = {
+    query: jest.fn().mockResolvedValue([]),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -51,6 +74,18 @@ describe('FactExtractionProcessor', () => {
         {
           provide: InteractionService,
           useValue: mockInteractionService,
+        },
+        {
+          provide: TopicBoundaryDetectorService,
+          useValue: mockTopicDetector,
+        },
+        {
+          provide: SegmentationService,
+          useValue: mockSegmentationService,
+        },
+        {
+          provide: DataSource,
+          useValue: mockDataSource,
         },
       ],
     }).compile();

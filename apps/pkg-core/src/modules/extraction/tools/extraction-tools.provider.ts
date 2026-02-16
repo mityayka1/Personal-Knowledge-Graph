@@ -17,6 +17,10 @@ import { EntityRelationService } from '../../entity/entity-relation/entity-relat
 import { PendingResolutionService } from '../../resolution/pending-resolution.service';
 import { EnrichmentQueueService } from '../enrichment-queue.service';
 import { DraftExtractionService } from '../draft-extraction.service';
+import { FactDeduplicationService } from '../fact-deduplication.service';
+import { FactFusionService } from '../../entity/entity-fact/fact-fusion.service';
+import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
+import { CreateFactDto } from '../../entity/dto/create-entity.dto';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import {
   EntityDisambiguationService,
@@ -24,9 +28,11 @@ import {
 } from '../../entity/entity-disambiguation.service';
 import {
   FactSource,
+  FactType,
+  FactCategory,
   RelationType,
   RelationSource,
-  FactCategory,
+  EntityFact,
   ExtractedEvent,
   ExtractedEventType,
   ExtractedEventStatus,
@@ -89,6 +95,12 @@ export class ExtractionToolsProvider {
     @Optional()
     @Inject(forwardRef(() => EntityDisambiguationService))
     private readonly entityDisambiguationService: EntityDisambiguationService | null,
+    private readonly factDeduplicationService: FactDeduplicationService,
+    @Optional()
+    @Inject(forwardRef(() => FactFusionService))
+    private readonly factFusionService: FactFusionService | null,
+    @InjectRepository(EntityFact)
+    private readonly factRepo: Repository<EntityFact>,
   ) {}
 
   /**
@@ -463,13 +475,163 @@ export class ExtractionToolsProvider {
         }
 
         try {
+          const factType = args.factType.toLowerCase();
+          const factValue = args.value.trim();
+
+          // ── Pre-check: Hybrid deduplication (Levenshtein + embedding similarity) ──
+          const dedupResult = await this.factDeduplicationService.checkDuplicateHybrid(
+            args.entityId,
+            { factType, value: factValue, confidence: args.confidence },
+          );
+
+          // If exact/semantic duplicate detected and existing fact found → apply Smart Fusion
+          if (dedupResult.action !== 'create' && dedupResult.action !== 'review') {
+            const existingFactId = dedupResult.existingFactId;
+
+            if (existingFactId && this.factFusionService) {
+              // Load existing fact for fusion decision
+              const existingFact = await this.factRepo.findOne({ where: { id: existingFactId } });
+              if (existingFact) {
+                const decision = await this.factFusionService.decideFusion(
+                  existingFact,
+                  factValue,
+                  FactSource.EXTRACTED,
+                );
+
+                const newFactDto: CreateFactDto = {
+                  type: factType as FactType,
+                  category: this.inferFactCategory(factType),
+                  value: factValue,
+                  source: FactSource.EXTRACTED,
+                  confidence: args.confidence,
+                };
+
+                const applyResult = await this.factFusionService.applyDecision(
+                  existingFact,
+                  newFactDto,
+                  decision,
+                  args.entityId,
+                );
+
+                const fusionMessages: Record<string, string> = {
+                  confirm: 'Fact confirmed — boosted confidence on existing fact.',
+                  supersede: 'New value superseded old fact. Old fact deprecated, new fact created.',
+                  enrich: 'Existing fact enriched with complementary information.',
+                  conflict: 'Conflict detected — both facts kept for human review.',
+                  coexist: 'Both values valid (different time periods). New fact created alongside existing.',
+                };
+                const message = fusionMessages[decision.action] || `Fusion action: ${decision.action}`;
+
+                this.logger.log(
+                  `[create_fact] Smart Fusion [${decision.action}] for ${factType}="${factValue}" entity=${args.entityId} ` +
+                    `existing=${existingFactId} result=${applyResult.fact?.id ?? 'n/a'} ` +
+                    `reason="${decision.explanation}" (dedup: ${dedupResult.action}, ${dedupResult.reason})`,
+                );
+
+                return toolSuccess({
+                  status: `fusion_${decision.action}`,
+                  action: decision.action,
+                  existingFactId,
+                  resultFactId: applyResult.fact?.id !== existingFactId ? applyResult.fact?.id : undefined,
+                  reason: decision.explanation,
+                  message,
+                });
+              }
+            }
+
+            // Existing fact not found (deleted between dedup check and load) — fall through to create
+            if (!this.factFusionService) {
+              this.logger.debug(
+                `[create_fact] Skipped duplicate ${factType}="${factValue}" for entity ${args.entityId} — no fusion service`,
+              );
+              return toolSuccess({
+                status: 'skipped_duplicate',
+                existingFactId: dedupResult.existingFactId,
+                reason: dedupResult.reason,
+                message: 'Similar fact already exists.',
+              });
+            }
+            this.logger.warn(
+              `[create_fact] TOCTOU: dedup found existing fact ${dedupResult.existingFactId} but it was not found in DB. ` +
+                `Falling through to draft creation for ${factType}="${factValue}" entity=${args.entityId}`,
+            );
+          }
+
+          // Grey zone (review) — also check via fusion if possible
+          if (dedupResult.action === 'review' && dedupResult.matchedFactId && this.factFusionService) {
+            const matchedFact = await this.factRepo.findOne({ where: { id: dedupResult.matchedFactId } });
+            if (matchedFact) {
+              const decision = await this.factFusionService.decideFusion(
+                matchedFact,
+                factValue,
+                FactSource.EXTRACTED,
+              );
+
+              const newFactDto: CreateFactDto = {
+                type: factType as FactType,
+                category: this.inferFactCategory(factType),
+                value: factValue,
+                source: FactSource.EXTRACTED,
+                confidence: args.confidence,
+              };
+
+              const applyResult = await this.factFusionService.applyDecision(
+                matchedFact,
+                newFactDto,
+                decision,
+                args.entityId,
+              );
+
+              // COEXIST means the LLM decided they are different facts — proceed to create draft
+              if (decision.action === FusionAction.COEXIST) {
+                this.logger.log(
+                  `[create_fact] Grey-zone fusion COEXIST for ${factType}="${factValue}" — ` +
+                    `matched="${matchedFact.value}" (similarity: ${dedupResult.similarity?.toFixed(2)}). ` +
+                    `New fact already created by applyDecision.`,
+                );
+                return toolSuccess({
+                  status: `fusion_coexist`,
+                  action: 'coexist',
+                  existingFactId: dedupResult.matchedFactId,
+                  resultFactId: applyResult.fact?.id !== dedupResult.matchedFactId ? applyResult.fact?.id : undefined,
+                  reason: decision.explanation,
+                  message: 'Both values valid (different time periods). New fact created alongside existing.',
+                });
+              }
+
+              const fusionMessages: Record<string, string> = {
+                confirm: 'Fact confirmed — boosted confidence on existing fact.',
+                supersede: 'New value superseded old fact. Old fact deprecated, new fact created.',
+                enrich: 'Existing fact enriched with complementary information.',
+                conflict: 'Conflict detected — both facts kept for human review.',
+              };
+              const message = fusionMessages[decision.action] || `Fusion action: ${decision.action}`;
+
+              this.logger.log(
+                `[create_fact] Grey-zone fusion [${decision.action}] for ${factType}="${factValue}" entity=${args.entityId} ` +
+                  `matched=${dedupResult.matchedFactId} (similarity: ${dedupResult.similarity?.toFixed(2)}) ` +
+                  `reason="${decision.explanation}"`,
+              );
+
+              return toolSuccess({
+                status: `fusion_${decision.action}`,
+                action: decision.action,
+                existingFactId: dedupResult.matchedFactId,
+                resultFactId: applyResult.fact?.id !== dedupResult.matchedFactId ? applyResult.fact?.id : undefined,
+                reason: decision.explanation,
+                message,
+              });
+            }
+          }
+
+          // ── No duplicate found — create draft via DraftExtractionService ──
           const result = await this.draftExtractionService.createDrafts({
             ownerEntityId: context.ownerEntityId,
             facts: [
               {
                 entityId: args.entityId,
-                factType: args.factType.toLowerCase(),
-                value: args.value.trim(),
+                factType,
+                value: factValue,
                 sourceQuote: args.sourceQuote?.substring(0, 200),
                 confidence: args.confidence,
               },
@@ -485,7 +647,7 @@ export class ExtractionToolsProvider {
               (a) => a.itemType === PendingApprovalItemType.FACT,
             );
             this.logger.log(
-              `Created draft fact ${args.factType}="${args.value}" for entity ${args.entityId} ` +
+              `Created draft fact ${factType}="${factValue}" for entity ${args.entityId} ` +
                 `(approvalId: ${approval?.id}, batchId: ${result.batchId})`,
             );
 
@@ -497,7 +659,7 @@ export class ExtractionToolsProvider {
             });
           }
 
-          // Smart Fusion: fact was resolved via fusion (CONFIRM, SUPERSEDE, ENRICH, etc.)
+          // Smart Fusion from DraftExtractionService (pending-approval dedup may trigger this)
           if (result.fusionActions && result.fusionActions.length > 0) {
             const fa = result.fusionActions[0];
             const fusionMessages: Record<string, string> = {
@@ -509,7 +671,7 @@ export class ExtractionToolsProvider {
             };
             const message = fusionMessages[fa.action] || `Fusion action: ${fa.action}`;
             this.logger.log(
-              `Smart Fusion [${fa.action}] for ${args.factType}="${args.value}" entity=${args.entityId} ` +
+              `Smart Fusion [${fa.action}] for ${factType}="${factValue}" entity=${args.entityId} ` +
                 `existingFact=${fa.existingFactId} resultFact=${fa.resultFactId ?? 'n/a'} reason="${fa.reason}"`,
             );
             return toolSuccess({
@@ -524,7 +686,7 @@ export class ExtractionToolsProvider {
 
           if (result.skipped.facts > 0) {
             this.logger.debug(
-              `Skipped duplicate fact ${args.factType}="${args.value}" for entity ${args.entityId}`,
+              `Skipped duplicate fact ${factType}="${factValue}" for entity ${args.entityId}`,
             );
             return toolSuccess({
               status: 'skipped_duplicate',
@@ -1108,5 +1270,37 @@ export class ExtractionToolsProvider {
       default:
         return { ...base, title: args.title, description: args.description };
     }
+  }
+
+  /**
+   * Infer fact category from fact type string.
+   * Mirrors DraftExtractionService.inferFactCategory().
+   */
+  private inferFactCategory(factType: string): FactCategory {
+    const categoryMap: Record<string, FactCategory> = {
+      // Personal
+      birthday: FactCategory.PERSONAL,
+      name_full: FactCategory.PERSONAL,
+      nickname: FactCategory.PERSONAL,
+      // Contact
+      phone: FactCategory.CONTACT,
+      phone_work: FactCategory.CONTACT,
+      phone_personal: FactCategory.CONTACT,
+      email: FactCategory.CONTACT,
+      email_work: FactCategory.CONTACT,
+      email_personal: FactCategory.CONTACT,
+      address: FactCategory.CONTACT,
+      telegram: FactCategory.CONTACT,
+      // Professional
+      position: FactCategory.PROFESSIONAL,
+      department: FactCategory.PROFESSIONAL,
+      company: FactCategory.PROFESSIONAL,
+      specialization: FactCategory.PROFESSIONAL,
+      education: FactCategory.PROFESSIONAL,
+      // Location
+      location: FactCategory.PERSONAL,
+    };
+
+    return categoryMap[factType.toLowerCase()] ?? FactCategory.PERSONAL;
   }
 }

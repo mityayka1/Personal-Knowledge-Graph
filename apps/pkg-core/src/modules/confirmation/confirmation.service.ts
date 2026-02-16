@@ -16,6 +16,9 @@ import {
 } from '@pkg/entities';
 import { CreateConfirmationDto } from './dto/create-confirmation.dto';
 import { FactSubjectHandler } from './handlers/fact-subject.handler';
+import { FactValueHandler } from './handlers/fact-value.handler';
+import { IdentifierAttributionHandler } from './handlers/identifier-attribution.handler';
+import { EntityMergeHandler } from './handlers/entity-merge.handler';
 
 /**
  * Default expiry times by confirmation type (in milliseconds)
@@ -37,6 +40,15 @@ export class ConfirmationService {
     @Optional()
     @Inject(forwardRef(() => FactSubjectHandler))
     private readonly factSubjectHandler: FactSubjectHandler | null,
+    @Optional()
+    @Inject(forwardRef(() => FactValueHandler))
+    private readonly factValueHandler: FactValueHandler | null,
+    @Optional()
+    @Inject(forwardRef(() => IdentifierAttributionHandler))
+    private readonly identifierAttributionHandler: IdentifierAttributionHandler | null,
+    @Optional()
+    @Inject(forwardRef(() => EntityMergeHandler))
+    private readonly entityMergeHandler: EntityMergeHandler | null,
   ) {}
 
   /**
@@ -167,18 +179,33 @@ export class ConfirmationService {
           break;
 
         case PendingConfirmationType.FACT_VALUE:
-          // TODO: Implement FactValueHandler
-          this.logger.debug(`FACT_VALUE handler not yet implemented`);
+          if (this.factValueHandler) {
+            await this.factValueHandler.handle(confirmation);
+          } else {
+            this.logger.warn(
+              `FactValueHandler not available for confirmation ${confirmation.id}`,
+            );
+          }
           break;
 
         case PendingConfirmationType.IDENTIFIER_ATTRIBUTION:
-          // TODO: Implement IdentifierAttributionHandler
-          this.logger.debug(`IDENTIFIER_ATTRIBUTION handler not yet implemented`);
+          if (this.identifierAttributionHandler) {
+            await this.identifierAttributionHandler.handle(confirmation);
+          } else {
+            this.logger.warn(
+              `IdentifierAttributionHandler not available for confirmation ${confirmation.id}`,
+            );
+          }
           break;
 
         case PendingConfirmationType.ENTITY_MERGE:
-          // TODO: Implement EntityMergeHandler
-          this.logger.debug(`ENTITY_MERGE handler not yet implemented`);
+          if (this.entityMergeHandler) {
+            await this.entityMergeHandler.handle(confirmation);
+          } else {
+            this.logger.warn(
+              `EntityMergeHandler not available for confirmation ${confirmation.id}`,
+            );
+          }
           break;
 
         default:
@@ -190,7 +217,15 @@ export class ConfirmationService {
         `Failed to dispatch resolution for confirmation ${confirmation.id}: ${err.message}`,
         err.stack,
       );
-      // Don't rethrow — resolution is saved, handler failure is logged
+      // Record handler failure on confirmation so callers know the side-effect failed
+      await this.repo.update(confirmation.id, {
+        resolution: {
+          ...(confirmation.resolution as Record<string, unknown> ?? {}),
+          handlerError: err.message,
+          handlerFailedAt: new Date().toISOString(),
+        },
+      });
+      throw error;
     }
   }
 
