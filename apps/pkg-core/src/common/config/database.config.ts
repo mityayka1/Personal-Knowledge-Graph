@@ -50,7 +50,9 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       ? {
           max: parseInt(process.env.DB_POOL_SIZE || '10', 10),
           connectionTimeoutMillis: 10000,
-          idleTimeoutMillis: 30000,
+          idleTimeoutMillis: 60000,
+          keepAlive: true,
+          keepAliveInitialDelayMillis: 10000,
         }
       : undefined,
   };
