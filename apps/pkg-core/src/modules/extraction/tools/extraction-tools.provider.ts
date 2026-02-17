@@ -347,7 +347,7 @@ export class ExtractionToolsProvider {
               where: ilikeWhereConditions,
               select: ['id', 'name', 'activityType', 'status', 'clientEntityId'],
               relations: ['clientEntity'],
-              order: { lastActivityAt: { direction: 'DESC', nulls: 'LAST' } },
+              order: { updatedAt: 'DESC' },
               take: 10,
             }),
             // b. Fuzzy search via ProjectMatchingService
