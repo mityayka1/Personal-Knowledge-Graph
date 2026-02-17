@@ -1572,7 +1572,7 @@ export class DraftExtractionService {
     if (bestMatch) {
       this.logger.log(
         `Fuzzy matched task "${taskTitle}" -> "${bestMatch.activity.name}" ` +
-          `(similarity: ${bestMatch.similarity.toFixed(3)})`,
+          `(similarity: ${bestMatch.similarity.toFixed(3)}, status: ${bestMatch.activity.status})`,
       );
       return {
         found: true,
@@ -1628,16 +1628,19 @@ export class DraftExtractionService {
       return { found: true, commitmentId: pendingMatch.targetId, source: 'pending_approval' };
     }
 
-    // Step 2: Fuzzy Levenshtein against all non-cancelled commitments
+    // Step 2: Fuzzy Levenshtein against non-cancelled commitments for this entity.
     // Include COMPLETED: completed commitments should block re-extraction of duplicates.
+    // Filter by fromEntityId OR toEntityId to avoid cross-entity false positive dedup.
     if (!entityId) return { found: false };
 
     const candidates = await this.commitmentRepo.find({
-      where: {
-        status: Not(In([CommitmentStatus.CANCELLED])),
-      },
-      select: ['id', 'title'],
-      take: 100,
+      where: [
+        { fromEntityId: entityId, status: Not(In([CommitmentStatus.CANCELLED])) },
+        { toEntityId: entityId, status: Not(In([CommitmentStatus.CANCELLED])) },
+      ],
+      select: ['id', 'title', 'status'],
+      order: { createdAt: 'DESC' },
+      take: 200,
     });
 
     if (candidates.length === 0) return { found: false };
@@ -1661,7 +1664,7 @@ export class DraftExtractionService {
     if (bestMatch) {
       this.logger.log(
         `Fuzzy matched commitment "${what}" -> "${bestMatch.commitment.title}" ` +
-          `(similarity: ${bestMatch.similarity.toFixed(3)})`,
+          `(similarity: ${bestMatch.similarity.toFixed(3)}, status: ${bestMatch.commitment.status})`,
       );
       return {
         found: true,

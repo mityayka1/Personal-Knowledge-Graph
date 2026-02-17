@@ -24,7 +24,8 @@ resolution: >
   Shift-left подход: 4 области улучшений — shared noise constants + tool-level filtering,
   commitment fuzzy dedup (Levenshtein 0.7), auto-link events→activities через контекст в промпте,
   client boost (снижение порога с 0.8 до 0.7 при совпадении клиента).
-related_issues: []
+related_issues:
+  - ../logic-errors/client-annotation-matching-failure-extraction-20260217.md
 ---
 
 # Preventive Data Quality in Extraction Pipeline
