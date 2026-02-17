@@ -1196,7 +1196,7 @@ export class ExtractionToolsProvider {
       const results: Array<{ id: string; name: string; activity_type: string }> =
         await this.activityRepo.query(
           `
-          SELECT DISTINCT a.id, a.name, a.activity_type
+          SELECT DISTINCT a.id, a.name, a.activity_type, a.updated_at
           FROM activities a
           WHERE a.owner_entity_id = $1
             AND a.status NOT IN ('archived', 'cancelled')
