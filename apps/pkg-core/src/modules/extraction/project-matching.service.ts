@@ -234,17 +234,11 @@ export class ProjectMatchingService {
   }
 
   /**
-   * Calculate similarity between two strings using normalized Levenshtein distance.
+   * Calculate similarity between two strings using the best of two metrics:
+   * 1. Normalized Levenshtein distance — good for typos, minor edits
+   * 2. Token-based Jaccard index — good for word reordering, extra prepositions
    *
-   * Returns a value in [0, 1] where:
-   * - 1.0 means the strings are identical (case-insensitive)
-   * - 0.0 means the strings are completely different
-   *
-   * The formula is: 1 - (levenshteinDistance(a, b) / max(a.length, b.length))
-   *
-   * Special cases:
-   * - Both empty strings -> 1.0
-   * - One empty string -> 0.0
+   * Returns max(levenshtein, tokenJaccard) in [0, 1].
    */
   calculateSimilarity(a: string, b: string): number {
     const strA = a.toLowerCase();
@@ -253,10 +247,42 @@ export class ProjectMatchingService {
     if (strA === strB) return 1.0;
     if (strA.length === 0 || strB.length === 0) return 0.0;
 
-    const distance = this.levenshteinDistance(strA, strB);
-    const maxLen = Math.max(strA.length, strB.length);
+    const levenshteinSim = 1 - this.levenshteinDistance(strA, strB) / Math.max(strA.length, strB.length);
+    const tokenSim = this.calculateTokenSimilarity(strA, strB);
 
-    return 1 - distance / maxLen;
+    return Math.max(levenshteinSim, tokenSim);
+  }
+
+  /**
+   * Token-based Jaccard similarity.
+   *
+   * Splits strings into word tokens, filters out short stop words (< 3 chars),
+   * then computes |intersection| / |union|.
+   *
+   * Handles word reordering: "хаб для панавто" vs "панавто-хаб" → 0.667
+   */
+  private calculateTokenSimilarity(a: string, b: string): number {
+    const tokensA = this.tokenize(a);
+    const tokensB = this.tokenize(b);
+
+    if (tokensA.size === 0 || tokensB.size === 0) return 0.0;
+
+    let intersection = 0;
+    for (const token of tokensA) {
+      if (tokensB.has(token)) intersection++;
+    }
+
+    const union = tokensA.size + tokensB.size - intersection;
+    return union === 0 ? 0.0 : intersection / union;
+  }
+
+  /**
+   * Tokenize a string into a set of meaningful words.
+   * Splits on whitespace, hyphens, underscores; filters tokens shorter than 3 chars.
+   */
+  private tokenize(s: string): Set<string> {
+    const tokens = s.split(/[\s\-_]+/).filter(t => t.length >= 3);
+    return new Set(tokens);
   }
 
   /**
