@@ -17,6 +17,8 @@ import {
   FactEventData,
   EntityType,
   CreationSource,
+  Activity,
+  ActivityStatus,
 } from '@pkg/entities';
 import { DraftExtractionService } from './draft-extraction.service';
 import {
@@ -132,6 +134,8 @@ export class SecondBrainExtractionService {
   constructor(
     @InjectRepository(ExtractedEvent)
     private extractedEventRepo: Repository<ExtractedEvent>,
+    @InjectRepository(Activity)
+    private activityRepo: Repository<Activity>,
     private claudeAgentService: ClaudeAgentService,
     private settingsService: SettingsService,
     private draftExtractionService: DraftExtractionService,
@@ -178,7 +182,7 @@ export class SecondBrainExtractionService {
   ): Promise<ConversationExtractionResultV2> {
     const sourceMessageIds = conversation.messages.map((m) => m.id);
 
-    // Check if required services are available
+    // Check if required services are available (before any DB queries)
     if (!this.conversationGrouperService) {
       this.logger.warn('ConversationGrouperService not available');
       return {
@@ -189,6 +193,10 @@ export class SecondBrainExtractionService {
         tokensUsed: 0,
       };
     }
+
+    // Load existing activities for project linking
+    const activities = await this.loadExistingActivities(ownerEntityId);
+    const activityContext = this.formatActivityContext(activities);
 
     // Get entity context for better extraction
     let entityContext = '';
@@ -221,7 +229,7 @@ export class SecondBrainExtractionService {
     );
 
     // Build full prompt with system instructions and context
-    const systemInstructions = this.buildConversationSystemPrompt(entityContext, crossChatContext);
+    const systemInstructions = this.buildConversationSystemPrompt(entityContext, crossChatContext, activityContext);
     const fullPrompt = `${systemInstructions}\n\n---\n\nБеседа:\n\n${formattedConversation}`;
 
     // Get extraction settings
@@ -375,6 +383,7 @@ export class SecondBrainExtractionService {
       priority?: string;
       deadline?: string;
       deadlineText?: string;
+      projectName?: string;
     };
     return {
       title: String(data.what || ''),
@@ -385,6 +394,7 @@ export class SecondBrainExtractionService {
       assignee: 'self', // Tasks from conversation are assigned to system owner
       sourceQuote: rawEvent.sourceQuote,
       confidence: rawEvent.confidence,
+      projectName: data.projectName,
     };
   }
 
@@ -401,6 +411,7 @@ export class SecondBrainExtractionService {
       what?: string;
       deadline?: string;
       deadlineText?: string;
+      projectName?: string;
     };
     return {
       what: String(data.what || ''),
@@ -410,6 +421,7 @@ export class SecondBrainExtractionService {
       deadline: data.deadline,
       sourceQuote: rawEvent.sourceQuote,
       confidence: rawEvent.confidence,
+      projectName: data.projectName,
     };
   }
 
@@ -424,6 +436,7 @@ export class SecondBrainExtractionService {
       topic?: string;
       datetime?: string;
       dateText?: string;
+      projectName?: string;
     };
     return {
       what: data.topic || 'Встреча',
@@ -433,6 +446,7 @@ export class SecondBrainExtractionService {
       deadline: data.datetime,
       sourceQuote: rawEvent.sourceQuote,
       confidence: rawEvent.confidence,
+      projectName: data.projectName,
     };
   }
 
@@ -534,11 +548,68 @@ export class SecondBrainExtractionService {
   }
 
   /**
+   * Load existing activities for project linking context.
+   * Reuses pattern from DailySynthesisExtractionService.
+   */
+  private async loadExistingActivities(ownerEntityId?: string): Promise<Activity[]> {
+    const query = this.activityRepo
+      .createQueryBuilder('a')
+      .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId', 'a.description', 'a.tags'])
+      .leftJoin('a.clientEntity', 'client')
+      .addSelect(['client.name'])
+      .where('a.status NOT IN (:...excludedStatuses)', {
+        excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
+      })
+      .orderBy('a.updatedAt', 'DESC')
+      .limit(100);
+
+    if (ownerEntityId) {
+      query.andWhere('a.ownerEntityId = :ownerEntityId', { ownerEntityId });
+    }
+
+    return query.getMany();
+  }
+
+  /**
+   * Format existing activities for prompt context.
+   * Groups by type, shows name, client, status, tags.
+   */
+  private formatActivityContext(activities: Activity[]): string {
+    if (activities.length === 0) {
+      return 'Нет известных активностей.';
+    }
+
+    const grouped: Record<string, Activity[]> = {};
+    for (const a of activities) {
+      const type = a.activityType;
+      if (!grouped[type]) grouped[type] = [];
+      grouped[type].push(a);
+    }
+
+    const lines: string[] = [];
+    for (const [type, items] of Object.entries(grouped)) {
+      lines.push(`\n${type.toUpperCase()}:`);
+      for (const a of items.slice(0, 10)) {
+        const client = a.clientEntity ? ` (клиент: ${a.clientEntity.name})` : '';
+        const tags = a.tags?.length ? ` [теги: ${a.tags.join(', ')}]` : '';
+        const desc = a.description ? `\n      ${a.description}` : '';
+        lines.push(`  - ${a.name}${client} [${a.status}] (id: ${a.id})${tags}${desc}`);
+      }
+      if (items.length > 10) {
+        lines.push(`  ... и ещё ${items.length - 10}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
    * Build system prompt for conversation-based extraction.
    */
   private buildConversationSystemPrompt(
     entityContext: string,
     crossChatContext: string | null,
+    activityContext: string,
   ): string {
     const today = new Date().toISOString().split('T')[0];
 
@@ -558,8 +629,17 @@ ${entityContext}
 
     if (crossChatContext) {
       prompt += `═══════════════════════════════════════════════════════════════
-СВЯЗАННЫЙ КОНТЕКСТ (другие чаты за последние 30 мин):
+СВЯЗАННЫЙ КОНТЕКСТ (другие чаты с теми же участниками):
 ${crossChatContext}
+═══════════════════════════════════════════════════════════════
+
+`;
+    }
+
+    if (activityContext && activityContext !== 'Нет известных активностей.') {
+      prompt += `═══════════════════════════════════════════════════════════════
+СУЩЕСТВУЮЩИЕ АКТИВНОСТИ (проекты, задачи — для привязки):
+${activityContext}
 ═══════════════════════════════════════════════════════════════
 
 `;
@@ -589,19 +669,24 @@ ${crossChatContext}
    - Гипотетические ситуации
    - Шутки и сарказм
 
+6. Используй СУЩЕСТВУЮЩИЕ АКТИВНОСТИ для привязки:
+   - Если задача/обещание связано с известным проектом — укажи projectName
+   - Используй ТОЧНЫЕ имена проектов из списка
+   - Если ничего не подходит — не указывай projectName (будет создана без привязки)
+
 ТИПЫ СОБЫТИЙ:
 
 1. **meeting** — встреча/созвон с датой
-   data: { datetime?, dateText?, topic?, participants?: [] }
+   data: { datetime?, dateText?, topic?, participants?: [], projectName?: "точное имя проекта из списка СУЩЕСТВУЮЩИХ АКТИВНОСТЕЙ" }
 
 2. **promise_by_me** — моё обещание
-   data: { what, deadline?, deadlineText? }
+   data: { what, deadline?, deadlineText?, projectName?: "точное имя проекта из списка СУЩЕСТВУЮЩИХ АКТИВНОСТЕЙ" }
 
 3. **promise_by_them** — обещание собеседника
-   data: { what, deadline?, deadlineText? }
+   data: { what, deadline?, deadlineText?, projectName?: "точное имя проекта из списка СУЩЕСТВУЮЩИХ АКТИВНОСТЕЙ" }
 
 4. **task** — задача от собеседника мне
-   data: { what, priority?: "low"|"normal"|"high"|"urgent", deadline?, deadlineText? }
+   data: { what, priority?: "low"|"normal"|"high"|"urgent", deadline?, deadlineText?, projectName?: "точное имя проекта из списка СУЩЕСТВУЮЩИХ АКТИВНОСТЕЙ" }
 
 5. **fact** — факт о человеке (ДР, телефон, email, должность, компания)
    data: { factType, value, quote }

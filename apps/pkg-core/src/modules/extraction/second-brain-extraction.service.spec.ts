@@ -5,6 +5,7 @@ import {
   ExtractedEvent,
   ExtractedEventType,
   ExtractedEventStatus,
+  Activity,
 } from '@pkg/entities';
 import { SecondBrainExtractionService } from './second-brain-extraction.service';
 import { DraftExtractionService } from './draft-extraction.service';
@@ -67,6 +68,21 @@ describe('SecondBrainExtractionService', () => {
             findOneOrFail: jest.fn(),
             update: jest.fn(),
             createQueryBuilder: jest.fn(),
+          },
+        },
+        {
+          provide: getRepositoryToken(Activity),
+          useValue: {
+            createQueryBuilder: jest.fn().mockReturnValue({
+              select: jest.fn().mockReturnThis(),
+              leftJoin: jest.fn().mockReturnThis(),
+              addSelect: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              andWhere: jest.fn().mockReturnThis(),
+              orderBy: jest.fn().mockReturnThis(),
+              limit: jest.fn().mockReturnThis(),
+              getMany: jest.fn().mockResolvedValue([]),
+            }),
           },
         },
         {

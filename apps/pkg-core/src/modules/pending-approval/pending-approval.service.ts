@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, In } from 'typeorm';
@@ -18,6 +19,7 @@ import {
   softDeleteTarget,
   hardDeleteTarget,
   updateTarget,
+  getItemTypeConfig,
 } from './item-type-registry';
 
 /**
@@ -134,6 +136,30 @@ export class PendingApprovalService {
       where: { id },
       relations: ['sourceInteraction'],
     });
+  }
+
+  /**
+   * Get the target entity of a pending approval.
+   * Returns the actual entity (Activity, Commitment, EntityFact) based on itemType.
+   */
+  async getTargetEntity(id: string): Promise<{
+    itemType: string;
+    target: Record<string, unknown>;
+  } | null> {
+    const approval = await this.approvalRepo.findOne({ where: { id } });
+    if (!approval) return null;
+
+    const config = getItemTypeConfig(approval.itemType);
+    const target = await this.dataSource.manager.findOne(
+      config.entityClass as any,
+      { where: { id: approval.targetId } },
+    );
+
+    if (!target) return null;
+    return {
+      itemType: approval.itemType,
+      target: target as unknown as Record<string, unknown>,
+    };
   }
 
   /**
@@ -299,12 +325,19 @@ export class PendingApprovalService {
         approval.itemType === PendingApprovalItemType.TASK ||
         approval.itemType === PendingApprovalItemType.PROJECT
       ) {
+        // parentId changes require closure-table maintenance (depth, materializedPath, activity_closure)
+        // and must go through ActivityService.update() — block here to prevent data corruption
+        if (updates.parentId !== undefined) {
+          throw new BadRequestException(
+            'parentId cannot be changed via this endpoint. Use ActivityService after approval.',
+          );
+        }
+
         // Activity entity updates (direct columns)
         if (updates.name !== undefined) targetUpdates.name = updates.name;
         if (updates.description !== undefined) targetUpdates.description = updates.description;
         if (updates.priority !== undefined) targetUpdates.priority = updates.priority;
         if (updates.deadline !== undefined) targetUpdates.deadline = updates.deadline;
-        if (updates.parentId !== undefined) targetUpdates.parentId = updates.parentId;
         if (updates.clientEntityId !== undefined) targetUpdates.clientEntityId = updates.clientEntityId;
 
         // assignee is stored in metadata.assignee (JSONB), needs special handling
