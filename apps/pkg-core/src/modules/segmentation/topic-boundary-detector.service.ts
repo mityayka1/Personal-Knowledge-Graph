@@ -20,11 +20,14 @@ const MAX_MESSAGES_PER_BATCH = 200;
 /** Time gap in minutes that suggests a topic boundary */
 const TIME_GAP_MINUTES = 60;
 
-/** Max agentic turns for segmentation Claude call */
-const SEGMENTATION_MAX_TURNS = 3;
+/** Max agentic turns for segmentation Claude call.
+ * Structured output via SDK requires >=2 turns (tool call + completion).
+ * Haiku sometimes emits intermediate text before the StructuredOutput tool,
+ * so 3 turns is not enough — use 5 for reliable operation. */
+const SEGMENTATION_MAX_TURNS = 5;
 
 /** Timeout for segmentation Claude call (ms) */
-const SEGMENTATION_TIMEOUT_MS = 60_000;
+const SEGMENTATION_TIMEOUT_MS = 120_000;
 
 @Injectable()
 export class TopicBoundaryDetectorService {
