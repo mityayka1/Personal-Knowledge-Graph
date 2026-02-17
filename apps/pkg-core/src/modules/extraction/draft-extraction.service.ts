@@ -471,6 +471,46 @@ export class DraftExtractionService {
               `matched via ${existingTask.source} (activityId: ${existingTask.activityId}` +
               `${existingTask.similarity != null ? `, similarity: ${existingTask.similarity.toFixed(3)}` : ''})`,
           );
+
+          // Re-link: if duplicate has no parent but new task has projectName, resolve and update
+          if (
+            existingTask.activityId &&
+            existingTask.parentId == null &&
+            task.projectName
+          ) {
+            let resolvedParentId: string | undefined;
+            resolvedParentId = projectMap.get(
+              ProjectMatchingService.normalizeName(task.projectName),
+            );
+            if (!resolvedParentId) {
+              const fuzzyMatch = await this.findExistingProjectEnhanced(
+                task.projectName,
+                input.ownerEntityId,
+              );
+              if (fuzzyMatch.found && fuzzyMatch.activityId) {
+                resolvedParentId = fuzzyMatch.activityId;
+              }
+            }
+            if (!resolvedParentId && this.activityService) {
+              const mentionMatch = await this.activityService.findByMention(
+                task.projectName,
+              );
+              if (mentionMatch) resolvedParentId = mentionMatch.id;
+            }
+            if (resolvedParentId) {
+              await this.activityRepo
+                .createQueryBuilder()
+                .update()
+                .set({ parentId: resolvedParentId })
+                .where('id = :id', { id: existingTask.activityId })
+                .execute();
+              this.logger.log(
+                `Re-linked duplicate task "${task.title}" (${existingTask.activityId}) ` +
+                  `to project ${resolvedParentId} via projectName="${task.projectName}"`,
+              );
+            }
+          }
+
           result.skipped.tasks++;
           continue;
         }
@@ -526,6 +566,24 @@ export class DraftExtractionService {
           if (fuzzyMatch.found && fuzzyMatch.activityId) {
             parentId = fuzzyMatch.activityId;
           }
+        }
+        // 3rd fallback: substring match via ActivityService.findByMention()
+        if (!parentId && task.projectName && this.activityService) {
+          const mentionMatch = await this.activityService.findByMention(
+            task.projectName,
+          );
+          if (mentionMatch) {
+            parentId = mentionMatch.id;
+            this.logger.debug(
+              `Linked task "${task.title}" to activity "${mentionMatch.name}" via mention match`,
+            );
+          }
+        }
+        if (!parentId && task.projectName) {
+          this.logger.warn(
+            `Task "${task.title}" references project "${task.projectName}" ` +
+              `but no matching activity found (batch/fuzzy/mention all failed)`,
+          );
         }
 
         const { activity, approval } = await this.createDraftTask(
@@ -1423,7 +1481,7 @@ export class DraftExtractionService {
   private async findExistingTaskEnhanced(
     taskTitle: string,
     ownerEntityId: string,
-  ): Promise<{ found: boolean; activityId?: string; similarity?: number; source?: string }> {
+  ): Promise<{ found: boolean; activityId?: string; parentId?: string | null; similarity?: number; source?: string }> {
     // Step 1: Check pending approvals (existing exact ILIKE logic)
     const pendingMatch = await this.findExistingPendingTask(taskTitle);
     if (pendingMatch) {
@@ -1441,7 +1499,7 @@ export class DraftExtractionService {
         activityType: ActivityType.TASK,
         status: Not(In([ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED])),
       },
-      select: ['id', 'name'],
+      select: ['id', 'name', 'parentId'],
     });
 
     if (activeTasks.length === 0) return { found: false };
@@ -1470,6 +1528,7 @@ export class DraftExtractionService {
       return {
         found: true,
         activityId: bestMatch.activity.id,
+        parentId: bestMatch.activity.parentId ?? null,
         similarity: bestMatch.similarity,
         source: 'fuzzy_match',
       };
