@@ -39,6 +39,7 @@ import { EntityRelationService } from '../entity/entity-relation/entity-relation
 import { ActivityService } from '../activity/activity.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { SettingsService } from '../settings/settings.service';
+import { isVagueContent, isNoiseContent } from './extraction-quality.constants';
 import { FactFusionService } from '../entity/entity-fact/fact-fusion.service';
 import { FusionAction } from '../entity/entity-fact/fact-fusion.constants';
 import { ExtractionFusionAction } from './fusion-action.enum';
@@ -464,6 +465,18 @@ export class DraftExtractionService {
     // 2. Create draft tasks (may link to projects)
     for (const task of input.tasks) {
       try {
+        // QUALITY FILTER: Skip vague/noise titles before dedup to avoid junk entries
+        if (isVagueContent(task.title)) {
+          this.logger.debug(`Skipping vague task: "${task.title}"`);
+          result.skipped.tasks++;
+          continue;
+        }
+        if (isNoiseContent(task.title)) {
+          this.logger.debug(`Skipping noise task: "${task.title}"`);
+          result.skipped.tasks++;
+          continue;
+        }
+
         // DEDUPLICATION: Enhanced check -- pending approvals + active tasks via fuzzy match
         const existingTask = await this.findExistingTaskEnhanced(
           task.title,
@@ -534,7 +547,7 @@ export class DraftExtractionService {
                 .andWhere('a.activityType = :type', { type: ActivityType.TASK })
                 .andWhere('a.ownerEntityId = :owner', { owner: input.ownerEntityId })
                 .andWhere('a.status NOT IN (:...excluded)', {
-                  excluded: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
+                  excluded: [ActivityStatus.CANCELLED],
                 })
                 .setParameter('emb', `[${taskEmbedding.join(',')}]`)
                 .orderBy('distance', 'ASC')
@@ -611,6 +624,18 @@ export class DraftExtractionService {
     // 3. Create draft commitments
     for (const commitment of input.commitments) {
       try {
+        // QUALITY FILTER: Skip vague/noise commitments
+        if (isVagueContent(commitment.what)) {
+          this.logger.debug(`Skipping vague commitment: "${commitment.what}"`);
+          result.skipped.commitments++;
+          continue;
+        }
+        if (isNoiseContent(commitment.what)) {
+          this.logger.debug(`Skipping noise commitment: "${commitment.what}"`);
+          result.skipped.commitments++;
+          continue;
+        }
+
         // DEDUPLICATION: Check pending approvals + fuzzy match against active commitments
         const existingCommitment = await this.findExistingCommitmentEnhanced(
           commitment.what,
@@ -643,7 +668,7 @@ export class DraftExtractionService {
                 .addSelect(`c.embedding <=> :emb`, 'distance')
                 .where('c.embedding IS NOT NULL')
                 .andWhere('c.status NOT IN (:...excluded)', {
-                  excluded: [CommitmentStatus.COMPLETED, CommitmentStatus.CANCELLED],
+                  excluded: [CommitmentStatus.CANCELLED],
                 })
                 .setParameter('emb', `[${commitmentEmbedding.join(',')}]`)
                 .orderBy('distance', 'ASC')
@@ -1514,12 +1539,14 @@ export class DraftExtractionService {
       };
     }
 
-    // Step 2: Check active tasks via fuzzy matching
+    // Step 2: Check all non-cancelled tasks via fuzzy matching
+    // Include ARCHIVED: archived tasks should still block re-extraction of the same task.
+    // Without this, re-processing the same conversation creates exact duplicates.
     const activeTasks = await this.activityRepo.find({
       where: {
         ownerEntityId,
         activityType: ActivityType.TASK,
-        status: Not(In([ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED])),
+        status: Not(In([ActivityStatus.CANCELLED])),
       },
       select: ['id', 'name', 'parentId'],
     });
@@ -1601,12 +1628,13 @@ export class DraftExtractionService {
       return { found: true, commitmentId: pendingMatch.targetId, source: 'pending_approval' };
     }
 
-    // Step 2: Fuzzy Levenshtein against active commitments
+    // Step 2: Fuzzy Levenshtein against all non-cancelled commitments
+    // Include COMPLETED: completed commitments should block re-extraction of duplicates.
     if (!entityId) return { found: false };
 
     const candidates = await this.commitmentRepo.find({
       where: {
-        status: In([CommitmentStatus.PENDING, CommitmentStatus.IN_PROGRESS]),
+        status: Not(In([CommitmentStatus.CANCELLED])),
       },
       select: ['id', 'title'],
       take: 100,

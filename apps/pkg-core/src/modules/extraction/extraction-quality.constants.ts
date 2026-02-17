@@ -4,6 +4,7 @@
  * Used by:
  * - DailySynthesisExtractionService (filterLowQuality*)
  * - ExtractionToolsProvider (create_event tool)
+ * - DraftExtractionService (task/commitment quality gate)
  */
 
 /** Vague pronouns / placeholders that indicate non-specific content.
