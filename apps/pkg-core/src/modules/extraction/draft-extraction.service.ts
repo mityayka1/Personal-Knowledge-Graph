@@ -852,6 +852,8 @@ export class DraftExtractionService {
       sourceQuote: fact.sourceQuote ?? null,
       sourceInteractionId: input.sourceInteractionId ?? null,
       messageRef: input.messageRef ?? null,
+      sourceEntityId: fact.entityId ?? null,
+      context: `${fact.factType}: ${fact.value}`,
       status: PendingApprovalStatus.PENDING,
     });
 
@@ -945,6 +947,8 @@ export class DraftExtractionService {
       sourceQuote: project.sourceQuote,
       sourceInteractionId: input.sourceInteractionId ?? null,
       messageRef: input.messageRef ?? null,
+      sourceEntityId: input.ownerEntityId ?? null,
+      context: `Проект: ${project.name}`,
       status: PendingApprovalStatus.PENDING,
     });
 
@@ -1053,6 +1057,8 @@ export class DraftExtractionService {
       sourceQuote: task.sourceQuote,
       sourceInteractionId: input.sourceInteractionId ?? null,
       messageRef: input.messageRef ?? null,
+      sourceEntityId: input.ownerEntityId ?? null,
+      context: `Задача: ${task.title}`,
       status: PendingApprovalStatus.PENDING,
     });
 
@@ -1141,6 +1147,8 @@ export class DraftExtractionService {
       sourceQuote: commitment.sourceQuote,
       sourceInteractionId: input.sourceInteractionId ?? null,
       messageRef: input.messageRef ?? null,
+      sourceEntityId: input.ownerEntityId ?? null,
+      context: `Обещание: ${commitment.what}`,
       status: PendingApprovalStatus.PENDING,
     });
 

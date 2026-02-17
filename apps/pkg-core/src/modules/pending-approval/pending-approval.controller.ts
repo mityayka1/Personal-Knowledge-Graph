@@ -32,7 +32,7 @@ interface ListQueryDto {
 /**
  * Response for a single pending approval (without full relation objects).
  */
-type PendingApprovalResponse = Omit<PendingApproval, 'sourceInteraction'>;
+type PendingApprovalResponse = Omit<PendingApproval, 'sourceInteraction' | 'sourceEntity'>;
 
 /**
  * Response for list operation.
@@ -200,10 +200,11 @@ export class PendingApprovalController {
   // ─────────────────────────────────────────────────────────────
 
   private mapApprovalToResponse(approval: PendingApproval): PendingApprovalResponse {
-    const { sourceInteraction, ...rest } = approval;
+    const { sourceInteraction, sourceEntity, ...rest } = approval;
     return {
       ...rest,
       sourceInteractionId: sourceInteraction?.id ?? approval.sourceInteractionId,
+      sourceEntityId: sourceEntity?.id ?? approval.sourceEntityId,
     };
   }
 }

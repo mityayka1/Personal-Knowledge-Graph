@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Interaction } from './interaction.entity';
+import { EntityRecord } from './entity.entity';
 
 /**
  * Types of items that can go through approval workflow.
@@ -100,6 +101,27 @@ export class PendingApproval {
   @ManyToOne(() => Interaction, { nullable: true })
   @JoinColumn({ name: 'source_interaction_id' })
   sourceInteraction: Interaction | null;
+
+  /**
+   * Entity this approval relates to (denormalized for fast filtering/display).
+   * For FACT: the entity the fact describes.
+   * For PROJECT/TASK: the owner entity.
+   * For COMMITMENT: the owner entity (extraction perspective).
+   */
+  @Column({ name: 'source_entity_id', type: 'uuid', nullable: true })
+  @Index()
+  sourceEntityId: string | null;
+
+  @ManyToOne(() => EntityRecord, { nullable: true })
+  @JoinColumn({ name: 'source_entity_id' })
+  sourceEntity: EntityRecord | null;
+
+  /**
+   * Human-readable one-liner describing what was extracted.
+   * Examples: "work: маркетолог", "Проект: Разработка сайта", "Задача: Подготовить отчёт"
+   */
+  @Column({ type: 'text', nullable: true })
+  context: string | null;
 
   /**
    * Telegram message reference for updating inline keyboards.

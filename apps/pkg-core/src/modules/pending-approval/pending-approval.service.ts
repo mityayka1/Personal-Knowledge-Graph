@@ -31,6 +31,8 @@ export interface CreatePendingApprovalInput {
   sourceQuote?: string;
   sourceInteractionId?: string;
   messageRef?: string;
+  sourceEntityId?: string;
+  context?: string;
 }
 
 /**
@@ -116,6 +118,8 @@ export class PendingApprovalService {
       sourceQuote: input.sourceQuote ?? null,
       sourceInteractionId: input.sourceInteractionId ?? null,
       messageRef: input.messageRef ?? null,
+      sourceEntityId: input.sourceEntityId ?? null,
+      context: input.context ?? null,
       status: PendingApprovalStatus.PENDING,
     });
 

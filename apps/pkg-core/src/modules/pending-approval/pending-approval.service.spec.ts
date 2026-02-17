@@ -175,6 +175,8 @@ describe('PendingApprovalService', () => {
         sourceQuote: 'Test quote',
         sourceInteractionId: 'interaction-uuid-1',
         messageRef: 'msg:123',
+        sourceEntityId: null,
+        context: null,
         status: PendingApprovalStatus.PENDING,
       });
       expect(mockApprovalRepository.save).toHaveBeenCalled();
@@ -196,6 +198,8 @@ describe('PendingApprovalService', () => {
           sourceQuote: null,
           sourceInteractionId: null,
           messageRef: null,
+          sourceEntityId: null,
+          context: null,
         }),
       );
     });
