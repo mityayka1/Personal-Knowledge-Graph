@@ -282,7 +282,7 @@ export class AgentController {
         mode: 'agent',
         taskType: 'recall',
         prompt: this.buildRecallPrompt(dto.query, dto.entityId),
-        toolCategories: ['search', 'context', 'entities', 'events'],
+        toolCategories: ['search', 'context', 'entities', 'events', 'knowledge'],
         model: dto.model || 'sonnet',
         maxTurns: dto.maxTurns || 15,
         outputFormat: {
@@ -751,7 +751,7 @@ export class AgentController {
           mode: 'agent',
           taskType: 'meeting_prep',
           prompt: this.buildPreparePrompt(entity.name || entity.id, entityId),
-          toolCategories: ['search', 'context', 'entities', 'events'],
+          toolCategories: ['search', 'context', 'entities', 'events', 'knowledge'],
           model: 'sonnet',
           maxTurns: 15,
           referenceType: 'entity',
@@ -798,11 +798,15 @@ export class AgentController {
 2. list_entities — найди упомянутых людей по имени
 3. get_entity_details — базовая информация о контакте (факты, идентификаторы)
 4. get_entity_context — полный контекст о человеке (история взаимодействий, синтезированная сводка)
+5. search_discussions — поиск по тематическим сегментам обсуждений (topic, keywords, summary)
+6. get_knowledge_summary — консолидированные знания по проекту/человеку (решения, факты, открытые вопросы)
 
 СТРАТЕГИЯ:
-- Для поиска по ключевым словам: search_messages
-- Для вопросов о конкретном человеке: сначала list_entities → затем get_entity_context
+- Для поиска по ключевым словам: search_messages + search_discussions (параллельно)
+- Для вопросов о конкретном человеке: list_entities → get_entity_context
+- Для вопросов о проекте/теме: search_discussions → get_knowledge_summary
 - get_entity_context возвращает богатый контекст с tiered retrieval (недавние сообщения + summaries)
+- search_discussions ищет по тематическим сегментам — структурированным блокам обсуждений с topic и summary
 
 Заполни поля ответа:
 - answer: найденная информация на русском языке
@@ -831,12 +835,16 @@ export class AgentController {
 1. get_entity_context — ГЛАВНЫЙ: полный контекст о контакте (факты, история, синтезированная сводка)
 2. search_messages — дополнительный поиск по конкретным темам если нужно
 3. list_events — напоминания и события связанные с контактом
+4. search_discussions — поиск тематических обсуждений с участием этого контакта
+5. get_knowledge_summary — консолидированные знания по проектам/темам этого контакта
 
 ВАЖНО: Начни с get_entity_context — он уже содержит:
 - Текущие факты о человеке (должность, компания, контакты)
 - Недавние взаимодействия (< 7 дней — полные сообщения)
 - Summaries старых взаимодействий (7-90 дней)
 - Синтезированный контекст с рекомендациями
+
+ДОПОЛНИТЕЛЬНО: Используй search_discussions для поиска тематических обсуждений и get_knowledge_summary для консолидированных знаний — там могут быть решения, договорённости и открытые вопросы по проектам.
 
 Заполни поля ответа:
 - brief: структурированный markdown бриф (кто это, о чём общались, важные факты)
