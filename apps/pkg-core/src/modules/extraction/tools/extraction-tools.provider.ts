@@ -1233,13 +1233,12 @@ export class ExtractionToolsProvider {
         return results[0].name;
       }
 
-      // Multiple matches — use the most recently updated
+      // Multiple matches — ambiguous, don't infer (let Claude decide from prompt context)
       this.logger.log(
-        `[auto-link] ${results.length} projects for counterparty, ` +
-          `using most recent: "${results[0].name}". ` +
-          `Others: ${results.slice(1).map((r) => `"${r.name}"`).join(', ')}`,
+        `[auto-link] ${results.length} projects for counterparty — ambiguous, skipping auto-inference. ` +
+          `Candidates: ${results.map((r) => `"${r.name}"`).join(', ')}`,
       );
-      return results[0].name;
+      return null;
     } catch (error) {
       this.logger.warn(
         `[auto-link] Failed to infer project: ${error instanceof Error ? error.message : 'Unknown'}`,
