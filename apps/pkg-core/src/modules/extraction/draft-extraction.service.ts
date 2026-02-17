@@ -1838,12 +1838,15 @@ export class DraftExtractionService {
 
       if (activities.length === 0) return null;
 
+      // Normalize input to strip metadata annotations like "(клиент: ...)"
+      const normalizedInput = ProjectMatchingService.normalizeName(projectName);
+
       const activityList = activities
         .map((a, i) => `${i}. ${a.name}`)
         .join('\n');
 
       const prompt =
-        `Имя проекта из извлечения: "${projectName}"\n\n` +
+        `Имя проекта из извлечения: "${normalizedInput}"\n\n` +
         `Существующие проекты:\n${activityList}\n\n` +
         `Указывает ли "${projectName}" на один из существующих проектов? ` +
         `Учитывай транслитерацию (Panavto=Панавто), сокращения, синонимы. ` +

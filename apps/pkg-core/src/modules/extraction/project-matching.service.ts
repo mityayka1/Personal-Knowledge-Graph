@@ -64,6 +64,7 @@ export class ProjectMatchingService {
    *
    * Removes:
    * - Cost/amount annotations in parentheses, e.g. "(424.39₽)", "(1.5M RUB)"
+   * - Metadata annotations: "(клиент: ...)", "(client: ...)", "(заказчик: ...)"
    * - Leading/trailing whitespace
    * - Trailing punctuation
    * - Collapses multiple spaces into one
@@ -76,6 +77,10 @@ export class ProjectMatchingService {
       .toLowerCase()
       .replace(
         /\s*\([^)]*(?:₽|руб|rub|тыс|млн|usd|eur|\$|k\b|m\b)[^)]*\)/gi,
+        '',
+      )
+      .replace(
+        /\s*\((?:клиент|client|заказчик)\s*:[^)]*\)/gi,
         '',
       )
       .replace(/\s+/g, ' ')

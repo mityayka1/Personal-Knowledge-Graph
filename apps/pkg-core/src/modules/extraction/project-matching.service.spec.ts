@@ -114,6 +114,22 @@ describe('ProjectMatchingService', () => {
       );
     });
 
+    it('should remove client annotation (клиент: ...)', () => {
+      expect(
+        ProjectMatchingService.normalizeName(
+          'Панавто-Хаб (клиент: Ассистент Панавто)',
+        ),
+      ).toBe('панавто-хаб');
+    });
+
+    it('should remove client annotation case-insensitive', () => {
+      expect(
+        ProjectMatchingService.normalizeName(
+          'My Project (Клиент: Some Corp)',
+        ),
+      ).toBe('my project');
+    });
+
     it('should return empty string for empty input', () => {
       expect(ProjectMatchingService.normalizeName('')).toBe('');
     });
