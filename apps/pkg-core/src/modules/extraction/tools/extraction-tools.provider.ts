@@ -1038,6 +1038,26 @@ export class ExtractionToolsProvider {
           );
         }
 
+        // Auto-infer projectName from counterparty when Claude doesn't provide it
+        if (
+          !args.activityId &&
+          !args.projectName &&
+          args.entityId &&
+          context.ownerEntityId &&
+          ['task', 'promise_by_me', 'promise_by_them', 'meeting'].includes(args.eventType)
+        ) {
+          const inferred = await this.inferProjectFromCounterparty(
+            args.entityId,
+            context.ownerEntityId,
+          );
+          if (inferred) {
+            args = { ...args, projectName: inferred };
+            this.logger.log(
+              `[create_event] Auto-inferred projectName="${inferred}" for "${args.title}"`,
+            );
+          }
+        }
+
         try {
           // Map event type to appropriate draft entity
           if (args.eventType === 'task') {
@@ -1155,6 +1175,77 @@ export class ExtractionToolsProvider {
         }
       },
     );
+  }
+
+  /**
+   * Auto-infer project name from counterparty entity.
+   *
+   * Searches for activities linked to the counterparty via:
+   * 1. Direct clientEntityId match (counterparty is the client org/person)
+   * 2. ActivityMember membership (counterparty participates in the activity)
+   * 3. Employment relation (counterparty → works for org → org is activity client)
+   *
+   * Returns the project name to use as projectName hint for DraftExtractionService,
+   * which will do its own fuzzy matching to resolve parentId.
+   */
+  private async inferProjectFromCounterparty(
+    counterpartyEntityId: string,
+    ownerEntityId: string,
+  ): Promise<string | null> {
+    try {
+      const results: Array<{ id: string; name: string; activity_type: string }> =
+        await this.activityRepo.query(
+          `
+          SELECT DISTINCT a.id, a.name, a.activity_type
+          FROM activities a
+          WHERE a.owner_entity_id = $1
+            AND a.status NOT IN ('archived', 'cancelled')
+            AND a.activity_type IN ('project', 'business', 'area', 'initiative')
+            AND (
+              a.client_entity_id = $2
+              OR a.id IN (
+                SELECT am.activity_id FROM activity_members am WHERE am.entity_id = $2
+              )
+              OR a.client_entity_id IN (
+                SELECT erm2.entity_id
+                FROM entity_relations er
+                JOIN entity_relation_members erm1
+                  ON erm1.relation_id = er.id AND erm1.entity_id = $2 AND erm1.role = 'employee'
+                JOIN entity_relation_members erm2
+                  ON erm2.relation_id = er.id AND erm2.role = 'employer'
+                WHERE er.relation_type = 'employment' AND erm1.valid_until IS NULL
+              )
+            )
+          ORDER BY a.updated_at DESC NULLS LAST
+          LIMIT 5
+          `,
+          [ownerEntityId, counterpartyEntityId],
+        );
+
+      if (results.length === 0) {
+        return null;
+      }
+
+      if (results.length === 1) {
+        this.logger.log(
+          `[auto-link] Unique project for counterparty: "${results[0].name}" (${results[0].id})`,
+        );
+        return results[0].name;
+      }
+
+      // Multiple matches — use the most recently updated
+      this.logger.log(
+        `[auto-link] ${results.length} projects for counterparty, ` +
+          `using most recent: "${results[0].name}". ` +
+          `Others: ${results.slice(1).map((r) => `"${r.name}"`).join(', ')}`,
+      );
+      return results[0].name;
+    } catch (error) {
+      this.logger.warn(
+        `[auto-link] Failed to infer project: ${error instanceof Error ? error.message : 'Unknown'}`,
+      );
+      return null;
+    }
   }
 
   /**
