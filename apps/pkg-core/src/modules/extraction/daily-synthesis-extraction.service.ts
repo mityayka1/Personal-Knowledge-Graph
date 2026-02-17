@@ -208,22 +208,53 @@ export class DailySynthesisExtractionService {
    * Load existing activities for context and matching.
    */
   private async loadExistingActivities(ownerEntityId?: string): Promise<Activity[]> {
-    const query = this.activityRepo
-      .createQueryBuilder('a')
-      .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId', 'a.description', 'a.tags'])
-      .leftJoin('a.clientEntity', 'client')
-      .addSelect(['client.name'])
-      .where('a.status NOT IN (:...excludedStatuses)', {
-        excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
-      })
-      .orderBy('a.updatedAt', 'DESC')
-      .limit(100);
+    // Two-tier: confirmed activities first (active/completed), then recent drafts
+    const addOwnerFilter = (qb: ReturnType<Repository<Activity>['createQueryBuilder']>) => {
+      if (ownerEntityId) {
+        qb.andWhere('a.ownerEntityId = :ownerEntityId', { ownerEntityId });
+      }
+      return qb;
+    };
 
-    if (ownerEntityId) {
-      query.andWhere('a.ownerEntityId = :ownerEntityId', { ownerEntityId });
+    const baseSelect = ['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId', 'a.description', 'a.tags'];
+
+    const [activeActivities, recentDrafts] = await Promise.all([
+      addOwnerFilter(
+        this.activityRepo
+          .createQueryBuilder('a')
+          .select(baseSelect)
+          .leftJoin('a.clientEntity', 'client')
+          .addSelect(['client.name'])
+          .where('a.status NOT IN (:...excludedStatuses)', {
+            excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED, ActivityStatus.DRAFT],
+          }),
+      )
+        .orderBy('a.updatedAt', 'DESC')
+        .limit(80)
+        .getMany(),
+      addOwnerFilter(
+        this.activityRepo
+          .createQueryBuilder('a')
+          .select(baseSelect)
+          .leftJoin('a.clientEntity', 'client')
+          .addSelect(['client.name'])
+          .where('a.status = :draft', { draft: ActivityStatus.DRAFT }),
+      )
+        .orderBy('a.updatedAt', 'DESC')
+        .limit(20)
+        .getMany(),
+    ]);
+
+    // Merge, deduplicate
+    const seenIds = new Set<string>();
+    const merged: Activity[] = [];
+    for (const a of [...activeActivities, ...recentDrafts]) {
+      if (!seenIds.has(a.id)) {
+        seenIds.add(a.id);
+        merged.push(a);
+      }
     }
-
-    return query.getMany();
+    return merged;
   }
 
   /**
@@ -244,14 +275,14 @@ export class DailySynthesisExtractionService {
     const lines: string[] = [];
     for (const [type, items] of Object.entries(grouped)) {
       lines.push(`\n${type.toUpperCase()}:`);
-      for (const a of items.slice(0, 10)) {
+      for (const a of items.slice(0, 20)) {
         const client = a.clientEntity ? ` (клиент: ${a.clientEntity.name})` : '';
         const tags = a.tags?.length ? ` [теги: ${a.tags.join(', ')}]` : '';
         const desc = a.description ? `\n      ${a.description}` : '';
         lines.push(`  - ${a.name}${client} [${a.status}] (id: ${a.id})${tags}${desc}`);
       }
-      if (items.length > 10) {
-        lines.push(`  ... и ещё ${items.length - 10}`);
+      if (items.length > 20) {
+        lines.push(`  ... и ещё ${items.length - 20}`);
       }
     }
 

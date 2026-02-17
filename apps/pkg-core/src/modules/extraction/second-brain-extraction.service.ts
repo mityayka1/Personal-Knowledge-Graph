@@ -552,22 +552,47 @@ export class SecondBrainExtractionService {
    * Reuses pattern from DailySynthesisExtractionService.
    */
   private async loadExistingActivities(ownerEntityId?: string): Promise<Activity[]> {
-    const query = this.activityRepo
-      .createQueryBuilder('a')
-      .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId', 'a.description', 'a.tags'])
-      .leftJoin('a.clientEntity', 'client')
-      .addSelect(['client.name'])
-      .where('a.status NOT IN (:...excludedStatuses)', {
-        excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
-      })
-      .orderBy('a.updatedAt', 'DESC')
-      .limit(100);
+    // Two-tier: confirmed activities first (active/completed), then recent drafts
+    const baseSelect = ['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId', 'a.description', 'a.tags'];
 
-    if (ownerEntityId) {
-      query.andWhere('a.ownerEntityId = :ownerEntityId', { ownerEntityId });
+    const buildQuery = (statusFilter: string, params: Record<string, unknown>, limit: number) => {
+      const qb = this.activityRepo
+        .createQueryBuilder('a')
+        .select(baseSelect)
+        .leftJoin('a.clientEntity', 'client')
+        .addSelect(['client.name'])
+        .where(statusFilter, params)
+        .orderBy('a.updatedAt', 'DESC')
+        .limit(limit);
+      if (ownerEntityId) {
+        qb.andWhere('a.ownerEntityId = :ownerEntityId', { ownerEntityId });
+      }
+      return qb;
+    };
+
+    const [activeActivities, recentDrafts] = await Promise.all([
+      buildQuery(
+        'a.status NOT IN (:...excludedStatuses)',
+        { excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED, ActivityStatus.DRAFT] },
+        80,
+      ).getMany(),
+      buildQuery(
+        'a.status = :draft',
+        { draft: ActivityStatus.DRAFT },
+        20,
+      ).getMany(),
+    ]);
+
+    // Merge, deduplicate
+    const seenIds = new Set<string>();
+    const merged: Activity[] = [];
+    for (const a of [...activeActivities, ...recentDrafts]) {
+      if (!seenIds.has(a.id)) {
+        seenIds.add(a.id);
+        merged.push(a);
+      }
     }
-
-    return query.getMany();
+    return merged;
   }
 
   /**
@@ -589,14 +614,14 @@ export class SecondBrainExtractionService {
     const lines: string[] = [];
     for (const [type, items] of Object.entries(grouped)) {
       lines.push(`\n${type.toUpperCase()}:`);
-      for (const a of items.slice(0, 10)) {
+      for (const a of items.slice(0, 20)) {
         const client = a.clientEntity ? ` (клиент: ${a.clientEntity.name})` : '';
         const tags = a.tags?.length ? ` [теги: ${a.tags.join(', ')}]` : '';
         const desc = a.description ? `\n      ${a.description}` : '';
         lines.push(`  - ${a.name}${client} [${a.status}] (id: ${a.id})${tags}${desc}`);
       }
-      if (items.length > 10) {
-        lines.push(`  ... и ещё ${items.length - 10}`);
+      if (items.length > 20) {
+        lines.push(`  ... и ещё ${items.length - 20}`);
       }
     }
 

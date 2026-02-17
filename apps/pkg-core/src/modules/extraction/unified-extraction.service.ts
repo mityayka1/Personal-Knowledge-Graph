@@ -438,17 +438,39 @@ ${messageBlock}
    */
   private async buildActivitiesContext(): Promise<string> {
     try {
-      const activities = await this.activityRepo
-        .createQueryBuilder('a')
-        .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.description', 'a.tags'])
-        .leftJoin('a.clientEntity', 'client')
-        .addSelect(['client.name'])
-        .where('a.status NOT IN (:...excludedStatuses)', {
-          excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
-        })
-        .orderBy('a.updatedAt', 'DESC')
-        .limit(100)
-        .getMany();
+      // Two-tier loading: ALL active projects/businesses first, then recent drafts
+      const [activeActivities, recentDrafts] = await Promise.all([
+        // Tier 1: All non-draft activities (active, completed, in_progress) — these are confirmed
+        this.activityRepo
+          .createQueryBuilder('a')
+          .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.description', 'a.tags'])
+          .leftJoin('a.clientEntity', 'client')
+          .addSelect(['client.name'])
+          .where('a.status NOT IN (:...excludedStatuses)', {
+            excludedStatuses: [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED, ActivityStatus.DRAFT],
+          })
+          .orderBy('a.updatedAt', 'DESC')
+          .limit(80)
+          .getMany(),
+        // Tier 2: Recent draft tasks (pending approval) — only top 20 most recent
+        this.activityRepo
+          .createQueryBuilder('a')
+          .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.tags'])
+          .where('a.status = :draft', { draft: ActivityStatus.DRAFT })
+          .orderBy('a.updatedAt', 'DESC')
+          .limit(20)
+          .getMany(),
+      ]);
+
+      // Merge, deduplicate
+      const seenIds = new Set<string>();
+      const activities: Activity[] = [];
+      for (const a of [...activeActivities, ...recentDrafts]) {
+        if (!seenIds.has(a.id)) {
+          seenIds.add(a.id);
+          activities.push(a);
+        }
+      }
 
       if (activities.length === 0) return 'Нет известных активностей.';
 
@@ -462,13 +484,13 @@ ${messageBlock}
       const lines: string[] = [];
       for (const [type, items] of Object.entries(grouped)) {
         lines.push(`\n${type.toUpperCase()}:`);
-        for (const a of items.slice(0, 15)) {
+        for (const a of items.slice(0, 20)) {
           const client = a.clientEntity ? ` (клиент: ${a.clientEntity.name})` : '';
           const tags = a.tags?.length ? ` [${a.tags.join(', ')}]` : '';
           lines.push(`  - ${a.name}${client} [${a.status}] (activityId: ${a.id})${tags}`);
         }
-        if (items.length > 15) {
-          lines.push(`  ... и ещё ${items.length - 15}`);
+        if (items.length > 20) {
+          lines.push(`  ... и ещё ${items.length - 20}`);
         }
       }
       return lines.join('\n');
