@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Not, ILike } from 'typeorm';
+import { Repository } from 'typeorm';
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { ProjectMatchingService } from '../project-matching.service';
@@ -332,24 +332,21 @@ export class ExtractionToolsProvider {
           // Run ILIKE search and fuzzy search in parallel
           const excludedStatuses = [ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED];
 
-          const ilikeWhereConditions: Record<string, unknown> = {
-            ownerEntityId: context.ownerEntityId,
-            name: ILike(`%${args.query}%`),
-            status: Not(In(excludedStatuses)),
-          };
-          if (args.type) {
-            ilikeWhereConditions.activityType = args.type.toLowerCase() as ActivityType;
-          }
-
           const [ilikeResults, fuzzyResults] = await Promise.all([
-            // a. ILIKE search
-            this.activityRepo.find({
-              where: ilikeWhereConditions,
-              select: ['id', 'name', 'activityType', 'status', 'clientEntityId'],
-              relations: ['clientEntity'],
-              order: { updatedAt: 'DESC' },
-              take: 10,
-            }),
+            // a. ILIKE search (QueryBuilder to avoid TypeORM find+take distinctAlias bug)
+            (() => {
+              const qb = this.activityRepo
+                .createQueryBuilder('a')
+                .select(['a.id', 'a.name', 'a.activityType', 'a.status', 'a.clientEntityId'])
+                .leftJoinAndSelect('a.clientEntity', 'client')
+                .where('a.ownerEntityId = :ownerEntityId', { ownerEntityId: context.ownerEntityId })
+                .andWhere('a.name ILIKE :namePattern', { namePattern: `%${args.query}%` })
+                .andWhere('a.status NOT IN (:...excludedStatuses)', { excludedStatuses });
+              if (args.type) {
+                qb.andWhere('a.activityType = :activityType', { activityType: args.type.toLowerCase() });
+              }
+              return qb.orderBy('a.updatedAt', 'DESC').limit(10).getMany();
+            })(),
             // b. Fuzzy search via ProjectMatchingService
             this.projectMatchingService
               ? this.projectMatchingService.findCandidates({
