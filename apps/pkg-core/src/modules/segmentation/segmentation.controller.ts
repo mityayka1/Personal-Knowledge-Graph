@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { SegmentationService } from './segmentation.service';
 import { TopicBoundaryDetectorService } from './topic-boundary-detector.service';
+import { SegmentationJobService } from './segmentation-job.service';
+import { OrphanSegmentLinkerService } from './orphan-segment-linker.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { SegmentQueryDto } from './dto/segment-query.dto';
@@ -22,6 +24,8 @@ export class SegmentationController {
   constructor(
     private readonly segmentationService: SegmentationService,
     private readonly topicBoundaryDetector: TopicBoundaryDetectorService,
+    private readonly segmentationJob: SegmentationJobService,
+    private readonly orphanLinker: OrphanSegmentLinkerService,
   ) {}
 
   @Post()
@@ -124,6 +128,23 @@ export class SegmentationController {
       `Auto-segmentation: ${body.messages.length} messages, chat ${body.chatId}`,
     );
     return this.topicBoundaryDetector.detectAndCreate(body);
+  }
+
+  @Post('run-segmentation')
+  async runSegmentation() {
+    this.logger.log('Manual segmentation job triggered via API');
+    // Fire-and-forget: respond immediately, job runs in background
+    this.segmentationJob.handleCron().catch((err) => {
+      this.logger.error(`Manual segmentation job failed: ${err.message}`, err.stack);
+    });
+    return { status: 'started', message: 'Segmentation job triggered. Check logs for progress.' };
+  }
+
+  @Post('run-orphan-linker')
+  async runOrphanLinker() {
+    this.logger.log('Manual orphan segment linker triggered via API');
+    const result = await this.orphanLinker.linkAllOrphans();
+    return { status: 'completed', ...result };
   }
 
   // ─────────────────────────────────────────────────────────────

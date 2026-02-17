@@ -6,6 +6,8 @@ import {
   EventType,
   EventStatus,
   EntityRecord,
+  EntityFact,
+  EntityFactStatus,
   Activity,
   ActivityStatus,
   ActivityType,
@@ -42,6 +44,8 @@ export class BriefDataProvider {
     private activityRepo: Repository<Activity>,
     @InjectRepository(Commitment)
     private commitmentRepo: Repository<Commitment>,
+    @InjectRepository(EntityFact)
+    private entityFactRepo: Repository<EntityFact>,
   ) {}
 
   /**
@@ -99,9 +103,31 @@ export class BriefDataProvider {
     return { meetings, deadlines };
   }
 
+  /**
+   * Find entities whose birthday matches today's month+day.
+   * Uses EntityFact with factType='birthday' and value_date column.
+   */
   private async getEntitiesWithBirthdayToday(): Promise<EntityRecord[]> {
-    // TODO: Implement birthday lookup via EntityFact
-    return [];
+    const facts = await this.entityFactRepo
+      .createQueryBuilder('f')
+      .where('f.fact_type = :factType', { factType: 'birthday' })
+      .andWhere('f.status = :status', { status: EntityFactStatus.ACTIVE })
+      .andWhere('f.value_date IS NOT NULL')
+      .andWhere(
+        'EXTRACT(MONTH FROM f.value_date) = EXTRACT(MONTH FROM CURRENT_DATE)',
+      )
+      .andWhere(
+        'EXTRACT(DAY FROM f.value_date) = EXTRACT(DAY FROM CURRENT_DATE)',
+      )
+      .getMany();
+
+    if (facts.length === 0) return [];
+
+    const entityIds = [...new Set(facts.map((f) => f.entityId))];
+
+    return this.entityRepo.find({
+      where: { id: In(entityIds) },
+    });
   }
 
   /**

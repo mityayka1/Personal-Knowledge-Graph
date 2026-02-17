@@ -14,17 +14,23 @@ import { MessageData } from '../extraction/extraction.types';
 /** Minimum messages to attempt segmentation */
 const MIN_MESSAGES_FOR_SEGMENTATION = 4;
 
-/** Maximum messages per Claude call (to fit context window) */
-const MAX_MESSAGES_PER_BATCH = 200;
+/** Maximum messages per Claude call.
+ * Reduced from 200 to 80: large prompts caused Haiku to fail with
+ * error_max_structured_output_retries (SDK structured output retries exhausted).
+ * 80 messages keeps prompt within reliable structured output limits. */
+const MAX_MESSAGES_PER_BATCH = 80;
 
 /** Time gap in minutes that suggests a topic boundary */
 const TIME_GAP_MINUTES = 60;
 
-/** Max agentic turns for segmentation Claude call */
-const SEGMENTATION_MAX_TURNS = 3;
+/** Max agentic turns for segmentation Claude call.
+ * Structured output via SDK requires >=2 turns (tool call + completion).
+ * Sonnet occasionally emits intermediate text before the StructuredOutput tool,
+ * so 3 turns is not enough — use 7 for reliable operation. */
+const SEGMENTATION_MAX_TURNS = 7;
 
 /** Timeout for segmentation Claude call (ms) */
-const SEGMENTATION_TIMEOUT_MS = 60_000;
+const SEGMENTATION_TIMEOUT_MS = 180_000;
 
 @Injectable()
 export class TopicBoundaryDetectorService {
@@ -84,8 +90,18 @@ export class TopicBoundaryDetectorService {
         continue;
       }
 
-      // Call Claude for semantic segmentation
-      const detected = await this.detectBoundaries(chunk.messages, chatTitle);
+      // Call Claude for semantic segmentation (graceful: chunk failure doesn't abort chat)
+      let detected: { segments: DetectedSegment[]; skippedCount: number; tokensUsed: number };
+      try {
+        detected = await this.detectBoundaries(chunk.messages, chatTitle);
+      } catch (error: unknown) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn(
+          `[segmentation] Chunk failed (${chunk.messages.length} msgs, offset ${chunk.globalOffset}): ${err.message}`,
+        );
+        totalSkipped += chunk.messages.length;
+        continue;
+      }
       totalTokens += detected.tokensUsed;
 
       // Create TopicalSegments
@@ -200,7 +216,7 @@ export class TopicBoundaryDetectorService {
       mode: 'oneshot',
       taskType: 'topic_segmentation',
       prompt,
-      model: 'haiku',
+      model: 'sonnet',
       schema: TOPIC_SEGMENTATION_SCHEMA,
       maxTurns: SEGMENTATION_MAX_TURNS,
       timeout: SEGMENTATION_TIMEOUT_MS,

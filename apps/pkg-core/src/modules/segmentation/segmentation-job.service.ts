@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { Interaction, Message, TopicalSegment } from '@pkg/entities';
+import { Interaction, Message } from '@pkg/entities';
 import { TopicBoundaryDetectorService } from './topic-boundary-detector.service';
 import { SegmentationService } from './segmentation.service';
 import { SettingsService } from '../settings/settings.service';
@@ -13,6 +13,9 @@ const MIN_UNSEGMENTED_MESSAGES = 4;
 
 /** Delay between Claude API calls to avoid rate limiting (ms) */
 const INTER_CALL_DELAY_MS = 2_000;
+
+/** How far back to look for unsegmented messages (hours) */
+const LOOKBACK_HOURS = 48;
 
 @Injectable()
 export class SegmentationJobService {
@@ -39,7 +42,7 @@ export class SegmentationJobService {
 
     this.isRunning = true;
     const startTime = Date.now();
-    let interactionsProcessed = 0;
+    let chatsProcessed = 0;
     let totalSegmentsCreated = 0;
     let errorCount = 0;
 
@@ -51,25 +54,37 @@ export class SegmentationJobService {
         return;
       }
 
-      // Find interactions updated in the last 2 hours with Telegram chat messages
-      const interactions: Array<{ id: string; source_metadata: Record<string, unknown> }> =
+      // Find CHATS (not interactions) with enough unsegmented messages.
+      // Previous approach queried per-interaction, but Telegram session management
+      // creates many small interactions (1-2 msgs each), so the threshold was never met.
+      // Now we aggregate by telegram_chat_id across all interactions.
+      const chats: Array<{ chat_id: string; unsegmented_count: string }> =
         await this.dataSource.query(`
-          SELECT DISTINCT i.id, i.source_metadata
-          FROM interactions i
-          INNER JOIN messages m ON m.interaction_id = i.id
-          WHERE i.updated_at > NOW() - INTERVAL '2 hours'
-            AND i.source_metadata->>'telegram_chat_id' IS NOT NULL
+          SELECT i.source_metadata->>'telegram_chat_id' AS chat_id,
+                 COUNT(m.id) AS unsegmented_count
+          FROM messages m
+          INNER JOIN interactions i ON i.id = m.interaction_id
+          LEFT JOIN segment_messages sm ON sm.message_id = m.id
+          WHERE i.source_metadata->>'telegram_chat_id' IS NOT NULL
+            AND sm.message_id IS NULL
+            AND m.timestamp > NOW() - INTERVAL '${LOOKBACK_HOURS} hours'
+          GROUP BY i.source_metadata->>'telegram_chat_id'
+          HAVING COUNT(m.id) >= ${MIN_UNSEGMENTED_MESSAGES}
+          ORDER BY COUNT(m.id) DESC
         `);
 
-      if (interactions.length === 0) {
-        this.logger.debug('[segmentation-job] No recent interactions to process');
+      if (chats.length === 0) {
+        this.logger.debug('[segmentation-job] No chats with enough unsegmented messages');
         return;
       }
 
-      this.logger.log(`[segmentation-job] Found ${interactions.length} interaction(s) to check`);
+      this.logger.log(
+        `[segmentation-job] Found ${chats.length} chat(s) with unsegmented messages: ` +
+          chats.map((c) => `${c.chat_id}(${c.unsegmented_count})`).join(', '),
+      );
 
-      for (let i = 0; i < interactions.length; i++) {
-        const interaction = interactions[i];
+      for (let i = 0; i < chats.length; i++) {
+        const chat = chats[i];
 
         // Rate limiting: delay between Claude API calls (skip before first)
         if (i > 0) {
@@ -77,16 +92,16 @@ export class SegmentationJobService {
         }
 
         try {
-          const segmentsCreated = await this.processInteraction(interaction);
+          const segmentsCreated = await this.processChat(chat.chat_id);
           if (segmentsCreated > 0) {
-            interactionsProcessed++;
+            chatsProcessed++;
             totalSegmentsCreated += segmentsCreated;
           }
         } catch (error: unknown) {
           errorCount++;
           const err = error instanceof Error ? error : new Error(String(error));
           this.logger.error(
-            `[segmentation-job] Error processing interaction ${interaction.id}: ${err.message}`,
+            `[segmentation-job] Error processing chat ${chat.chat_id}: ${err.message}`,
             err.stack,
           );
         }
@@ -94,7 +109,7 @@ export class SegmentationJobService {
 
       const durationMs = Date.now() - startTime;
       this.logger.log(
-        `[segmentation-job] Completed: ${interactionsProcessed} interactions processed, ` +
+        `[segmentation-job] Completed: ${chatsProcessed} chats processed, ` +
           `${totalSegmentsCreated} segments created, ${errorCount} errors, ${durationMs}ms`,
       );
     } catch (error: unknown) {
@@ -109,18 +124,11 @@ export class SegmentationJobService {
   }
 
   /**
-   * Process a single interaction: find unsegmented messages, detect topics, link segments.
-   * Returns the number of segments created.
+   * Process a single chat: collect ALL unsegmented messages across interactions,
+   * detect topics, create segments, and link related.
    */
-  private async processInteraction(
-    interaction: { id: string; source_metadata: Record<string, unknown> },
-  ): Promise<number> {
-    const chatId = interaction.source_metadata?.telegram_chat_id as string;
-    if (!chatId) return 0;
-
-    // Find messages NOT already linked to any segment
-    // Using LEFT JOIN instead of NOT IN for better performance (avoids full scan of segment_messages)
-    // Raw SQL returns snake_case columns — map explicitly to camelCase
+  private async processChat(chatId: string): Promise<number> {
+    // Get ALL unsegmented messages for this chat across ALL interactions
     const rawMessages: Array<{
       id: string;
       content: string | null;
@@ -129,22 +137,22 @@ export class SegmentationJobService {
       sender_entity_id: string | null;
       reply_to_source_message_id: string | null;
       topic_name: string | null;
+      interaction_id: string;
     }> = await this.dataSource.query(
       `SELECT m.id, m.content, m.timestamp, m.is_outgoing,
-              m.sender_entity_id, m.reply_to_source_message_id, m.topic_name
+              m.sender_entity_id, m.reply_to_source_message_id,
+              m.topic_name, m.interaction_id
        FROM messages m
+       INNER JOIN interactions i ON i.id = m.interaction_id
        LEFT JOIN segment_messages sm ON sm.message_id = m.id
-       WHERE m.interaction_id = $1
+       WHERE i.source_metadata->>'telegram_chat_id' = $1
          AND sm.message_id IS NULL
+         AND m.timestamp > NOW() - INTERVAL '${LOOKBACK_HOURS} hours'
        ORDER BY m.timestamp ASC`,
-      [interaction.id],
+      [chatId],
     );
 
     if (rawMessages.length < MIN_UNSEGMENTED_MESSAGES) {
-      this.logger.debug(
-        `[segmentation-job] Interaction ${interaction.id}: ` +
-          `only ${rawMessages.length} unsegmented message(s), skipping`,
-      );
       return 0;
     }
 
@@ -159,27 +167,44 @@ export class SegmentationJobService {
       topicName: m.topic_name ?? undefined,
     }));
 
-    // Get participant entity IDs
+    // Use the first message's interaction_id as the primary interaction
+    // (segments may span multiple interactions, but we need one for the FK)
+    const primaryInteractionId = rawMessages[0].interaction_id;
+
+    // Get participant entity IDs across all interactions for this chat
     const participants: Array<{ entity_id: string }> = await this.dataSource.query(
       `SELECT DISTINCT ip.entity_id
        FROM interaction_participants ip
-       WHERE ip.interaction_id = $1
+       INNER JOIN interactions i ON i.id = ip.interaction_id
+       WHERE i.source_metadata->>'telegram_chat_id' = $1
          AND ip.entity_id IS NOT NULL`,
-      [interaction.id],
+      [chatId],
     );
     const participantIds = participants.map((p) => p.entity_id);
 
+    // Try to get chat title from the most recent interaction
+    const chatTitleRow: Array<{ title: string | null }> = await this.dataSource.query(
+      `SELECT i.source_metadata->>'chat_title' AS title
+       FROM interactions i
+       WHERE i.source_metadata->>'telegram_chat_id' = $1
+       ORDER BY i.updated_at DESC
+       LIMIT 1`,
+      [chatId],
+    );
+    const chatTitle = chatTitleRow?.[0]?.title ?? undefined;
+
     this.logger.log(
-      `[segmentation-job] Processing interaction ${interaction.id} (chat ${chatId}): ` +
+      `[segmentation-job] Processing chat ${chatId}${chatTitle ? ` "${chatTitle}"` : ''}: ` +
         `${messages.length} unsegmented messages, ${participantIds.length} participants`,
     );
 
     // Detect topics and create segments
     const result = await this.topicDetector.detectAndCreate({
       chatId,
-      interactionId: interaction.id,
+      interactionId: primaryInteractionId,
       messages,
       participantIds,
+      chatTitle,
     });
 
     // Link related segments for cross-chat discovery
