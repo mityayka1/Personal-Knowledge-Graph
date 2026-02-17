@@ -1,351 +1,235 @@
-# Plan: Устранение циклических зависимостей (forwardRef)
+# Plan: Улучшение Extraction Context + Manual Correction
 
 ## Context
 
-После деплоя Phase E (Knowledge Packing) получили два каскадных DI-сбоя:
-1. `UndefinedModuleException` — SegmentationModule не мог резолвить ClaudeAgentModule
-2. `UnknownDependenciesException` — KnowledgeToolsProvider не находил TypeORM repos в контексте ClaudeAgentModule
+**Проблема:** При extraction из бесед (SecondBrainExtractionService) обязательства и задачи создаются как **сироты** — без привязки к существующим проектам/активностям.
 
-**Корневая причина:** ClaudeAgentModule — "хаб" с 7 forwardRef-импортами, создающий хрупкие циклические зависимости. Каждый новый модуль (SegmentationModule) рискует сломать DI при деплое.
+**Конкретный кейс:** Сообщение "Пойду Максу сделаю договор" создаёт commitment с `activity_id = null`, хотя в системе может быть связанный проект. Claude не знает о существующих проектах, потому что ему не передаётся их список.
 
-### Текущий граф зависимостей (циклы)
+**Корневая причина:** SecondBrainExtractionService (real-time extraction) НЕ загружает existing activities, в отличие от DailySynthesisExtractionService, который:
+- Вызывает `loadExistingActivities()` — top 100 activities
+- Форматирует их для промпта через `formatActivityContext()`
+- Передаёт projectName + existingActivityId в schema
 
-```
-ContextModule ──────→ ClaudeAgentModule ──────→ ContextModule       ← CYCLE
-EntityModule ───────→ ClaudeAgentModule ──────→ EntityModule        ← CYCLE
-NotificationModule ─→ ClaudeAgentModule ──────→ NotificationModule  ← CYCLE
-SegmentationModule ─→ ClaudeAgentModule ──────→ SegmentationModule  ← CYCLE
-ExtractionModule ───→ ClaudeAgentModule ──────→ ExtractionModule    ← CYCLE
-SummarizationModule → ClaudeAgentModule                             (one-way, OK)
-TelegramMiniApp ────→ ClaudeAgentModule                             (one-way, OK)
-```
-
-**Двойная роль ClaudeAgentModule:**
-1. Предоставляет core AI-сервисы (ClaudeAgentService, SchemaLoaderService) — это нужно всем доменным модулям
-2. Хостит tool providers, зависящие от доменных сервисов — это требует импорта доменных модулей
+**Дополнительные проблемы:**
+- CONVERSATION_EXTRACTION_SCHEMA не содержит поля `projectName` для задач/обязательств
+- Нет REST endpoint для редактирования draft entities (метод `updateTargetEntity()` есть в сервисе, но не exposed через контроллер)
+- Cross-chat context window слишком узкий (30 мин)
 
 ---
 
-## Решение: Декомпозиция ClaudeAgentModule + Registration Pattern
+## Шаги реализации
 
-### Целевой граф зависимостей (без циклов)
+### Шаг 1: Добавить `projectName` в conversation extraction schema и mappers
+
+**Файл:** `apps/pkg-core/src/modules/extraction/second-brain-extraction.service.ts`
+
+**Зачем:** Без поля `projectName` в выходных данных LLM не может указать привязку к проекту, даже если знает о нём.
+
+**Изменения (4 места в одном файле):**
+
+**1a.** Обновить описания типов в `buildConversationSystemPrompt()` (строки 592-608) — добавить `projectName?` к типам task, promise_by_me, promise_by_them, meeting:
 
 ```
-ContextModule ──────→ ClaudeAgentCoreModule    (one-way ✅)
-EntityModule ───────→ ClaudeAgentCoreModule    (one-way ✅)
-NotificationModule ─→ ClaudeAgentCoreModule    (one-way ✅)
-SegmentationModule ─→ ClaudeAgentCoreModule    (one-way ✅)
-ExtractionModule ───→ ClaudeAgentCoreModule    (one-way ✅)
-SummarizationModule → ClaudeAgentCoreModule    (one-way ✅)
-TelegramMiniApp ────→ ClaudeAgentCoreModule    (one-way ✅)
+4. **task** — задача от собеседника мне
+   data: { what, priority?, deadline?, deadlineText?, projectName?: "точное имя проекта из списка" }
+```
 
-ClaudeAgentModule ──→ ClaudeAgentCoreModule    (one-way ✅)
-ClaudeAgentModule ──→ all domain modules       (one-way ✅, домены НЕ импортируют ClaudeAgentModule)
+**1b.** Обновить `mapToExtractedTask()` (строка 369) — добавить `projectName` в деструктуризацию и return:
+```typescript
+const data = rawEvent.data as {
+  what?: string;
+  priority?: string;
+  deadline?: string;
+  deadlineText?: string;
+  projectName?: string;  // NEW
+};
+return {
+  ...existing,
+  projectName: data.projectName,  // NEW
+};
+```
+
+**1c.** Обновить `mapToExtractedCommitment()` (строка 394) — аналогично добавить `projectName`.
+
+**1d.** Обновить `mapToExtractedMeeting()` (строка 419) — аналогично.
+
+**Почему schema не меняется:** `CONVERSATION_EXTRACTION_SCHEMA` определяет `data` как `{ type: 'object', additionalProperties: true }` — любые поля уже разрешены. LLM управляется описаниями в system prompt.
+
+**Почему DraftExtractionService не меняется:** Он уже обрабатывает `projectName` для задач (строки 517-529) и обязательств (строки 609-644) через 3-tier fuzzy matching.
+
+---
+
+### Шаг 2: Внедрить activity context в conversation extraction prompt
+
+**Файл:** `apps/pkg-core/src/modules/extraction/second-brain-extraction.service.ts`
+
+**Зачем:** Это ключевое изменение — Claude получит список существующих проектов и сможет привязывать задачи/обязательства к ним.
+
+**Что переиспользуем:**
+- `DailySynthesisExtractionService.loadExistingActivities()` (строки 210-227)
+- `DailySynthesisExtractionService.formatActivityContext()` (строки 232-259)
+
+**Изменения (4 места):**
+
+**2a.** Activity repo уже доступен — `Activity` есть в `TypeOrmModule.forFeature()` в `extraction.module.ts:61`. Добавить `@InjectRepository(Activity)` в constructor.
+
+**2b.** Скопировать два метода из DailySynthesisExtractionService:
+- `loadExistingActivities(ownerEntityId?)` — top 100 non-archived activities с client join
+- `formatActivityContext(activities)` — группировка по типу, форматирование с id, name, client, status, tags
+
+**2c.** В `extractFromConversation()` (после строки 179) добавить загрузку активностей:
+```typescript
+const activities = await this.loadExistingActivities(ownerEntityId);
+const activityContext = this.formatActivityContext(activities);
+```
+
+Передать в `buildConversationSystemPrompt(entityContext, crossChatContext, activityContext)`.
+
+**2d.** В `buildConversationSystemPrompt()` добавить третий параметр и секцию:
+```
+═══════════════════════════════════════════════════════════════
+СУЩЕСТВУЮЩИЕ АКТИВНОСТИ (проекты, задачи — для привязки):
+${activityContext}
+═══════════════════════════════════════════════════════════════
+```
+
+Добавить правило extraction:
+```
+6. Используй СУЩЕСТВУЮЩИЕ АКТИВНОСТИ для привязки:
+   - Если задача/обещание связано с известным проектом — укажи projectName
+   - Используй ТОЧНЫЕ имена проектов из списка
+   - Если ничего не подходит — не указывай projectName
 ```
 
 ---
 
-## Шаг 1: Создать ClaudeAgentCoreModule
+### Шаг 3: REST endpoint для редактирования draft entities
 
-**Новый файл:** `apps/pkg-core/src/modules/claude-agent/claude-agent-core.module.ts`
+**Файл:** `apps/pkg-core/src/modules/pending-approval/pending-approval.controller.ts`
 
-Чистый модуль без доменных зависимостей:
+**Зачем:** Позволит исправлять ошибочные привязки (перепривязать задачу к другому проекту, изменить имя, назначить исполнителя).
 
-```typescript
-@Module({
-  imports: [
-    TypeOrmModule.forFeature([ClaudeAgentRun]),
-    // Только ConfigModule (implicit через NestJS)
-  ],
-  providers: [
-    ClaudeAgentService,
-    SchemaLoaderService,
-    RecallSessionService,
-    ToolsRegistryService,  // Refactored — без DI-зависимостей от tool providers
-  ],
-  exports: [
-    ClaudeAgentService,
-    SchemaLoaderService,
-    RecallSessionService,
-    ToolsRegistryService,
-  ],
-})
-export class ClaudeAgentCoreModule {}
-```
-
-**Зависимости провайдеров (подтверждено чтением кода):**
-| Провайдер | Зависимости | Доменные? |
-|-----------|-------------|-----------|
-| ClaudeAgentService | ConfigService, ClaudeAgentRun repo, ToolsRegistryService | Нет ✅ |
-| SchemaLoaderService | ConfigService | Нет ✅ |
-| RecallSessionService | @InjectRedis() | Нет ✅ |
-| ToolsRegistryService | **Текущие:** 8 tool providers через @Optional+forwardRef → **После:** никаких | Нет ✅ |
-
----
-
-## Шаг 2: Рефакторинг ToolsRegistryService — Registration Pattern
-
-**Файл:** `apps/pkg-core/src/modules/claude-agent/tools-registry.service.ts`
-
-### Было (constructor injection с forwardRef):
+**Добавить:**
 
 ```typescript
-constructor(
-  private readonly searchToolsProvider: SearchToolsProvider,          // direct
-  private readonly entityToolsProvider: EntityToolsProvider,          // direct
-  private readonly eventToolsProvider: EventToolsProvider,            // direct
-  @Optional() @Inject(forwardRef(() => ContextToolsProvider))
-  private readonly contextToolsProvider: ContextToolsProvider | null, // forwardRef
-  @Optional() @Inject(forwardRef(() => ActionToolsProvider))
-  private readonly actionToolsProvider: ActionToolsProvider | null,   // forwardRef
-  // ... ещё 3 forwardRef
-)
-```
-
-### Стало (registration pattern):
-
-```typescript
-@Injectable()
-export class ToolsRegistryService {
-  private readonly providers = new Map<ToolCategory, ToolsProviderInterface>();
-  private cachedAllTools: ToolDefinition[] | null = null;
-  private categoryCache = new Map<string, ToolDefinition[]>();
-
-  constructor() {} // Пустой конструктор — нет доменных зависимостей!
-
-  /**
-   * Register a tool provider for a category.
-   * Called by tool providers in their onModuleInit().
-   */
-  registerProvider(category: ToolCategory, provider: ToolsProviderInterface): void {
-    this.providers.set(category, provider);
-    this.invalidateCache();
-    this.logger.log(`Registered tool provider for category: ${category}`);
-  }
-
-  // getAllTools(), getToolsByCategory(), createMcpServer() — API не меняется
-  // Внутри вместо this.searchToolsProvider.getTools() → this.providers.get('search')?.getTools()
+@Patch(':id/target')
+async updateTarget(
+  @Param('id', ParseUUIDPipe) id: string,
+  @Body() body: UpdateTargetDto,
+): Promise<{ success: true; id: string }> {
+  await this.pendingApprovalService.updateTargetEntity(id, updates);
+  return { success: true, id };
 }
 ```
 
-### Интерфейс ToolsProviderInterface:
+**UpdateTargetDto** — body с полями: `name?`, `description?`, `priority?`, `deadline?`, `parentId?`, `clientEntityId?`, `assignee?`, `dueDate?`. Даты принимаются как ISO strings, конвертируются в Date.
 
-**Новый файл:** `apps/pkg-core/src/modules/claude-agent/tools/tools-provider.interface.ts`
+**Метод `updateTargetEntity()` уже реализован** в pending-approval.service.ts:278-358 — обрабатывает все типы (task/project → Activity fields, commitment → Commitment fields).
+
+---
+
+### Шаг 4: REST endpoint для просмотра target entity
+
+**Файлы:**
+- `apps/pkg-core/src/modules/pending-approval/pending-approval.service.ts` — добавить `getTargetEntity()`
+- `apps/pkg-core/src/modules/pending-approval/pending-approval.controller.ts` — добавить endpoint
+
+**Зачем:** Для UI — посмотреть текущее состояние draft entity перед редактированием.
 
 ```typescript
-export interface ToolsProviderInterface {
-  getTools(): ToolDefinition[];
-  hasTools?(): boolean;
+// Service
+async getTargetEntity(id: string): Promise<{ itemType: string; target: Record<string, unknown> } | null> {
+  const approval = await this.approvalRepo.findOne({ where: { id } });
+  if (!approval) return null;
+  const config = getItemTypeConfig(approval.itemType);
+  const target = await this.dataSource.manager.findOne(config.entityClass, { where: { id: approval.targetId } });
+  if (!target) return null;
+  return { itemType: approval.itemType, target };
 }
+
+// Controller
+@Get(':id/target')
+async getTarget(@Param('id', ParseUUIDPipe) id: string) { ... }
 ```
+
+**Порядок route:** `GET :id/target` должен быть ДО `GET :id` — иначе NestJS может подставить "target" как UUID (ParseUUIDPipe отклонит, но лучше явный порядок).
 
 ---
 
-## Шаг 3: Tool Providers — самостоятельная регистрация
+### Шаг 5: Расширить окно cross-chat context
 
-Каждый tool provider реализует `OnModuleInit` и регистрируется в `ToolsRegistryService`:
+**Файл:** `apps/pkg-core/src/modules/settings/settings.service.ts`
 
-```typescript
-@Injectable()
-export class SearchToolsProvider implements OnModuleInit, ToolsProviderInterface {
-  constructor(
-    private readonly searchService: SearchService,
-    private readonly toolsRegistry: ToolsRegistryService,  // inject from CoreModule
-  ) {}
+**Изменение:** `DEFAULT_CROSS_CHAT_CONTEXT_MINUTES: 30 → 120` (строка 136)
 
-  onModuleInit() {
-    this.toolsRegistry.registerProvider('search', this);
-  }
+**Зачем:** 30 минут слишком мало для бизнес-разговоров. 2 часа покрывает большинство связанных обсуждений за день.
 
-  getTools(): ToolDefinition[] { /* ... без изменений ... */ }
-}
-```
-
-### Куда перенести tool providers
-
-| Provider | Текущее расположение | Новый модуль (providers) | Файл остаётся |
-|----------|---------------------|--------------------------|----------------|
-| SearchToolsProvider | ClaudeAgentModule | ClaudeAgentModule* | `claude-agent/tools/` |
-| EntityToolsProvider | ClaudeAgentModule | EntityModule | `claude-agent/tools/` |
-| EventToolsProvider | ClaudeAgentModule | ClaudeAgentModule* | `claude-agent/tools/` |
-| ContextToolsProvider | ClaudeAgentModule | ContextModule | `claude-agent/tools/` |
-| ActionToolsProvider | ClaudeAgentModule | NotificationModule | `claude-agent/tools/` |
-| ActivityToolsProvider | ClaudeAgentModule | ActivityModule | `claude-agent/tools/` |
-| DataQualityToolsProvider | DataQualityModule | DataQualityModule | `data-quality/` (уже там) |
-| KnowledgeToolsProvider | SegmentationModule | SegmentationModule | `segmentation/` (уже там) |
-
-*SearchToolsProvider и EventToolsProvider остаются в ClaudeAgentModule, т.к. SearchModule и EntityEventModule не создают циклов.
-
-**Физические файлы НЕ перемещаются** — только меняется, в каком модуле они зарегистрированы как providers. Это минимизирует diff и риск.
+**Настраиваемость:** Значение уже можно переопределить через `PATCH /settings` с ключом `extraction.crossChatContextMinutes`.
 
 ---
 
-## Шаг 4: Обновить доменные модули
+## Зависимости между шагами
 
-### 4a. Заменить импорт ClaudeAgentModule → ClaudeAgentCoreModule
-
-Для модулей, которым нужен только ClaudeAgentService/SchemaLoader:
-
-| Модуль | Файл | Было | Стало |
-|--------|------|------|-------|
-| ContextModule | `context/context.module.ts` | `forwardRef(() => ClaudeAgentModule)` | `ClaudeAgentCoreModule` |
-| EntityModule | `entity/entity.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
-| NotificationModule | `notification/notification.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
-| SegmentationModule | `segmentation/segmentation.module.ts` | `forwardRef(() => ClaudeAgentModule)` | `ClaudeAgentCoreModule` |
-| ExtractionModule | `extraction/extraction.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
-| SummarizationModule | `summarization/summarization.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
-| TelegramMiniApp | `telegram-mini-app/telegram-mini-app.module.ts` | `ClaudeAgentModule` | `ClaudeAgentCoreModule` |
-
-### 4b. Добавить tool providers в доменные модули
-
-Модули, принимающие tool providers, должны:
-1. Импортировать `ClaudeAgentCoreModule` (для ToolsRegistryService)
-2. Добавить tool provider в `providers` array
-
-Пример для ContextModule:
-
-```typescript
-@Module({
-  imports: [
-    ClaudeAgentCoreModule,  // для ClaudeAgentService + ToolsRegistryService
-    // ... остальные импорты
-  ],
-  providers: [
-    ContextService,
-    ContextToolsProvider,  // NEW — раньше был в ClaudeAgentModule
-  ],
-  exports: [ContextService],
-})
 ```
-
-### 4c. Убрать @Optional() + forwardRef() из tool providers
-
-Пример для ContextToolsProvider:
-
-```typescript
-// БЫЛО:
-@Optional()
-@Inject(forwardRef(() => ContextService))
-private readonly contextService: ContextService | null,
-
-// СТАЛО (ContextToolsProvider теперь в ContextModule, ContextService доступен напрямую):
-private readonly contextService: ContextService,
+Шаг 1 + Шаг 2 → деплоить вместе (1 без 2 бесполезен — LLM не знает проектов; 2 без 1 — LLM знает но не может указать projectName)
+Шаг 3 → независимый
+Шаг 4 → независимый
+Шаг 5 → независимый
 ```
-
----
-
-## Шаг 5: Упростить ClaudeAgentModule
-
-**Файл:** `apps/pkg-core/src/modules/claude-agent/claude-agent.module.ts`
-
-```typescript
-@Module({
-  imports: [
-    ClaudeAgentCoreModule,
-    SearchModule,
-    EntityEventModule,
-    // Больше НЕ нужны forwardRef — домены не импортируют ClaudeAgentModule
-  ],
-  controllers: [
-    ClaudeAgentController,
-    AgentController,
-    ActivityEnrichmentController,
-  ],
-  providers: [
-    SearchToolsProvider,   // остаётся здесь (SearchModule не создаёт цикл)
-    EventToolsProvider,    // остаётся здесь (EntityEventModule не создаёт цикл)
-  ],
-  exports: [ClaudeAgentCoreModule],  // re-export Core для app.module
-})
-export class ClaudeAgentModule {}
-```
-
-**Результат:** 0 forwardRef в ClaudeAgentModule (было 7).
-
----
-
-## Шаг 6: Обновить AppModule
-
-**Файл:** `apps/pkg-core/src/app.module.ts`
-
-Оставить `ClaudeAgentModule` в imports — он теперь re-экспортирует CoreModule + предоставляет контроллеры.
 
 ---
 
 ## Файлы для изменения
 
-| Файл | Тип | Описание |
+| Файл | Шаг | Описание |
 |------|-----|----------|
-| `claude-agent/claude-agent-core.module.ts` | CREATE | Новый Core-модуль |
-| `claude-agent/tools/tools-provider.interface.ts` | CREATE | Интерфейс для tool providers |
-| `claude-agent/tools-registry.service.ts` | MODIFY | Registration pattern вместо DI injection |
-| `claude-agent/claude-agent.module.ts` | MODIFY | Убрать 7 forwardRef, оставить Core + controllers |
-| `claude-agent/tools/search-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
-| `claude-agent/tools/entity-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
-| `claude-agent/tools/event-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
-| `claude-agent/tools/context-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider(), убрать @Optional |
-| `claude-agent/tools/action-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider(), убрать @Optional |
-| `claude-agent/tools/activity-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
-| `data-quality/data-quality-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
-| `segmentation/knowledge-tools.provider.ts` | MODIFY | + OnModuleInit + registerProvider() |
-| `context/context.module.ts` | MODIFY | CoreModule + ContextToolsProvider |
-| `entity/entity.module.ts` | MODIFY | CoreModule + EntityToolsProvider |
-| `notification/notification.module.ts` | MODIFY | CoreModule + ActionToolsProvider |
-| `activity/activity.module.ts` | MODIFY | CoreModule + ActivityToolsProvider |
-| `segmentation/segmentation.module.ts` | MODIFY | CoreModule (уже KnowledgeToolsProvider) |
-| `data-quality/data-quality.module.ts` | MODIFY | CoreModule (уже DataQualityToolsProvider) |
-| `extraction/extraction.module.ts` | MODIFY | CoreModule |
-| `summarization/summarization.module.ts` | MODIFY | CoreModule |
-| `telegram-mini-app/telegram-mini-app.module.ts` | MODIFY | CoreModule |
+| `extraction/second-brain-extraction.service.ts` | 1, 2 | Activity context + projectName mappers |
+| `pending-approval/pending-approval.controller.ts` | 3, 4 | PATCH + GET target endpoints |
+| `pending-approval/pending-approval.service.ts` | 4 | getTargetEntity() метод |
+| `settings/settings.service.ts` | 5 | Cross-chat window 30→120 мин |
+
+**Новых файлов: 0. Миграций: 0. Изменений entity: 0.**
 
 ---
 
-## Порядок реализации
+## Существующие функции для переиспользования
 
-| # | Шаг | Зависимости | Риск |
-|---|-----|-------------|------|
-| 1 | Создать `ToolsProviderInterface` | Нет | Низкий |
-| 2 | Рефакторинг `ToolsRegistryService` → registration pattern | #1 | Средний |
-| 3 | Создать `ClaudeAgentCoreModule` | #2 | Низкий |
-| 4 | Обновить все tool providers (+ OnModuleInit) | #1, #2 | Средний |
-| 5 | Обновить доменные модули (импорты + providers) | #3, #4 | Высокий |
-| 6 | Упростить `ClaudeAgentModule` | #5 | Средний |
-| 7 | Компиляция + тесты | #6 | — |
-
-Шаги 1-3 можно делать без ломающих изменений. Шаги 4-6 нужно делать атомарно (одним коммитом), т.к. промежуточные состояния не скомпилируются.
-
----
-
-## Существующие функции для reuse
-
-| Функция/Сервис | Файл | Использование |
-|----------------|------|---------------|
-| `ToolDefinition` type | `claude-agent/tools/tool.types.ts` | Типизация tools |
-| `toolSuccess/toolError/toolEmptyResult` | `claude-agent/tools/tool.types.ts` | Результаты tools |
-| `ToolCategory` type | `claude-agent/claude-agent.types.ts` | Категории для registry |
-| `createSdkMcpServer` | `@anthropic-ai/claude-agent-sdk` | MCP server creation |
+| Функция | Файл | Зачем |
+|---------|------|-------|
+| `loadExistingActivities()` | daily-synthesis-extraction.service.ts:210 | Копировать в SecondBrain |
+| `formatActivityContext()` | daily-synthesis-extraction.service.ts:232 | Копировать в SecondBrain |
+| `findExistingProjectEnhanced()` | draft-extraction.service.ts | Уже используется для projectName → parentId |
+| `updateTargetEntity()` | pending-approval.service.ts:278 | Уже реализован, нужен только endpoint |
+| `getItemTypeConfig()` | item-type-registry.ts:79 | Для getTargetEntity() |
+| `ProjectMatchingService.normalizeName()` | project-matching.service.ts | Уже используется в DraftExtraction |
 
 ---
 
 ## Verification
 
-1. **Компиляция:** `cd apps/pkg-core && npx tsc --noEmit` — без ошибок
-2. **Grep проверка:** `grep -r "forwardRef" src/modules/claude-agent/` — должен быть 0 результатов в claude-agent
-3. **Unit тесты:** `cd apps/pkg-core && npx jest --passWithNoTests` — все проходят
-4. **Runtime проверка:** `pnpm dev` → проверить что все tool categories доступны через агент
-5. **Tool registration:** Добавить лог в ToolsRegistryService.registerProvider() → при старте должны зарегистрироваться все 8 категорий
-6. **Agent call:** POST `/agent/recall` с query — должен использовать search tools
-7. **Production deploy:** `docker compose build --no-cache pkg-core && docker compose up -d pkg-core` — container healthy
+### Шаг 1+2 (Activity context injection):
+1. Создать Activity через `POST /activities` с известным именем
+2. Вызвать conversation extraction на беседе с упоминанием этого проекта
+3. Проверить PendingApproval — задача должна иметь `parentId` → Activity
+4. SQL: `SELECT a.name, a.parent_id FROM activities WHERE id = (SELECT target_id FROM pending_approvals WHERE batch_id = '...' AND item_type = 'task')`
 
----
+### Шаг 3 (PATCH endpoint):
+1. `GET /pending-approval?status=pending` → получить ID
+2. `PATCH /pending-approval/{id}/target` с `{ "parentId": "project-uuid" }`
+3. Проверить: `SELECT parent_id FROM activities WHERE id = '{targetId}'`
+4. Попробовать на non-pending → ожидать 409
+5. Попробовать с invalid UUID → ожидать 400
 
-## Ожидаемый результат
+### Шаг 4 (GET target):
+1. `GET /pending-approval/{id}/target` → ожидать `{ itemType, target: { name, parentId, status, ... } }`
 
-| Метрика | До | После |
-|---------|-----|-------|
-| forwardRef в claude-agent.module.ts | 7 | 0 |
-| @Optional+forwardRef в tools-registry | 5 | 0 |
-| @Optional+forwardRef в tool providers | 3+ | 0 |
-| Циклических зависимостей через ClaudeAgentModule | 5 | 0 |
-| Модулей | 1 (ClaudeAgentModule) | 2 (Core + Tools/Controllers) |
-| Риск DI-сбоя при добавлении нового модуля | Высокий | Низкий |
+### Шаг 5 (Cross-chat window):
+1. Проверить через `GET /settings` значение `extraction.crossChatContextMinutes`
+2. Или по логам: cross-chat context включает сообщения за 2 часа
+
+### Production deploy:
+```bash
+ssh mityayka@assistant.mityayka.ru
+cd /opt/apps/pkg && git pull && cd docker && docker compose build --no-cache pkg-core && docker compose up -d pkg-core
+```

@@ -70,7 +70,7 @@ const DEFAULT_SETTINGS: Array<{
   },
   {
     key: 'extraction.crossChatContextMinutes',
-    value: 30,
+    value: 120,
     description: 'Окно в минутах для поиска кросс-чат контекста (сообщения из других чатов с теми же участниками)',
     category: 'extraction',
   },
@@ -133,7 +133,7 @@ export class SettingsService implements OnModuleInit {
 
   // Default values for conversation-based extraction
   private readonly DEFAULT_CONVERSATION_GAP_MINUTES = 30;
-  private readonly DEFAULT_CROSS_CHAT_CONTEXT_MINUTES = 30;
+  private readonly DEFAULT_CROSS_CHAT_CONTEXT_MINUTES = 120;
 
   constructor(
     @InjectRepository(Setting)

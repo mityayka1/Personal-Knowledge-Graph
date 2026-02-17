@@ -2,17 +2,21 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Param,
   Query,
+  Body,
   HttpCode,
   HttpStatus,
   ParseUUIDPipe,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   PendingApprovalService,
   ListPendingApprovalsOptions,
   BatchOperationResult,
+  UpdateTargetInput,
 } from './pending-approval.service';
 import {
   PendingApproval,
@@ -53,6 +57,20 @@ interface BatchStatsResponse {
   pending: number;
   approved: number;
   rejected: number;
+}
+
+/**
+ * Request body for updating a target entity.
+ */
+interface UpdateTargetDto {
+  name?: string;
+  description?: string;
+  priority?: string;
+  deadline?: string | null;
+  parentId?: string | null;
+  clientEntityId?: string | null;
+  assignee?: string | null;
+  dueDate?: string | null;
 }
 
 /**
@@ -102,6 +120,24 @@ export class PendingApprovalController {
       limit: options.limit,
       offset: options.offset,
     };
+  }
+
+  /**
+   * Get the target entity of a pending approval.
+   *
+   * GET /pending-approval/:id/target
+   */
+  @Get(':id/target')
+  async getTarget(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<{ itemType: string; target: Record<string, unknown> }> {
+    const result = await this.pendingApprovalService.getTargetEntity(id);
+
+    if (!result) {
+      throw new NotFoundException(`Pending approval ${id} or its target not found`);
+    }
+
+    return result;
   }
 
   /**
@@ -164,6 +200,48 @@ export class PendingApprovalController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<{ success: true; id: string }> {
     await this.pendingApprovalService.reject(id);
+    return { success: true, id };
+  }
+
+  /**
+   * Update the target entity of a pending approval.
+   * Allows editing draft entities before approving.
+   *
+   * PATCH /pending-approval/:id/target
+   */
+  @Patch(':id/target')
+  async updateTarget(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: UpdateTargetDto,
+  ): Promise<{ success: true; id: string }> {
+    const updates: UpdateTargetInput = {};
+
+    if (body.name !== undefined) updates.name = body.name;
+    if (body.description !== undefined) updates.description = body.description;
+    if (body.priority !== undefined) updates.priority = body.priority;
+    if (body.deadline !== undefined) {
+      if (body.deadline) {
+        const d = new Date(body.deadline);
+        if (isNaN(d.getTime())) throw new BadRequestException('Invalid deadline date format');
+        updates.deadline = d;
+      } else {
+        updates.deadline = null;
+      }
+    }
+    // parentId intentionally excluded — closure-table requires ActivityService.update()
+    if (body.clientEntityId !== undefined) updates.clientEntityId = body.clientEntityId;
+    if (body.assignee !== undefined) updates.assignee = body.assignee;
+    if (body.dueDate !== undefined) {
+      if (body.dueDate) {
+        const d = new Date(body.dueDate);
+        if (isNaN(d.getTime())) throw new BadRequestException('Invalid dueDate date format');
+        updates.dueDate = d;
+      } else {
+        updates.dueDate = null;
+      }
+    }
+
+    await this.pendingApprovalService.updateTargetEntity(id, updates);
     return { success: true, id };
   }
 
