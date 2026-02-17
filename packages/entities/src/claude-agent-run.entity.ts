@@ -28,7 +28,8 @@ export type ClaudeTaskType =
   | 'event_activity_match'
   | 'activity_semantic_dedup'
   | 'topic_segmentation'
-  | 'knowledge_packing';
+  | 'knowledge_packing'
+  | 'project_name_match';
 
 export type ExecutionMode = 'oneshot' | 'agent';
 

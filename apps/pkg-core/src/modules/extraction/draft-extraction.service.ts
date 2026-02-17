@@ -44,6 +44,7 @@ import { FusionAction } from '../entity/entity-fact/fact-fusion.constants';
 import { ExtractionFusionAction } from './fusion-action.enum';
 import { CreateFactDto } from '../entity/dto/create-entity.dto';
 import { CreateFactResult } from '../entity/entity-fact/entity-fact.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -175,6 +176,9 @@ export class DraftExtractionService {
     @Optional()
     @Inject(forwardRef(() => FactFusionService))
     private readonly factFusionService: FactFusionService | null,
+    @Optional()
+    @Inject(forwardRef(() => ClaudeAgentService))
+    private readonly claudeAgentService: ClaudeAgentService | null,
   ) {}
 
   /**
@@ -1432,6 +1436,24 @@ export class DraftExtractionService {
       };
     }
 
+    // Step 3: LLM fallback — handles cross-script (Latin/Cyrillic), abbreviations, synonyms
+    if (this.claudeAgentService) {
+      const llmMatch = await this.llmMatchProjectName(projectName, ownerEntityId);
+      if (llmMatch) {
+        this.logger.log(
+          `[ProjectDedup] "${projectName}" → decision=skip, ` +
+            `similarity=1.000, descBoost=false, tagsBoost=false, ` +
+            `matchedActivity="${llmMatch.name}" [${llmMatch.id}], source=llm_match`,
+        );
+        return {
+          found: true,
+          activityId: llmMatch.id,
+          similarity: 1.0,
+          source: 'llm_match',
+        };
+      }
+    }
+
     // No match found
     this.logger.log(
       `[ProjectDedup] "${projectName}" → decision=create, ` +
@@ -1765,6 +1787,97 @@ export class DraftExtractionService {
       .where('e.name ILIKE :pattern', { pattern: `%${escaped}%` })
       .orderBy('e.updatedAt', 'DESC')
       .getOne();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: LLM-based Project Name Matching
+  // ─────────────────────────────────────────────────────────────
+
+  private static readonly LLM_MATCH_SCHEMA = {
+    type: 'object',
+    properties: {
+      matchedIndex: {
+        type: ['integer', 'null'],
+        description: 'Zero-based index of matched project, or null if no match',
+      },
+      reason: {
+        type: 'string',
+        description: 'Brief explanation',
+      },
+    },
+    required: ['matchedIndex', 'reason'],
+  };
+
+  /**
+   * Use LLM to match a project name against existing activities.
+   * Handles cross-script (Latin↔Cyrillic), abbreviations, synonyms.
+   * Called only when heuristic matching returns similarity ≈ 0.
+   */
+  private async llmMatchProjectName(
+    projectName: string,
+    ownerEntityId: string,
+  ): Promise<{ id: string; name: string } | null> {
+    try {
+      // Load candidate activities (same query as ProjectMatchingService)
+      const activities = await this.activityRepo.find({
+        where: {
+          ownerEntityId,
+          activityType: In([
+            ActivityType.PROJECT,
+            ActivityType.TASK,
+            ActivityType.INITIATIVE,
+            ActivityType.BUSINESS,
+            ActivityType.AREA,
+          ]),
+          status: Not(In([ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED])),
+        },
+        select: ['id', 'name'],
+        order: { lastActivityAt: { direction: 'DESC', nulls: 'LAST' } },
+        take: 50,
+      });
+
+      if (activities.length === 0) return null;
+
+      const activityList = activities
+        .map((a, i) => `${i}. ${a.name}`)
+        .join('\n');
+
+      const prompt =
+        `Имя проекта из извлечения: "${projectName}"\n\n` +
+        `Существующие проекты:\n${activityList}\n\n` +
+        `Указывает ли "${projectName}" на один из существующих проектов? ` +
+        `Учитывай транслитерацию (Panavto=Панавто), сокращения, синонимы. ` +
+        `Если да — верни matchedIndex (номер строки). Если нет — верни null.`;
+
+      const { data } = await this.claudeAgentService!.call<{
+        matchedIndex: number | null;
+        reason: string;
+      }>({
+        mode: 'oneshot',
+        taskType: 'project_name_match',
+        prompt,
+        schema: DraftExtractionService.LLM_MATCH_SCHEMA,
+        model: 'haiku',
+      });
+
+      if (data?.matchedIndex != null && data.matchedIndex >= 0 && data.matchedIndex < activities.length) {
+        const matched = activities[data.matchedIndex];
+        this.logger.log(
+          `[ProjectDedup] LLM matched "${projectName}" → "${matched.name}" (reason: ${data.reason})`,
+        );
+        return { id: matched.id, name: matched.name };
+      }
+
+      this.logger.debug(
+        `[ProjectDedup] LLM found no match for "${projectName}" (reason: ${data?.reason ?? 'no response'})`,
+      );
+      return null;
+    } catch (error) {
+      this.logger.warn(
+        `[ProjectDedup] LLM match failed for "${projectName}": ${(error as Error).message}`,
+      );
+      return null;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
