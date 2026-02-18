@@ -1,5 +1,8 @@
 # Plan: Улучшение Extraction Context + Manual Correction
 
+> **Статус:** ✅ Completed (verified 2026-02-18)
+> **Все 5 шагов реализованы:** Activity context injection, projectName в mappers, PATCH/GET target endpoints, cross-chat window 120 мин.
+
 ## Context
 
 **Проблема:** При extraction из бесед (SecondBrainExtractionService) обязательства и задачи создаются как **сироты** — без привязки к существующим проектам/активностям.

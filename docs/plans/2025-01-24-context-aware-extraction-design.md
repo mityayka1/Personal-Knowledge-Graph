@@ -1,6 +1,6 @@
 # Context-Aware Extraction — Design Document
 
-> **Статус:** Утверждён
+> **Статус:** ✅ Completed — реализовано в SecondBrainExtractionService
 > **Дата:** 2025-01-24
 > **Авторы:** Human + Claude
 

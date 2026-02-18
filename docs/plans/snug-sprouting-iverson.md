@@ -1,5 +1,7 @@
 # План миграции SecondBrainExtraction → PendingApproval
 
+> **Статус:** ✅ Completed — SecondBrainExtraction использует PendingApproval
+
 ## Проблема
 
 - **Бот** показывает события из таблицы `extracted_event` (есть данные)

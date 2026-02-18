@@ -59,11 +59,16 @@
 - Entity Resolution (identifier → entity mapping)
 - Interaction management (создание, обновление)
 - Message и segment storage
-- Facts management (CRUD, история, pending)
+- Facts management (CRUD, история, pending, Smart Fusion)
 - Search (Full-text + Vector + Hybrid)
 - API для всех клиентов
 - Генерация embeddings (async queue)
-- **LLM задачи через Claude CLI** (fact extraction, context synthesis)
+- **Claude Agent SDK** — оркестрация LLM-задач (oneshot structured output, agent mode с tools)
+- **Extraction Pipeline** — 3 пути извлечения знаний из переписки (см. ниже)
+- **Segmentation & Knowledge Packing** — сегментация обсуждений по темам, консолидация знаний
+- **Pending Approval Workflow** — draft entities с подтверждением/отклонением
+- **Activity Management** — иерархическая модель дел (closure-table: AREA → BUSINESS → PROJECT → TASK)
+- **Data Quality System** — аудит, дедупликация, мерж, orphan resolution
 - **Media Proxy** — проксирование медиа-запросов к Telegram Adapter
 - **Bot Detection** — фильтрация ботов из summarization, context, search
 
@@ -73,29 +78,54 @@
 - Сложные multi-step AI workflows (делегирует Worker/n8n)
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                        PKG CORE                                │
-├────────────────────────────────────────────────────────────────┤
-│                                                                │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │                     REST API Layer                        │ │
-│  │  /entities  /interactions  /messages  /search  /media     │ │
-│  └──────────────────────────────────────────────────────────┘ │
-│                              │                                 │
-│  ┌───────────┐  ┌───────────┴───────────┐  ┌───────────────┐ │
-│  │  Entity   │  │     Interaction       │  │    Media      │ │
-│  │  Service  │  │     Service           │  │    Proxy      │───► Telegram
-│  └─────┬─────┘  └───────────┬───────────┘  └───────────────┘ │   Adapter
-│        │                    │                                 │
-│  ┌─────┴────────────────────┴──────────────────────────────┐ │
-│  │                    Repository Layer                      │ │
-│  └──────────────────────────┬──────────────────────────────┘ │
-│                             │                                 │
-│  ┌──────────────────────────┴──────────────────────────────┐ │
-│  │              PostgreSQL + pgvector + Redis              │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                                │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                              PKG CORE                                │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │                        REST API Layer                          │  │
+│  │  /entities  /interactions  /messages  /search  /media          │  │
+│  │  /activities  /pending-approvals  /segmentation  /data-quality │  │
+│  │  /agent/recall  /agent/prepare                                 │  │
+│  └────────────────────────────┬───────────────────────────────────┘  │
+│                               │                                      │
+│  ┌────────────────────────────┼───────────────────────────────────┐  │
+│  │                    Service Layer                                │  │
+│  │                                                                │  │
+│  │  ┌────────────┐ ┌──────────────┐ ┌─────────────────────────┐  │  │
+│  │  │  Entity    │ │ Interaction  │ │ Claude Agent Service    │  │  │
+│  │  │  Service   │ │ Service      │ │ (oneshot / agent mode)  │  │  │
+│  │  └────────────┘ └──────────────┘ └───────────┬─────────────┘  │  │
+│  │                                               │                │  │
+│  │  ┌────────────┐ ┌──────────────┐ ┌───────────▼─────────────┐  │  │
+│  │  │  Activity  │ │  Pending     │ │    ToolsRegistry        │  │  │
+│  │  │  Service   │ │  Approval    │ │  + MCP Server (in-proc) │  │  │
+│  │  │ (closure)  │ │  Service     │ └─────────────────────────┘  │  │
+│  │  └────────────┘ └──────────────┘                               │  │
+│  │                                                                │  │
+│  │  ┌──────────────────────────────────────────────────────────┐  │  │
+│  │  │              Extraction Pipeline                          │  │  │
+│  │  │  SecondBrain ─┐                                          │  │  │
+│  │  │  DailySynth ──┤─► DraftExtraction ─► PendingApproval     │  │  │
+│  │  │  Unified ─────┘   (dedup + fusion)                       │  │  │
+│  │  └──────────────────────────────────────────────────────────┘  │  │
+│  │                                                                │  │
+│  │  ┌────────────────────────────────────────────────────────┐    │  │
+│  │  │           Segmentation & Knowledge Packing              │    │  │
+│  │  │  TopicBoundaryDetector → Segments → PackingService      │    │  │
+│  │  └────────────────────────────────────────────────────────┘    │  │
+│  │                                                                │  │
+│  │  ┌──────────┐ ┌──────────────┐ ┌────────────────────────┐     │  │
+│  │  │  Search  │ │ DataQuality  │ │    Media Proxy         │─────│──│─► Telegram
+│  │  │  Service │ │ Service      │ │                        │     │  │   Adapter
+│  │  └──────────┘ └──────────────┘ └────────────────────────┘     │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                               │                                      │
+│  ┌────────────────────────────┴───────────────────────────────────┐  │
+│  │              PostgreSQL + pgvector + Redis (BullMQ)            │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -286,6 +316,406 @@ WHERE NOT EXISTS (
 - Единая точка входа для всех клиентов
 - PKG Core контролирует авторизацию
 - Легко добавить другие источники (WhatsApp, Email) без изменения клиентов
+
+---
+
+## Claude Agent SDK Architecture
+
+### Обзор
+
+PKG Core использует `@anthropic-ai/claude-agent-sdk` для всех LLM-задач. Центральный сервис `ClaudeAgentService` абстрагирует работу с SDK, предоставляя два режима выполнения и единый интерфейс для логирования, timeout, budget control.
+
+### Режимы выполнения
+
+| Режим | Метод | Описание | Когда использовать |
+|-------|-------|----------|-------------------|
+| `oneshot` | `executeOneshot<T>()` | Structured output через JSON Schema (constrained decoding) | Извлечение данных, классификация, сегментация |
+| `agent` | `executeAgent<T>()` | Multi-turn с MCP tools | Recall, prepare, действия, сложные цепочки |
+
+**Oneshot mode** использует `outputFormat` SDK для гарантированного соответствия JSON Schema. Constrained decoding означает, что модель физически не может сгенерировать невалидный JSON. `maxTurns >= 2` обязателен (Turn 1: вызов StructuredOutput tool, Turn 2: завершение).
+
+**Agent mode** создаёт in-process MCP сервер с tools, который Claude использует для доступа к данным PKG. Поддерживает `outputFormat` для получения структурированного результата после работы с tools, `budgetUsd` для ограничения затрат, `hooks` для мониторинга tool calls.
+
+### Модели
+
+| Alias | Полный идентификатор | Назначение |
+|-------|---------------------|------------|
+| `haiku` | `claude-haiku-4-5-20251001` | Быстрые/дешёвые задачи: классификация, простая экстракция |
+| `sonnet` | `claude-sonnet-4-5-20250929` | Основная модель: экстракция, сегментация, синтез |
+| `opus` | `claude-opus-4-5-20251101` | Сложные задачи: архитектурный анализ |
+
+### ToolsRegistryService
+
+Агрегирует tools из специализированных провайдеров. Использует паттерн самостоятельной регистрации: каждый доменный модуль вызывает `registerProvider()` в lifecycle hook `OnModuleInit`.
+
+```
+Domain Module                  ToolsRegistryService             ClaudeAgentService
+     │                                │                                │
+     │── onModuleInit ──────────────►│                                │
+     │   registerProvider(category,   │                                │
+     │                    provider)   │                                │
+     │                                │                                │
+     │                                │◄──── createMcpServer(cats) ────│
+     │                                │                                │
+     │                                │──── createSdkMcpServer() ─────►│ (in-process)
+     │                                │     { name: 'pkg-tools',       │
+     │                                │       tools: [...] }           │
+```
+
+**Кэширование:** `cachedAllTools` и `categoryCache` для предотвращения повторной агрегации. Кэш инвалидируется при регистрации нового провайдера.
+
+**MCP Server:** In-process через `createSdkMcpServer()` — tools работают в том же процессе Node.js, без сетевого overhead. Имя сервера: `pkg-tools`. Tools доступны Claude в формате `mcp__pkg-tools__<tool_name>`.
+
+### Категории tools
+
+| Категория | Провайдер | Tools |
+|-----------|-----------|-------|
+| `search` | `SearchToolsProvider` | `search_messages` |
+| `entities` | `EntityToolsProvider` | `get_entity_details`, `list_entities` |
+| `context` | `ContextToolsProvider` | `get_entity_context` |
+| `events` | `EventToolsProvider` | `create_reminder`, `list_events` |
+| `actions` | `ActionToolsProvider` | `draft_message`, `send_telegram` |
+| `activities` | `ActivityToolsProvider` | Activity CRUD, members, tree |
+| `knowledge` | `KnowledgeToolsProvider` | `search_discussions`, `get_discussion_context`, `get_knowledge_summary`, `trace_fact_source` |
+| `data-quality` | `DataQualityToolsProvider` | Аудит, мерж, дубликаты |
+| `all` | Все провайдеры | Объединяет все tools |
+
+### Типы задач (ClaudeTaskType)
+
+29 типов задач, логируемых в таблицу `claude_agent_runs`:
+
+- **Extraction:** `fact_extraction`, `event_extraction`, `unified_extraction`, `group_extraction`
+- **Synthesis:** `summarization`, `profile_aggregation`, `context_synthesis`, `context_enrichment`
+- **Second Brain:** `recall`, `meeting_prep`, `daily_brief`, `action`, `draft_generation`
+- **Dedup/Fusion:** `fact_fusion`, `fact_dedup_review`, `activity_semantic_dedup`, `event_cleanup_dedup`
+- **Segmentation:** `topic_segmentation`, `knowledge_packing`
+- **Matching:** `project_name_match`, `event_activity_match`, `description_enrichment`
+- **Generation:** `message_regeneration`
+
+### Structured Output
+
+```typescript
+// Oneshot: JSON Schema → constrained decoding
+const result = await claudeAgentService.call<MyType>({
+  mode: 'oneshot',
+  taskType: 'fact_extraction',
+  prompt: '...',
+  schema: MY_JSON_SCHEMA,      // Raw JSON Schema (НЕ Zod)
+  model: 'sonnet',
+});
+// result.data гарантированно соответствует schema
+
+// Agent: outputFormat для структурированного результата после tool calls
+const result = await claudeAgentService.call<MyType>({
+  mode: 'agent',
+  taskType: 'recall',
+  prompt: '...',
+  toolCategories: ['search', 'entities'],
+  outputFormat: {
+    type: 'json_schema',
+    schema: MY_JSON_SCHEMA,
+    strict: true,
+  },
+});
+```
+
+### Timeout и Abort
+
+- **Oneshot:** default timeout 120s
+- **Agent:** default timeout 300s (5 минут)
+- Используется `AbortController` — при timeout SDK call прерывается
+- `budgetUsd` — если cumulative cost превышает лимит, agent прерывается
+
+### Логирование
+
+Каждый вызов записывается в `ClaudeAgentRun` entity:
+- `taskType`, `mode`, `model`
+- `tokensIn`, `tokensOut`, `costUsd`
+- `durationMs`, `turnsCount`, `toolsUsed[]`
+- `success`, `errorMessage`
+- `inputPreview`, `outputPreview` (первые 500 символов)
+
+Статистика доступна через `getStats(period)` и `getDailyStats(days)`.
+
+---
+
+## Extraction Pipeline Architecture
+
+### Обзор
+
+Extraction Pipeline извлекает структурированные знания из переписки и создаёт draft entities (Activity, Commitment, EntityFact) с workflow подтверждения. Три пути извлечения используют общий `DraftExtractionService` для создания и дедупликации сущностей.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Extraction Pipeline                             │
+│                                                                         │
+│  Telegram Message ──► SecondBrainExtraction ─┐                         │
+│                       (real-time, oneshot)    │                         │
+│                                              │                         │
+│  /daily Synthesis ──► DailySynthesisExtraction┤─► DraftExtractionService│
+│                       (batch, oneshot)        │   (dedup + fusion)      │
+│                                              │         │               │
+│  Private Chat ──────► UnifiedExtraction ─────┘         │               │
+│                       (agent mode + tools)             ▼               │
+│                                                 PendingApproval        │
+│                                                 (draft → approve)      │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Три пути извлечения
+
+#### 1. SecondBrainExtractionService — Real-time
+
+**Триггер:** Новые сообщения из Telegram (группы и каналы).
+**Режим:** `oneshot` (structured output с `CONVERSATION_EXTRACTION_SCHEMA`).
+
+Извлекает:
+- `ExtractedFact` — факты о людях (должность, компания, контакт)
+- `ExtractedTask` — задачи и поручения
+- `ExtractedCommitment` — обещания и обязательства
+- `ExtractedEvent` — события (встречи, дедлайны)
+
+Особенности:
+- Атрибуция фактов третьим лицам через `subjectMention` и `SubjectResolverService`
+- Результаты передаются в `DraftExtractionService.createDrafts()`
+
+#### 2. DailySynthesisExtractionService — Batch
+
+**Триггер:** Текст ежедневного синтеза (`/daily`).
+**Режим:** `oneshot` (structured output с `DAILY_SYNTHESIS_EXTRACTION_SCHEMA`).
+
+Извлекает проекты, задачи, обязательства из синтезированного текста дня.
+
+Особенности:
+- **Фильтрация проектов:** 5 boolean индикаторов (duration, structure, deliverable, team, explicit context) — минимум 2 из 5 для прохождения
+- **Fuzzy matching:** `ProjectMatchingService` с Levenshtein 0.8 для дедупликации проектов
+- Метод `extractAndSave()` объединяет extraction + `DraftExtractionService.createDrafts()`
+
+#### 3. UnifiedExtractionService — Agent Mode
+
+**Триггер:** Сообщения из приватных чатов.
+**Режим:** `agent` (multi-turn с custom MCP server).
+
+Создаёт собственный MCP сервер через `ExtractionToolsProvider.createMcpServer()` с 6 специализированными tools. Claude самостоятельно решает, какие tools вызвать и какие данные извлечь.
+
+Особенности:
+- Обогащает сообщения информацией о reply-to и получателях обещаний
+- Использует `outputFormat` для структурированного результата после tool calls
+
+### DraftExtractionService — Central Dedup & Creation
+
+Центральный сервис создания draft entities. Все три пути извлечения делегируют ему создание сущностей.
+
+**Трёхпроходная дедупликация фактов:**
+1. **Pass 1:** Гибридная проверка — Levenshtein (текст) + cosine similarity (embeddings)
+2. **Pass 2:** LLM review для "серой зоны" (неоднозначные совпадения)
+3. **Pass 3:** Создание approved drafts
+
+**Smart Fusion** через `FactFusionService.decideFusion()`:
+- `CONFIRM` — новый факт подтверждает существующий
+- `SUPERSEDE` — новый факт заменяет устаревший
+- `ENRICH` — новый факт дополняет существующий
+- `CONFLICT` — противоречие, требует разрешения
+- `COEXIST` — оба факта верны одновременно
+
+**Дедупликация проектов:**
+- Двухуровневая: 0.6-0.8 (weak match, запрос LLM), >= 0.8 (strong match, считается дубликатом)
+- Учитывает клиента, tags, description для boost
+- Проверяет pending approvals для предотвращения создания дублей draft entities
+
+**Дедупликация задач:**
+- Pending approvals check + fuzzy Levenshtein (>= 0.7) + semantic embedding cosine (>= 0.85)
+
+**Activity insert** использует QueryBuilder вместо `save()` для обхода бага TypeORM closure-table.
+
+---
+
+## Pending Approval Workflow
+
+### Обзор
+
+Draft Entities Pattern — все извлечённые данные создаются как черновики (status = `DRAFT`) и требуют подтверждения перед активацией. Это обеспечивает контроль качества извлечённых данных.
+
+### Flow
+
+```
+Extraction Pipeline
+       │
+       ▼
+┌──────────────────────────┐
+│  DraftExtractionService  │
+│  creates entity with     │
+│  status = DRAFT          │
+│          +               │
+│  PendingApproval record  │
+│  (links to target)       │
+└──────────┬───────────────┘
+           │
+     ┌─────▼─────┐
+     │  Telegram  │  Carousel UI или
+     │  Dashboard │  REST API
+     └─────┬─────┘
+           │
+     ┌─────┴─────┐
+     │           │
+  Approve     Reject
+     │           │
+     ▼           ▼
+  status =    soft delete
+  ACTIVE      (deletedAt)
+```
+
+### ItemTypeRegistry
+
+Единый источник правды для маппинга типов `PendingApproval` на target entities:
+
+| ItemType | Entity Class | Table | Active Status | Draft Status |
+|----------|-------------|-------|---------------|-------------|
+| `FACT` | `EntityFact` | `entity_facts` | `active` | `draft` |
+| `PROJECT` | `Activity` | `activities` | `active` | `draft` |
+| `TASK` | `Activity` | `activities` | `active` | `draft` |
+| `COMMITMENT` | `Commitment` | `commitments` | `pending` | `draft` |
+
+**Расширение:** Для добавления нового типа достаточно добавить запись в `ITEM_TYPE_REGISTRY` — все сервисы подхватят автоматически.
+
+### Операции
+
+| Операция | Метод | Описание |
+|----------|-------|----------|
+| `approve(id)` | `PendingApprovalService.approve()` | Target entity: `DRAFT` → `ACTIVE`. PendingApproval: `pending` → `approved` |
+| `reject(id)` | `PendingApprovalService.reject()` | Target entity: soft delete. PendingApproval: `pending` → `rejected` |
+| `approveAll()` | Batch | Массовое подтверждение всех pending |
+| `rejectAll()` | Batch | Массовое отклонение всех pending |
+
+### Файлы
+
+| Файл | Описание |
+|------|----------|
+| `pending-approval.service.ts` | CRUD и batch операции над PendingApproval |
+| `item-type-registry.ts` | Registry маппинга ItemType → EntityClass, table, statuses |
+| `pending-approval.controller.ts` | REST endpoints: list, approve, reject, batch |
+| `confirmation-handlers/` | Telegram UI: carousel с кнопками approve/reject |
+
+---
+
+## Segmentation & Knowledge Packing
+
+### Обзор
+
+Система сегментации разбивает переписку на тематические блоки (TopicalSegment), а затем консолидирует знания из связанных сегментов в компактные пакеты (KnowledgePack). Это обеспечивает структурированное хранение и быстрый доступ к знаниям по проектам и людям.
+
+```
+Messages ──► TopicBoundaryDetector ──► TopicalSegments ──► PackingService ──► KnowledgePacks
+               (Claude, hourly)          (per topic)         (Claude, weekly)    (per activity)
+                     │                       │                      │
+                     │                       │                      │
+              SegmentationJob          OrphanSegmentLinker     PackingJob
+              (cron: 0 * * * *)        (fuzzy → Activity)     (cron: 0 3 * * 0)
+```
+
+### TopicBoundaryDetectorService
+
+Определяет границы тем в переписке с помощью Claude (semantic segmentation).
+
+**Алгоритм:**
+1. **Pre-filter:** минимум 4 сообщения для сегментации
+2. **Split by time gaps:** разбивка на chunks по паузам > 60 минут
+3. **Batch limit:** максимум 80 сообщений на вызов Claude (больше вызывает ошибки structured output)
+4. **Claude call:** `oneshot` mode, модель `sonnet`, timeout 180s, maxTurns 7
+5. **Validation:** фильтрация сегментов с confidence < 0.5, минимум 2 сообщения в сегменте
+6. **Dedup indices:** каждое сообщение принадлежит максимум одному сегменту
+
+**Prompt:** На русском языке. Claude определяет:
+- Границы тем (topic_change, time_gap, explicit_marker)
+- Название каждого сегмента (конкретное, не абстрактное)
+- Summary, keywords, isWorkRelated
+- `skippedMessageIndices` для сообщений без контекста (приветствия, emoji)
+
+### SegmentationJobService — Hourly Cron
+
+**Расписание:** `0 * * * *` (каждый час, Europe/Moscow).
+**Feature flag:** `segmentation.autoEnabled` (default: true).
+
+**Алгоритм:**
+1. Находит чаты с >= 4 несегментированных сообщений (агрегация по `telegram_chat_id`, не по interaction)
+2. Lookback: 48 часов
+3. Для каждого чата загружает все unsegmented messages across all interactions
+4. Вызывает `TopicBoundaryDetector.detectAndCreate()`
+5. Линкует связанные сегменты через `SegmentationService.findRelatedSegments()`
+6. Inter-call delay: 2s для rate limiting
+
+### PackingService
+
+Консолидирует TopicalSegments в KnowledgePacks через Claude synthesis.
+
+**Три режима пакования:**
+
+| Метод | Описание | Scope |
+|-------|----------|-------|
+| `packByActivity(activityId)` | Все сегменты привязанные к Activity | По проекту/задаче |
+| `packByEntity(entityId)` | Сегменты с данным primary participant | По человеку |
+| `packByPeriod(chatId, dates)` | Сегменты в чате за период | По времени |
+
+**Flow:**
+1. Загрузка packable segments (статусы `ACTIVE`, `CLOSED`)
+2. Batch-загрузка сообщений для всех сегментов (один SQL, без N+1)
+3. Claude synthesis (oneshot, sonnet, timeout 180s)
+4. Supersession: существующие ACTIVE packs для того же scope помечаются `SUPERSEDED`
+5. Создание KnowledgePack record
+6. Пометка segments как `PACKED` с ссылкой на `knowledgePackId`
+
+**KnowledgePack содержит:**
+- `summary` — консолидированная сводка (3-5 абзацев)
+- `decisions[]` — ключевые решения с контекстом
+- `openQuestions[]` — нерешённые вопросы
+- `keyFacts[]` — важные факты с confidence
+- `conflicts[]` — обнаруженные противоречия между сегментами
+
+### OrphanSegmentLinkerService
+
+Привязывает "осиротевшие" сегменты (без `activityId`) к Activities через fuzzy matching.
+
+**Алгоритм:**
+1. Из сегмента получает `participantIds` (или resolves через `interactionId`)
+2. Для каждого участника ищет Activities (PROJECT/TASK/INITIATIVE, не ARCHIVED/CANCELLED)
+3. Сравнивает `segment.topic + segment.summary` с `activity.name + activity.description`
+4. Levenshtein similarity через `ProjectMatchingService`
+5. Если similarity >= 0.8 — привязывает сегмент к лучшей Activity
+
+### PackingJobService — Weekly Cron
+
+**Расписание:** `0 3 * * 0` (воскресенье 03:00, Europe/Moscow).
+**Feature flag:** `packing.autoEnabled` (default: true).
+
+**Flow:**
+1. Запуск `OrphanSegmentLinker.linkAllOrphans()` — максимизация coverage
+2. Поиск Activities с >= 2 packable segments
+3. Для каждой Activity вызов `PackingService.packByActivity()`
+
+### Knowledge Agent Tools
+
+`KnowledgeToolsProvider` (категория `knowledge`, 4 tools):
+
+| Tool | Описание |
+|------|----------|
+| `search_discussions` | Поиск сегментов по теме, участнику, чату |
+| `get_discussion_context` | Полный контекст сегмента с сообщениями |
+| `get_knowledge_summary` | KnowledgePacks для Activity или Entity |
+| `trace_fact_source` | Трассировка факта/обязательства к исходному сегменту |
+
+### Файлы
+
+| Файл | Описание |
+|------|----------|
+| `segmentation.service.ts` | CRUD для TopicalSegment и KnowledgePack |
+| `topic-boundary-detector.service.ts` | Claude-based определение границ тем |
+| `topic-boundary-detector.types.ts` | Типы и JSON Schema для сегментации |
+| `segmentation-job.service.ts` | Hourly cron для автосегментации |
+| `packing.service.ts` | Консолидация сегментов в KnowledgePacks |
+| `packing.types.ts` | Типы и JSON Schema для packing synthesis |
+| `packing-job.service.ts` | Weekly cron для автопакования |
+| `orphan-segment-linker.service.ts` | Привязка orphan segments к Activities |
+| `knowledge-tools.provider.ts` | Agent tools для knowledge/segmentation |
 
 ---
 

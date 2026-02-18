@@ -1,6 +1,6 @@
 # Conversation-Based Extraction — Implementation Plan
 
-> **Статус:** 🚀 В реализации
+> **Статус:** ✅ Completed
 > **Дизайн:** [2025-01-25-conversation-based-extraction-design.md](./2025-01-25-conversation-based-extraction-design.md)
 > **Ветка:** `feat/conversation-based-extraction`
 > **Дата:** 2025-01-25

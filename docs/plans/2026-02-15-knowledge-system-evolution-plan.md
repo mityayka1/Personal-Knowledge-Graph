@@ -1,4 +1,4 @@
-   # Knowledge System Evolution — Полный план реализации
+      # Knowledge System Evolution — Полный план реализации
 
 > Эволюция PKG от набора фактов к полноценной системе знаний
 

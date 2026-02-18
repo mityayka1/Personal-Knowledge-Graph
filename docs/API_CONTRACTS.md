@@ -1894,6 +1894,2162 @@ Data Quality System предоставляет 5 AI agent tools для Claude:
 
 ---
 
+## Segmentation API
+
+API для тематической сегментации обсуждений и управления KnowledgePack.
+
+### POST /segments
+
+Создание нового тематического сегмента.
+
+**Request Body:**
+```json
+{
+  "topic": "Обсуждение дедлайнов проекта Alpha",
+  "keywords": ["дедлайн", "сроки", "Alpha"],
+  "summary": "Обсуждение переноса дедлайнов на следующую неделю",
+  "chatId": "telegram:-1001234567890",
+  "interactionId": "uuid",
+  "activityId": "uuid",
+  "participantIds": ["uuid", "uuid"],
+  "primaryParticipantId": "uuid",
+  "messageIds": ["uuid", "uuid"],
+  "startedAt": "2026-02-01T10:00:00Z",
+  "endedAt": "2026-02-01T10:30:00Z",
+  "confidence": 0.85
+}
+```
+
+**Response:** `201 Created` — объект созданного сегмента.
+
+---
+
+### GET /segments
+
+Список сегментов с фильтрами и пагинацией.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `chatId` | string | Фильтр по идентификатору чата |
+| `activityId` | uuid | Фильтр по Activity |
+| `interactionId` | uuid | Фильтр по Interaction |
+| `status` | SegmentStatus | Фильтр по статусу (`DRAFT`, `ACTIVE`, `CLOSED`, `MERGED`) |
+| `search` | string | Полнотекстовый поиск по topic/keywords/summary |
+| `limit` | number | Максимум записей (default: 20, max: 100) |
+| `offset` | number | Смещение (default: 0) |
+
+**Response:** `200 OK`
+```json
+{
+  "items": [...],
+  "total": 42
+}
+```
+
+---
+
+### GET /segments/:id
+
+Получение одного сегмента по ID.
+
+**Response:** `200 OK` — объект сегмента.
+
+| Status | Описание |
+|--------|----------|
+| 200 | Сегмент найден |
+| 404 | Сегмент не найден |
+
+---
+
+### PATCH /segments/:id
+
+Обновление сегмента.
+
+**Request Body:**
+```json
+{
+  "topic": "Обновлённая тема",
+  "keywords": ["новые", "ключевые", "слова"],
+  "summary": "Обновлённое описание",
+  "activityId": "uuid или null",
+  "status": "CLOSED",
+  "confidence": 0.95
+}
+```
+
+Все поля опциональны.
+
+**Response:** `200 OK` — обновлённый объект сегмента.
+
+---
+
+### GET /segments/:id/messages
+
+Получение сообщений, привязанных к сегменту.
+
+**Response:** `200 OK` — массив сообщений.
+
+---
+
+### POST /segments/:id/messages
+
+Привязка сообщений к сегменту.
+
+**Request Body:**
+```json
+{
+  "messageIds": ["uuid1", "uuid2", "uuid3"]
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "linked": 3
+}
+```
+
+---
+
+### POST /segments/:id/merge
+
+Объединение двух сегментов. Все сообщения и метаданные sourceSegment переносятся в target.
+
+**Request Body:**
+```json
+{
+  "sourceSegmentId": "uuid"
+}
+```
+
+**Response:** `200 OK` — объединённый сегмент.
+
+---
+
+### GET /segments/:id/related
+
+Поиск связанных сегментов из других чатов по тематическому сходству.
+
+**Response:** `200 OK` — массив связанных сегментов.
+
+---
+
+### POST /segments/:id/link-related
+
+Связывание сегмента с тематически близкими сегментами из других чатов.
+
+**Request Body:**
+```json
+{
+  "relatedSegmentIds": ["uuid1", "uuid2"]
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "linked": 2
+}
+```
+
+---
+
+### POST /segments/detect
+
+Автоматическое определение границ тем в наборе сообщений и создание сегментов.
+
+**Request Body:**
+```json
+{
+  "chatId": "telegram:-1001234567890",
+  "interactionId": "uuid",
+  "messages": [
+    {
+      "id": "uuid",
+      "content": "Текст сообщения",
+      "timestamp": "2026-02-01T10:00:00Z",
+      "isOutgoing": false,
+      "senderEntityName": "Иван"
+    }
+  ],
+  "participantIds": ["uuid"],
+  "primaryParticipantId": "uuid",
+  "chatTitle": "Рабочий чат",
+  "activityId": "uuid"
+}
+```
+
+**Response:** `200 OK` — результат детектирования и созданные сегменты.
+
+---
+
+### POST /segments/run-segmentation
+
+Ручной запуск задачи автосегментации. Запускается в фоне (fire-and-forget).
+
+**Response:** `200 OK`
+```json
+{
+  "status": "started",
+  "message": "Segmentation job triggered. Check logs for progress."
+}
+```
+
+---
+
+### POST /segments/run-orphan-linker
+
+Ручной запуск привязки осиротевших сегментов к Activity.
+
+**Response:** `200 OK`
+```json
+{
+  "status": "completed",
+  "linked": 5,
+  "skipped": 2,
+  "errors": 0
+}
+```
+
+---
+
+### GET /segments/packs/list
+
+Список KnowledgePack с фильтрами.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `activityId` | uuid | Фильтр по Activity |
+| `entityId` | uuid | Фильтр по Entity |
+| `packType` | string | Тип пакета |
+| `limit` | number | Максимум записей (default: 20) |
+| `offset` | number | Смещение (default: 0) |
+
+**Response:** `200 OK` — список KnowledgePack.
+
+---
+
+### GET /segments/packs/:id
+
+Получение одного KnowledgePack по ID.
+
+**Response:** `200 OK` — объект KnowledgePack.
+
+---
+
+### POST /segments/packs/create-for-activity
+
+Консолидация всех ACTIVE/CLOSED сегментов для Activity в один KnowledgePack.
+
+**Request Body:**
+```json
+{
+  "activityId": "uuid",
+  "title": "Опциональный заголовок"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "packId": "uuid",
+    "title": "Activity: Project Alpha",
+    "segmentCount": 5,
+    "totalMessageCount": 120,
+    "tokensUsed": 4500,
+    "durationMs": 3200
+  }
+}
+```
+
+---
+
+### POST /segments/packs/create-for-entity
+
+Консолидация всех ACTIVE/CLOSED сегментов для Entity (как primary participant) в KnowledgePack.
+
+**Request Body:**
+```json
+{
+  "entityId": "uuid",
+  "title": "Опциональный заголовок"
+}
+```
+
+**Response:** `200 OK` — аналогично `create-for-activity`.
+
+---
+
+### POST /segments/packs/create-for-period
+
+Консолидация сегментов за временной период в KnowledgePack.
+
+**Request Body:**
+```json
+{
+  "chatId": "telegram:-1001234567890",
+  "startDate": "2026-02-01",
+  "endDate": "2026-02-07",
+  "title": "Опциональный заголовок"
+}
+```
+
+**Response:** `200 OK` — аналогично `create-for-activity`.
+
+---
+
+### POST /segments/packs/:id/supersede
+
+Пометка KnowledgePack как SUPERSEDED (замещённый новым).
+
+**Request Body:**
+```json
+{
+  "supersededById": "uuid нового пакета (опционально)"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "packId": "uuid",
+    "status": "SUPERSEDED",
+    "supersededById": "uuid"
+  }
+}
+```
+
+---
+
+## Pending Approval API
+
+API для управления pending approvals — черновыми сущностями, ожидающими подтверждения.
+
+### GET /pending-approval
+
+Список pending approvals с фильтрами.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `batchId` | uuid | Фильтр по batch |
+| `status` | PendingApprovalStatus | Фильтр: `PENDING`, `APPROVED`, `REJECTED` |
+| `limit` | number | Максимум записей (default: 50, max: 100) |
+| `offset` | number | Смещение (default: 0) |
+
+**Response:** `200 OK`
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "batchId": "uuid",
+      "itemType": "activity",
+      "targetId": "uuid",
+      "status": "PENDING",
+      "confidence": 0.85,
+      "sourceQuote": "Нужно сделать макеты к пятнице",
+      "sourceInteractionId": "uuid",
+      "sourceEntityId": "uuid",
+      "createdAt": "2026-02-01T10:00:00Z"
+    }
+  ],
+  "total": 15,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+### GET /pending-approval/:id
+
+Получение одного pending approval по ID.
+
+**Response:** `200 OK` — объект pending approval.
+
+| Status | Описание |
+|--------|----------|
+| 200 | Найден |
+| 404 | Не найден |
+
+---
+
+### GET /pending-approval/:id/target
+
+Получение целевой сущности (Activity/Commitment) привязанной к pending approval.
+
+**Response:** `200 OK`
+```json
+{
+  "itemType": "activity",
+  "target": {
+    "id": "uuid",
+    "name": "Макеты для Alpha",
+    "activityType": "TASK",
+    "status": "DRAFT",
+    "description": "..."
+  }
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Цель найдена |
+| 404 | Approval или его цель не найдены |
+
+---
+
+### PATCH /pending-approval/:id/target
+
+Обновление целевой сущности pending approval. Позволяет редактировать черновик до подтверждения.
+
+**Request Body:**
+```json
+{
+  "name": "Новое название",
+  "description": "Новое описание",
+  "priority": "HIGH",
+  "deadline": "2026-03-01T00:00:00Z",
+  "clientEntityId": "uuid или null",
+  "assignee": "Иван",
+  "dueDate": "2026-03-01T00:00:00Z"
+}
+```
+
+Все поля опциональны. `deadline` и `dueDate` принимают `null` для сброса.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "id": "uuid"
+}
+```
+
+---
+
+### POST /pending-approval/:id/approve
+
+Подтверждение одного pending approval. Черновая сущность переводится в рабочий статус.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "id": "uuid"
+}
+```
+
+---
+
+### POST /pending-approval/:id/reject
+
+Отклонение одного pending approval. Черновая сущность удаляется или помечается как отклонённая.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "id": "uuid"
+}
+```
+
+---
+
+### GET /pending-approval/batch/:batchId/stats
+
+Статистика по batch (группе) pending approvals.
+
+**Response:** `200 OK`
+```json
+{
+  "batchId": "uuid",
+  "total": 10,
+  "pending": 5,
+  "approved": 3,
+  "rejected": 2
+}
+```
+
+---
+
+### POST /pending-approval/batch/:batchId/approve
+
+Подтверждение всех PENDING элементов в batch.
+
+**Response:** `200 OK`
+```json
+{
+  "processed": 5,
+  "errors": [],
+  "batchId": "uuid"
+}
+```
+
+---
+
+### POST /pending-approval/batch/:batchId/reject
+
+Отклонение всех PENDING элементов в batch.
+
+**Response:** `200 OK`
+```json
+{
+  "processed": 5,
+  "errors": [],
+  "batchId": "uuid"
+}
+```
+
+---
+
+## Extraction API
+
+API для извлечения структурированных данных из текста: факты, проекты, задачи, обязательства, отношения.
+
+### POST /extraction/facts
+
+Извлечение фактов из одного сообщения.
+
+**Request Body:**
+```json
+{
+  "entityId": "uuid",
+  "entityName": "Иван Петров",
+  "messageContent": "Текст сообщения для анализа",
+  "messageId": "uuid",
+  "interactionId": "uuid"
+}
+```
+
+**Response:** `200 OK` — массив извлечённых фактов с confidence.
+
+---
+
+### POST /extraction/facts/agent
+
+Извлечение фактов в agent-режиме с MCP tools для cross-entity routing. Создаёт факты для упомянутых сущностей, отношения между ними, pending entities для неизвестных людей.
+
+**Request Body:**
+```json
+{
+  "entityId": "uuid",
+  "entityName": "Иван Петров",
+  "messageContent": "Текст сообщения",
+  "messageId": "uuid",
+  "interactionId": "uuid",
+  "context": {
+    "isOutgoing": false,
+    "chatType": "private",
+    "senderName": "Иван"
+  }
+}
+```
+
+**Response:** `200 OK` — результат извлечения с фактами, отношениями и pending entities.
+
+---
+
+### GET /extraction/entity/:entityId/facts
+
+Извлечение фактов из истории сообщений и заметок сущности.
+
+**Response:** `200 OK`
+```json
+{
+  "entityId": "uuid",
+  "entityName": "Иван Петров",
+  "facts": [...],
+  "messageCount": 25,
+  "hasNotes": true,
+  "tokensUsed": 1200
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Извлечение выполнено |
+| 404 | Entity не найден |
+
+---
+
+### POST /extraction/relations/infer
+
+Вывод отношений из существующих фактов. Создаёт employment relations по фактам о компаниях.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `dryRun` | string | `"true"` — только отчёт без создания |
+| `sinceDate` | string | ISO 8601, обрабатывать только факты после этой даты |
+| `limit` | number | Максимум фактов для обработки |
+
+**Response:** `200 OK`
+```json
+{
+  "processed": 15,
+  "created": 3,
+  "skipped": 12,
+  "details": [...]
+}
+```
+
+---
+
+### GET /extraction/relations/infer/stats
+
+Статистика по потенциальным кандидатам для inference.
+
+**Response:** `200 OK` — объект статистики.
+
+---
+
+### POST /extraction/daily/extract-and-save
+
+Извлечение структурированных данных из daily synthesis и создание черновых сущностей с PendingApproval.
+
+Заменяет старый Redis carousel flow:
+- Старый: extract() → Redis carousel → persist()
+- Новый: extractAndSave() → DRAFT entities + PendingApproval в БД
+
+**Request Body:**
+```json
+{
+  "synthesisText": "Сегодня работал над Хабом для Панавто с Машей...",
+  "ownerEntityId": "uuid",
+  "date": "2026-02-01",
+  "focusTopic": "Панавто",
+  "messageRef": "telegram:chat:123:msg:456",
+  "sourceInteractionId": "uuid"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "batchId": "uuid",
+  "counts": {
+    "projects": 2,
+    "tasks": 5,
+    "commitments": 1,
+    "relations": 3
+  },
+  "approvals": [
+    {
+      "id": "uuid",
+      "itemType": "activity",
+      "targetId": "uuid",
+      "confidence": 0.9,
+      "sourceQuote": "Макеты к пятнице"
+    }
+  ],
+  "extraction": {
+    "projectsExtracted": 2,
+    "tasksExtracted": 5,
+    "commitmentsExtracted": 1,
+    "relationsInferred": 3,
+    "summary": "Извлечено 2 проекта, 5 задач...",
+    "tokensUsed": 3500,
+    "durationMs": 5200
+  }
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Извлечение выполнено |
+| 400 | Невалидные данные (synthesisText < 10 символов, нет ownerEntityId) |
+
+---
+
+### POST /extraction/reprocess-pending
+
+Отклонение всех PENDING approvals и повторная постановка в очередь извлечения для их source interactions. Используется после обновления логики извлечения.
+
+**Response:** `200 OK`
+```json
+{
+  "pendingRejected": 15,
+  "batchesRejected": 3,
+  "interactionsQueued": 10,
+  "skippedNoInteraction": 2,
+  "errors": ["Interaction uuid: no messages found"]
+}
+```
+
+---
+
+## Extracted Events API
+
+API для управления событиями, извлечёнными из переписки (встречи, задачи, обещания, факты).
+
+### GET /extracted-events
+
+Список извлечённых событий с фильтрами.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `status` | ExtractedEventStatus | `pending`, `confirmed`, `rejected` |
+| `type` | ExtractedEventType | `task`, `meeting`, `promise_by_me`, `promise_by_them`, `fact` |
+| `limit` | number | Максимум записей (default: 20) |
+| `offset` | number | Смещение (default: 0) |
+
+**Response:** `200 OK`
+```json
+{
+  "items": [...],
+  "total": 42,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+---
+
+### GET /extracted-events/:id
+
+Получение одного извлечённого события с привязанным сообщением.
+
+**Response:** `200 OK` — объект ExtractedEvent с `sourceMessage` relation.
+
+---
+
+### POST /extracted-events/:id/confirm
+
+Подтверждение события и создание соответствующего EntityEvent.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "createdEntityId": "uuid созданного EntityEvent"
+}
+```
+
+---
+
+### POST /extracted-events/:id/reject
+
+Отклонение извлечённого события.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true
+}
+```
+
+---
+
+### POST /extracted-events/:id/remind
+
+Создание напоминания через 7 дней для извлечённого события.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "createdEntityId": "uuid созданного EntityEvent",
+  "reminderDate": "2026-02-08T10:00:00Z"
+}
+```
+
+---
+
+### POST /extracted-events/:id/reschedule
+
+Перенос даты события на указанное количество дней.
+
+**Request Body:**
+```json
+{
+  "days": 7
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "newDate": "2026-02-08T10:00:00Z",
+  "updatedEntityEventId": "uuid"
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Событие перенесено |
+| 400 | `days` должен быть от 1 до 365 |
+| 404 | Событие не найдено |
+
+---
+
+### POST /extracted-events/enrich-batch
+
+Постановка группы событий в очередь на контекстное обогащение через LLM.
+
+**Request Body:**
+```json
+{
+  "limit": 50,
+  "eventType": "task"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "queued": 25,
+  "eventIds": ["uuid1", "uuid2"],
+  "message": "Queued 25 events for enrichment. Check /queue/stats for progress."
+}
+```
+
+---
+
+### POST /extracted-events/:id/enrich
+
+Ручной запуск контекстного обогащения одного события.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "needsContext": false,
+  "linkedEventId": "uuid",
+  "enrichmentData": { ... }
+}
+```
+
+---
+
+### GET /extracted-events/queue/stats
+
+Статистика очереди обогащения.
+
+**Response:** `200 OK`
+```json
+{
+  "waiting": 10,
+  "active": 2,
+  "completed": 150,
+  "failed": 3
+}
+```
+
+---
+
+### POST /extracted-events/auto-cleanup
+
+Автоматическая очистка: дедупликация событий, привязка к Activity, дедупликация Activity.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `phases` | string | Фазы через запятую: `dedup`, `match`, `activities` (default: все) |
+| `dryRun` | string | `"true"` — только отчёт без изменений |
+
+**Response:** `200 OK` — результат выполнения каждой фазы.
+
+---
+
+## Agent API (дополнения)
+
+Дополнительные endpoints к Agent API, не описанные ранее.
+
+### POST /agent/act
+
+Выполнение действия по инструкции на естественном языке (отправка сообщений, создание напоминаний). Поддерживает approval flow для отправки сообщений через Telegram.
+
+**Request Body:**
+```json
+{
+  "instruction": "Напиши Сергею что встреча переносится на среду",
+  "maxTurns": 10
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "result": "Создан черновик сообщения для Сергея и отправлен на подтверждение.",
+    "actions": [
+      {
+        "type": "draft_created",
+        "entityId": "uuid",
+        "entityName": "Сергей Иванов",
+        "details": "Черновик: Серёж, привет! Встреча переносится на среду."
+      }
+    ],
+    "toolsUsed": ["list_entities", "get_entity_context", "draft_message"]
+  }
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Действие выполнено |
+| 400 | Инструкция < 5 символов |
+| 500 | Ошибка выполнения |
+
+---
+
+### POST /agent/daily/extract
+
+Извлечение структурированных данных (проекты, задачи, обязательства) из текста ежедневного синтеза.
+
+**Request Body:**
+```json
+{
+  "synthesisText": "Сегодня работал над Хабом для Панавто с Машей...",
+  "date": "2026-02-01",
+  "focusTopic": "Панавто"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "data": {
+    "projects": [...],
+    "tasks": [...],
+    "commitments": [...],
+    "inferredRelations": [...],
+    "extractionSummary": "Извлечено 2 проекта, 3 задачи...",
+    "tokensUsed": 2500,
+    "durationMs": 4200
+  }
+}
+```
+
+---
+
+## Mini-App API
+
+API для Telegram Mini App. Все endpoints защищены `TelegramAuthGuard` и требуют `initData` от Telegram WebApp.
+
+### GET /mini-app/me
+
+Информация о текущем пользователе Telegram Mini App.
+
+**Response:** `200 OK`
+```json
+{
+  "user": {
+    "id": 123456789,
+    "firstName": "Иван",
+    "lastName": "Петров",
+    "username": "ivan_petrov"
+  },
+  "isOwner": true
+}
+```
+
+---
+
+### GET /mini-app/dashboard
+
+Данные дашборда: pending actions, today's brief, recent activity.
+
+**Response:** `200 OK`
+```json
+{
+  "pendingActions": [
+    {
+      "type": "approval",
+      "id": "all",
+      "count": 15
+    }
+  ],
+  "todayBrief": null,
+  "recentActivity": []
+}
+```
+
+---
+
+### GET /mini-app/entities
+
+Список сущностей для выбора (контакты).
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `search` | string | Поиск по имени |
+| `limit` | number | Максимум записей (default: 50, max: 100) |
+
+**Response:** `200 OK`
+```json
+{
+  "items": [
+    { "id": "uuid", "name": "Иван Петров", "type": "PERSON" }
+  ]
+}
+```
+
+---
+
+### GET /mini-app/entity/:id
+
+Профиль сущности с фактами и идентификаторами.
+
+**Response:** `200 OK`
+```json
+{
+  "id": "uuid",
+  "type": "PERSON",
+  "name": "Иван Петров",
+  "avatarUrl": "https://...",
+  "facts": [
+    { "type": "position", "value": "CTO", "updatedAt": "2026-01-15T00:00:00Z" }
+  ],
+  "recentInteractions": [],
+  "identifiers": [
+    { "type": "telegram_user_id", "value": "123456789" }
+  ]
+}
+```
+
+---
+
+### GET /mini-app/recall/:sessionId
+
+Результаты recall сессии для отображения в Mini App. Проверяет права доступа пользователя (IDOR prevention).
+
+**Response:** `200 OK`
+```json
+{
+  "id": "rs_abc123",
+  "query": "Что обсуждали с Иваном?",
+  "answer": "Вы обсуждали...",
+  "sources": [
+    { "id": "uuid", "type": "message", "preview": "цитата" }
+  ],
+  "createdAt": "2026-02-01T10:00:00Z"
+}
+```
+
+---
+
+### GET /mini-app/brief/:id
+
+Детали брифа. _Функциональность в разработке._
+
+---
+
+### POST /mini-app/brief/:id/item/:idx/action
+
+Действие над элементом брифа (done, remind, write, prepare).
+
+**Request Body:**
+```json
+{
+  "action": "done"
+}
+```
+
+---
+
+### GET /mini-app/pending-approval
+
+Список pending approvals для Mini App.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `batchId` | uuid | Фильтр по batch (`"all"` = без фильтра) |
+| `status` | PendingApprovalStatus | Фильтр по статусу |
+| `limit` | number | Максимум записей (default: 50, max: 100) |
+| `offset` | number | Смещение |
+
+**Response:** `200 OK` — список с маппированными полями для UI.
+
+---
+
+### GET /mini-app/pending-approval/stats
+
+Глобальная статистика pending approvals.
+
+**Response:** `200 OK` — объект статистики.
+
+---
+
+### GET /mini-app/pending-approval/batch/:batchId/stats
+
+Статистика по batch для Mini App.
+
+**Response:** `200 OK`
+```json
+{
+  "batchId": "uuid",
+  "total": 10,
+  "pending": 5,
+  "approved": 3,
+  "rejected": 2
+}
+```
+
+---
+
+### POST /mini-app/pending-approval/batch/:batchId/approve
+
+Подтверждение всех PENDING элементов в batch через Mini App.
+
+**Response:** `200 OK`
+```json
+{
+  "approved": 5,
+  "errors": []
+}
+```
+
+---
+
+### POST /mini-app/pending-approval/batch/:batchId/reject
+
+Отклонение всех PENDING элементов в batch через Mini App.
+
+**Response:** `200 OK`
+```json
+{
+  "rejected": 5,
+  "errors": []
+}
+```
+
+---
+
+### GET /mini-app/pending-approval/:id
+
+Один pending approval для Mini App.
+
+**Response:** `200 OK` — маппированный объект approval.
+
+---
+
+### PATCH /mini-app/pending-approval/:id
+
+Обновление целевой сущности через Mini App.
+
+**Request Body:**
+```json
+{
+  "name": "Новое название",
+  "description": "Описание",
+  "priority": "HIGH",
+  "deadline": "2026-03-01T00:00:00Z",
+  "parentId": "uuid"
+}
+```
+
+**Response:** `200 OK` — обновлённый объект approval.
+
+---
+
+### POST /mini-app/pending-approval/:id/approve
+
+Подтверждение одного элемента через Mini App.
+
+**Response:** `200 OK`
+```json
+{ "success": true }
+```
+
+---
+
+### POST /mini-app/pending-approval/:id/reject
+
+Отклонение одного элемента через Mini App.
+
+**Response:** `200 OK`
+```json
+{ "success": true }
+```
+
+---
+
+## Entity Relations API
+
+API для управления отношениями между сущностями (employment, friendship и т.д.).
+
+### GET /relations/:id
+
+Получение отношения по ID.
+
+**Response:** `200 OK` — объект relation с members.
+
+| Status | Описание |
+|--------|----------|
+| 200 | Отношение найдено |
+| 404 | Не найдено |
+
+---
+
+### GET /relations
+
+Получение всех отношений сущности.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `entityId` | uuid | **Обязательный.** ID сущности |
+| `type` | RelationType | Фильтр по типу (`employment`, `friendship`, `family`, `business`) |
+
+**Response:** `200 OK` — массив отношений с контекстом.
+
+---
+
+### POST /relations
+
+Создание нового отношения.
+
+**Request Body:** CreateRelationDto.
+
+**Response:** `201 Created` — созданное отношение.
+
+---
+
+### DELETE /relations/:id
+
+Soft-delete отношения (invalidation всех members).
+
+**Response:** `200 OK`
+```json
+{
+  "relationId": "uuid",
+  "membersRemoved": 2
+}
+```
+
+---
+
+## Merge Suggestions API
+
+API для обнаружения и выполнения merge-предложений дублирующихся сущностей.
+
+### GET /entities/merge-suggestions
+
+Список групп merge-предложений для orphaned entities.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `limit` | number | Максимум записей (default: 50, max: 100) |
+| `offset` | number | Смещение |
+
+**Response:** `200 OK` — группы предложений.
+
+---
+
+### POST /entities/merge-suggestions/:primaryId/dismiss/:candidateId
+
+Отклонение конкретного merge-предложения.
+
+**Response:** `204 No Content`
+
+---
+
+### GET /entities/merge-suggestions/preview/:sourceId/:targetId
+
+Детальный preview merge с потенциальными конфликтами.
+
+**Response:** `200 OK` — объект preview с конфликтами полей.
+
+---
+
+### POST /entities/merge-suggestions/merge
+
+Выполнение merge с выбранными полями.
+
+**Request Body:** MergeRequestDto.
+
+**Response:** `200 OK` — результат merge.
+
+---
+
+## Entity Events API
+
+API для управления событиями сущностей (встречи, дедлайны, обязательства, follow-up).
+
+### POST /entity-events
+
+Создание события.
+
+**Request Body:**
+```json
+{
+  "entity_id": "uuid",
+  "related_entity_id": "uuid",
+  "event_type": "MEETING",
+  "title": "Встреча с клиентом",
+  "description": "Обсуждение требований",
+  "event_date": "2026-02-15T14:00:00Z",
+  "status": "PENDING",
+  "confidence": 0.9,
+  "source_message_id": "uuid",
+  "source_quote": "Давай встретимся в пятницу"
+}
+```
+
+**Response:** `201 Created` — созданное событие.
+
+---
+
+### GET /entity-events
+
+Список событий с фильтрами.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `entity_id` | uuid | Фильтр по сущности |
+| `event_type` | EventType | `MEETING`, `DEADLINE`, `COMMITMENT`, `FOLLOW_UP`, `BIRTHDAY`, `ANNIVERSARY` |
+| `status` | EventStatus | `PENDING`, `COMPLETED`, `CANCELLED`, `OVERDUE` |
+| `from_date` | string | Начало периода (ISO 8601) |
+| `to_date` | string | Конец периода (ISO 8601) |
+| `limit` | number | Максимум записей |
+| `offset` | number | Смещение |
+
+**Response:** `200 OK` — массив событий.
+
+---
+
+### GET /entity-events/stats
+
+Статистика событий.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `entity_id` | uuid | Фильтр по сущности (опционально) |
+
+**Response:** `200 OK` — объект статистики.
+
+---
+
+### GET /entity-events/upcoming
+
+Предстоящие события.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `entity_id` | uuid | Фильтр по сущности |
+| `limit` | number | Максимум записей (default: 10) |
+
+**Response:** `200 OK` — массив предстоящих событий.
+
+---
+
+### GET /entity-events/overdue
+
+Просроченные события.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `entity_id` | uuid | Фильтр по сущности |
+| `limit` | number | Максимум записей (default: 10) |
+
+**Response:** `200 OK` — массив просроченных событий.
+
+---
+
+### GET /entity-events/:id
+
+Получение события по ID.
+
+**Response:** `200 OK` — объект события.
+
+---
+
+### PATCH /entity-events/:id
+
+Обновление события.
+
+**Request Body:**
+```json
+{
+  "title": "Обновлённый заголовок",
+  "description": "Обновлённое описание",
+  "event_date": "2026-02-20T14:00:00Z",
+  "status": "COMPLETED"
+}
+```
+
+**Response:** `200 OK` — обновлённое событие.
+
+---
+
+### POST /entity-events/:id/complete
+
+Пометка события как выполненного.
+
+**Response:** `200 OK` — обновлённое событие.
+
+---
+
+### POST /entity-events/:id/cancel
+
+Отмена события.
+
+**Response:** `200 OK` — обновлённое событие.
+
+---
+
+### DELETE /entity-events/:id
+
+Удаление события.
+
+**Response:** `200 OK`
+```json
+{ "deleted": true }
+```
+
+---
+
+## Notification API
+
+API для управления уведомлениями: триггеры дайджестов, approval flow для сообщений, morning brief.
+
+### POST /notifications/trigger/high-priority
+
+Ручной запуск обработки высокоприоритетных событий.
+
+**Response:** `200 OK`
+```json
+{ "success": true, "message": "High-priority events processed" }
+```
+
+---
+
+### POST /notifications/trigger/hourly-digest
+
+Ручной запуск часового дайджеста.
+
+**Response:** `200 OK`
+```json
+{ "success": true, "message": "Hourly digest sent" }
+```
+
+---
+
+### POST /notifications/trigger/daily-digest
+
+Ручной запуск ежедневного дайджеста.
+
+**Response:** `200 OK`
+```json
+{ "success": true, "message": "Daily digest sent" }
+```
+
+---
+
+### POST /notifications/trigger/morning-brief
+
+Ручной запуск утреннего брифа.
+
+**Response:** `200 OK`
+```json
+{ "success": true, "message": "Morning brief sent" }
+```
+
+---
+
+### GET /notifications/trigger/debug-pending
+
+Debug: получение pending событий для дайджеста.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `priority` | string | `high`, `medium`, `low` (default: `medium`) |
+| `limit` | number | Максимум записей (default: 10) |
+
+**Response:** `200 OK`
+```json
+{
+  "count": 5,
+  "events": [
+    {
+      "id": "uuid",
+      "eventType": "task",
+      "confidence": 0.9,
+      "status": "pending",
+      "notificationSentAt": null,
+      "extractedData": { ... }
+    }
+  ]
+}
+```
+
+---
+
+### POST /notifications/trigger/event/:eventId
+
+Отправка уведомления для конкретного события (для тестирования).
+
+**Response:** `200 OK`
+```json
+{ "success": true, "message": "Notification sent for event uuid" }
+```
+
+---
+
+## Approval Flow API
+
+API для approval flow отправки сообщений. Используется telegram-adapter для обработки нажатий кнопок.
+
+### GET /approvals/:approvalId
+
+Получение pending approval для отправки сообщения.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "approval": {
+    "id": "a_abc123",
+    "entityId": "uuid",
+    "entityName": "Иван Петров",
+    "text": "Привет, Иван! Встреча переносится на среду.",
+    "status": "pending",
+    "editMode": null
+  }
+}
+```
+
+---
+
+### POST /approvals/:approvalId/approve
+
+Подтверждение и отправка сообщения через Telegram userbot.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "sendResult": {
+    "success": true,
+    "messageId": 12345
+  }
+}
+```
+
+---
+
+### POST /approvals/:approvalId/reject
+
+Отклонение (отмена) отправки сообщения.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "approval": {
+    "id": "a_abc123",
+    "status": "rejected"
+  }
+}
+```
+
+---
+
+### POST /approvals/:approvalId/edit
+
+Вход в режим редактирования сообщения.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "approval": {
+    "id": "a_abc123",
+    "status": "editing",
+    "text": "Текущий текст сообщения",
+    "entityName": "Иван Петров"
+  }
+}
+```
+
+---
+
+### POST /approvals/:approvalId/edit-mode
+
+Установка режима редактирования: `describe` (описание для AI) или `verbatim` (прямой текст).
+
+**Request Body:**
+```json
+{
+  "mode": "describe"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "approval": {
+    "id": "a_abc123",
+    "status": "editing",
+    "editMode": "describe"
+  }
+}
+```
+
+---
+
+### POST /approvals/:approvalId/update-text
+
+Обновление текста сообщения (после verbatim edit).
+
+**Request Body:**
+```json
+{
+  "text": "Новый текст сообщения (1-4096 символов)"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "approval": {
+    "id": "a_abc123",
+    "status": "editing",
+    "text": "Новый текст сообщения"
+  }
+}
+```
+
+---
+
+### POST /approvals/:approvalId/regenerate
+
+Перегенерация сообщения через AI по описанию.
+
+**Request Body:**
+```json
+{
+  "description": "Перенеси встречу на четверг и извинись за неудобства (5-1000 символов)"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "approval": {
+    "id": "a_abc123",
+    "status": "editing",
+    "text": "Серёж, привет! Извини, встреча переносится на четверг. Сорри за неудобства!"
+  }
+}
+```
+
+---
+
+## Brief API
+
+API для управления Morning Brief (утренний бриф с accordion UI).
+
+### GET /brief/:briefId
+
+Получение состояния брифа.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "state": {
+    "items": [...],
+    "expandedIndex": null,
+    "stats": { "total": 5, "done": 2, "dismissed": 0 }
+  }
+}
+```
+
+---
+
+### POST /brief/:briefId/expand/:index
+
+Раскрытие элемента брифа для показа деталей и action buttons.
+
+**Response:** `200 OK` — обновлённое состояние с `expandedIndex`.
+
+---
+
+### POST /brief/:briefId/collapse
+
+Сворачивание всех элементов (возврат к обзору).
+
+**Response:** `200 OK` — обновлённое состояние.
+
+---
+
+### POST /brief/:briefId/done/:index
+
+Пометка элемента как выполненного.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "state": { ... },
+  "message": "Все задачи выполнены! Отличная работа!"
+}
+```
+
+---
+
+### POST /brief/:briefId/dismiss/:index
+
+Пометка элемента как отклонённого (не актуально).
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "state": { ... },
+  "message": "Все задачи обработаны!"
+}
+```
+
+---
+
+### POST /brief/:briefId/action/:index
+
+Выполнение действия для элемента брифа (write, remind, prepare).
+
+**Request Body:**
+```json
+{
+  "actionType": "write"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "message": "Action write triggered for Иван Петров",
+  "state": { ... }
+}
+```
+
+---
+
+## Digest Actions API
+
+API для разрешения коротких ID дайджеста в event UUID.
+
+### GET /digest-actions/:shortId
+
+Получение event IDs по короткому идентификатору из дайджеста.
+
+**Response:** `200 OK`
+```json
+{
+  "eventIds": ["uuid1", "uuid2", "uuid3"]
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Short ID найден |
+| 404 | Short ID не найден или истёк |
+
+---
+
+## Claude Agent Stats API
+
+API для статистики использования Claude Agent.
+
+### GET /claude-agent/stats
+
+Статистика использования Claude Agent за период.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `period` | string | `day`, `week`, `month` (default: `month`) |
+
+**Response:** `200 OK` — объект статистики (вызовы, токены, стоимость).
+
+---
+
+### GET /claude-agent/daily
+
+Ежедневная статистика Claude Agent.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `days` | number | Количество дней (default: 30) |
+
+**Response:** `200 OK` — массив ежедневных метрик.
+
+---
+
+## Summarization API
+
+API для управления суммаризацией взаимодействий и агрегацией профилей.
+
+### GET /summarization/stats
+
+Агрегированные метрики суммаризации.
+
+**Response:** `200 OK`
+```json
+{
+  "totalInteractions": 500,
+  "summarizedInteractions": 350,
+  "summarizationCoverage": 70.0,
+  "pendingInQueue": 5,
+  "oldestUnsummarized": "2026-01-15T00:00:00Z",
+  "avgCompressionRatio": 0.15,
+  "avgKeyPointsPerSummary": 4.2,
+  "avgDecisionsPerSummary": 1.5,
+  "totalOpenActionItems": 23
+}
+```
+
+---
+
+### GET /summarization/queue
+
+Статус очередей суммаризации и агрегации профилей.
+
+**Response:** `200 OK`
+```json
+{
+  "summarization": {
+    "waiting": 5,
+    "active": 2,
+    "completed": 300,
+    "failed": 3,
+    "delayed": 0
+  },
+  "entityProfile": {
+    "waiting": 0,
+    "active": 1,
+    "completed": 50,
+    "failed": 0,
+    "delayed": 0
+  }
+}
+```
+
+---
+
+### POST /summarization/trigger/:interactionId
+
+Запуск суммаризации для конкретного взаимодействия.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "summaryId": "uuid",
+  "message": "Summary created successfully"
+}
+```
+
+---
+
+### POST /summarization/trigger-batch
+
+Пакетный запуск суммаризации для нескольких взаимодействий.
+
+**Request Body:**
+```json
+{
+  "interactionIds": ["uuid1", "uuid2", "uuid3"]
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "triggered": 2,
+  "skipped": 1,
+  "results": [
+    { "id": "uuid1", "status": "created" },
+    { "id": "uuid2", "status": "already_exists" },
+    { "id": "uuid3", "status": "skipped" }
+  ]
+}
+```
+
+---
+
+### GET /summarization/status/:interactionId
+
+Статус суммаризации взаимодействия.
+
+**Response:** `200 OK`
+```json
+{
+  "interactionId": "uuid",
+  "hasSummary": true,
+  "summary": {
+    "id": "uuid",
+    "summaryText": "...",
+    "keyPoints": ["point1", "point2"],
+    "tone": "formal",
+    "messageCount": 45,
+    "compressionRatio": 0.12,
+    "createdAt": "2026-02-01T00:00:00Z"
+  }
+}
+```
+
+---
+
+### GET /summarization/interaction/:interactionId
+
+Получение summary по interaction ID.
+
+**Response:** `200 OK` — полный объект InteractionSummary.
+
+| Status | Описание |
+|--------|----------|
+| 200 | Summary найден |
+| 404 | Summary не найден |
+
+---
+
+### POST /summarization/trigger-daily
+
+Ручной запуск ежедневной задачи суммаризации.
+
+**Response:** `200 OK`
+```json
+{ "message": "Daily summarization job triggered" }
+```
+
+---
+
+### POST /summarization/profile/trigger/:entityId
+
+Запуск агрегации профиля для конкретной сущности.
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "profileId": "uuid",
+  "message": "Profile created/updated successfully"
+}
+```
+
+| Status | Описание |
+|--------|----------|
+| 200 | Профиль создан/обновлён |
+| 400 | Ошибка агрегации |
+| 404 | Entity не найден |
+
+---
+
+### GET /summarization/profile/entity/:entityId
+
+Получение профиля по entity ID.
+
+**Response:** `200 OK` — объект EntityRelationshipProfile.
+
+---
+
+### GET /summarization/profile/status/:entityId
+
+Статус профиля сущности.
+
+**Response:** `200 OK`
+```json
+{
+  "entityId": "uuid",
+  "hasProfile": true,
+  "summariesCount": 15,
+  "profile": {
+    "id": "uuid",
+    "relationshipType": "colleague",
+    "relationshipSummary": "Коллега по проекту...",
+    "totalInteractions": 30,
+    "updatedAt": "2026-02-01T00:00:00Z"
+  }
+}
+```
+
+---
+
+### POST /summarization/profile/trigger-weekly
+
+Ручной запуск еженедельной агрегации профилей.
+
+**Response:** `200 OK`
+```json
+{ "message": "Weekly profile aggregation job triggered" }
+```
+
+---
+
+## Group Memberships API
+
+API для отслеживания участников групповых чатов.
+
+### POST /group-memberships/change
+
+Регистрация изменения участия в группе.
+
+**Request Body:**
+```json
+{
+  "telegram_chat_id": "-1001234567890",
+  "telegram_user_id": "123456789",
+  "display_name": "Иван Петров",
+  "action": "joined",
+  "timestamp": "2026-02-01T10:00:00Z"
+}
+```
+
+**Response:** `200 OK` — результат обработки.
+
+---
+
+### GET /group-memberships/chat/:telegramChatId
+
+Список активных участников чата.
+
+**Response:** `200 OK`
+```json
+{
+  "telegramChatId": "-1001234567890",
+  "activeCount": 5,
+  "members": [...]
+}
+```
+
+---
+
+### GET /group-memberships/user/:telegramUserId
+
+Группы, в которых состоит пользователь.
+
+**Response:** `200 OK`
+```json
+{
+  "telegramUserId": "123456789",
+  "groupsCount": 3,
+  "groups": [...]
+}
+```
+
+---
+
+### GET /group-memberships/history
+
+История участия в группе.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `telegramChatId` | string | ID чата |
+| `telegramUserId` | string | ID пользователя |
+
+**Response:** `200 OK`
+```json
+{
+  "telegramChatId": "-1001234567890",
+  "telegramUserId": "123456789",
+  "history": [...]
+}
+```
+
+---
+
+### GET /group-memberships/stats
+
+Общая статистика по group memberships.
+
+**Response:** `200 OK` — объект статистики.
+
+---
+
+## Pending Facts API
+
+API для управления фактами, ожидающими подтверждения.
+
+### GET /pending-facts
+
+Список pending facts с фильтрами.
+
+**Query Parameters:**
+| Параметр | Тип | Описание |
+|----------|-----|----------|
+| `status` | PendingFactStatus | Фильтр по статусу |
+| `limit` | number | Максимум записей |
+| `offset` | number | Смещение |
+
+**Response:** `200 OK` — массив pending facts.
+
+---
+
+### GET /pending-facts/:id
+
+Получение одного pending fact.
+
+**Response:** `200 OK` — объект pending fact.
+
+---
+
+### PATCH /pending-facts/:id/approve
+
+Подтверждение pending fact (создание entity fact).
+
+**Response:** `200 OK` — результат подтверждения.
+
+---
+
+### PATCH /pending-facts/:id/reject
+
+Отклонение pending fact.
+
+**Response:** `200 OK` — результат отклонения.
+
+---
+
+## Activity Enrichment API
+
+API для AI-обогащения описаний Activity.
+
+### POST /activities/enrich-descriptions
+
+Находит Activity без описания и генерирует описания через Claude AI из доступного контекста (name, type, parent, client, tags, metadata.sourceQuote). Обработка идёт батчами по 20.
+
+**Response:** `200 OK`
+```json
+{
+  "enriched": 15,
+  "total": 20,
+  "errors": 2,
+  "errorDetails": [
+    { "id": "uuid", "name": "Task name", "error": "Claude timeout" }
+  ]
+}
+```
+
+---
+
 ## Коды ошибок
 
 | HTTP Code | Описание |

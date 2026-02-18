@@ -5,6 +5,7 @@ type: refactor
 date: 2026-01-31
 revised: 2026-01-31
 deepened: 2026-01-31
+status: completed
 ---
 
 # Рефакторинг Extraction Flow: Redis Carousel → Draft Entities

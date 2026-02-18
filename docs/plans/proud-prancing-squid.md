@@ -1,5 +1,7 @@
 # LLM-Agent Fact Deduplication Review
 
+> **Статус:** ✅ Completed — Phase D.5 Data Quality Remediation
+
 ## Context
 
 Текущая семантическая дедупликация фактов использует единственный порог pgvector cosine similarity (0.70). Факты с similarity ≥ 0.70 автоматически пропускаются, ниже — создаются. Проблема: короткие сокращённые факты ("ДР 15 марта 85го" vs "родился 15 марта 1985 года") имеют similarity 0.39-0.59, ниже порога, и создаются как дубликаты.

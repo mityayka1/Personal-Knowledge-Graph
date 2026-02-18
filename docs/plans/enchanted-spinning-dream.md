@@ -1,6 +1,6 @@
 # Entity Soft Delete — Исправление замечаний Code Review
 
-> **Статус:** 🔄 В планировании
+> **Статус:** ✅ Completed — soft delete реализован для Entity, Activity, Commitment, EntityFact, PendingApproval
 > **Дата:** 2026-01-30
 > **Контекст:** Code review бизнес-логики soft delete для EntityRecord
 

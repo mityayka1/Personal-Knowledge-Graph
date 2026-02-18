@@ -1,6 +1,6 @@
 # Merge Suggestions — Dashboard для слияния дубликатов сущностей
 
-> **Статус:** Draft
+> **Статус:** ✅ Completed — MergeSuggestionService, Controller, DismissedMergeSuggestions table
 > **Дата:** 2026-01-26
 
 ---

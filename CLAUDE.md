@@ -6,7 +6,7 @@ Personal Knowledge Graph — система для интеллектуальн�
 
 **Цель:** Перед любым взаимодействием получить компактный, релевантный контекст: кто это, о чём договаривались, какие открытые вопросы.
 
-## работаем над реализацией "второй памяти" по @docs/second-brain/INDEX.md
+## Реализуем "вторую память" по @docs/second-brain/INDEX.md — Фазы B–E завершены, система в production
 
 ## Архитектура
 
@@ -60,7 +60,9 @@ docker compose logs -f telegram-adapter
 | [docs/USER_STORIES.md](docs/USER_STORIES.md) | User Stories для MVP и Post-MVP |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Глоссарий терминов |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Руководство по деплою на сервер |
+| [docs/SUMMARIZATION.md](docs/SUMMARIZATION.md) | Система суммаризации и агрегации профилей |
 | [docs/TESTING_REAL_DATA.md](docs/TESTING_REAL_DATA.md) | **Тестирование на реальных данных** — обязательно перед релизом |
+| [docs/second-brain/INDEX.md](docs/second-brain/INDEX.md) | **Second Brain roadmap** — фазы B–E, статусы, известные пробелы |
 
 ## Схема БД (TypeORM Entities)
 
@@ -74,17 +76,36 @@ Entities находятся в `packages/entities/src/`.
 
 | Entity | Описание |
 |--------|----------|
+| **Core** | |
 | `entity.entity.ts` | Person или Organization |
 | `entity-identifier.entity.ts` | Идентификаторы (telegram_id, phone, email) |
-| `entity-fact.entity.ts` | Структурированные факты с историей |
+| `entity-fact.entity.ts` | Структурированные факты с историей (valid_from/valid_until) |
+| `entity-relation.entity.ts` | Связи между entities (works_at, knows, reports_to) |
+| `inferred-relation.entity.ts` | Связи, выведенные из переписки (с confidence и sourceInteractionId) |
+| **Interactions** | |
 | `interaction.entity.ts` | Сессии чатов, звонки, встречи |
 | `interaction-participant.entity.ts` | Участники взаимодействий |
 | `message.entity.ts` | Сообщения из Telegram |
 | `transcript-segment.entity.ts` | Сегменты транскрипции звонков |
 | `interaction-summary.entity.ts` | Summaries для tiered retrieval |
+| **Activity Management (Phase D)** | |
+| `activity.entity.ts` | Иерархическая модель дел: AREA → BUSINESS → PROJECT → TASK → MILESTONE. Closure-table. |
+| `activity-member.entity.ts` | Участники активности (entity + role) |
+| `commitment.entity.ts` | Обещания/обязательства между людьми (PROMISE, REQUEST, AGREEMENT, FOLLOW_UP) |
+| `entity-event.entity.ts` | События: встречи, дедлайны, напоминания, follow-ups |
+| **Extraction & Approval (Phase C–D)** | |
+| `pending-approval.entity.ts` | Извлечённые элементы на подтверждении (carousel в Telegram) |
 | `pending-entity-resolution.entity.ts` | Ожидающие связывания идентификаторы |
-| `pending-fact.entity.ts` | Факты на подтверждении |
+| `pending-fact.entity.ts` | Факты на подтверждении (legacy, заменён PendingApproval) |
+| **Knowledge System (Phase E)** | |
+| `topical-segment.entity.ts` | Семантические сегменты обсуждений (many-to-many с messages) |
+| `knowledge-pack.entity.ts` | Консолидированные знания по Activity/Entity |
+| **Data Quality (Phase D.6)** | |
+| `data-quality-report.entity.ts` | JSONB отчёты аудита: metrics, issues, resolutions |
+| **System** | |
 | `job.entity.ts` | Очередь асинхронных задач |
+| `settings.entity.ts` | Системные настройки (key-value) |
+| `notification-log.entity.ts` | Лог отправленных уведомлений |
 
 ## Технологический стек
 
@@ -94,7 +115,7 @@ Entities находятся в `packages/entities/src/`.
 - **Telegram:** GramJS (MTProto)
 - **Queue:** BullMQ (Redis)
 - **Embeddings:** OpenAI text-embedding-3-small (1536 dim)
-- **LLM:** Claude via Claude Code CLI
+- **LLM:** Claude via Claude Agent SDK (@anthropic-ai/claude-agent-sdk)
 - **Transcription:** Whisper
 - **Workflow:** n8n (self-hosted)
 
@@ -111,6 +132,18 @@ Telegram сообщения группируются в sessions (Interactions).
 
 ### Entity Facts
 Структурированные атрибуты сущностей (birthday, position, phone) с историей изменений (valid_from/valid_until) и источником (manual, extracted, imported).
+
+### Activity Management
+Иерархическая модель всех дел: AREA → BUSINESS → PROJECT → TASK → MILESTONE. Closure-table в TypeORM. Commitments привязываются к Activity. ActivityMembers связывают Entity с Activity через роли.
+
+### Extraction Pipeline
+Три пути извлечения: SecondBrain (real-time из Telegram), DailySynthesis (batch), Unified (agent mode). Все проходят через DraftExtractionService с fuzzy matching, client resolution, task dedup и semantic dedup.
+
+### Knowledge System
+TopicalSegments группируют сообщения по темам (Claude-based segmentation). KnowledgePacks консолидируют знания по Activity/Entity. OrphanSegmentLinker автоматически привязывает сегменты к активностям.
+
+### Pending Approval
+Извлечённые данные (факты, задачи, обязательства) создаются как drafts и отправляются в Telegram carousel для approve/reject пользователем.
 
 ## Правила разработки
 

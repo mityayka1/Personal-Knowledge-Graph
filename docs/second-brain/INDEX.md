@@ -118,7 +118,7 @@
 | **Phase 5.4** | Agent Tools — Activity CRUD + auto-fix | ✅ Completed |
 | **Phase 5.5** | Extraction pipeline prevention (two-tier matching, normalization, task dedup) | ✅ Completed |
 
-Детали: [`apps/pkg-core/docs/plans/proud-prancing-squid.md`](../../apps/pkg-core/docs/plans/proud-prancing-squid.md)
+Детали: [`docs/plans/proud-prancing-squid.md`](../plans/proud-prancing-squid.md)
 
 #### Data Quality System (Phase 6) -- Completed
 
@@ -164,7 +164,7 @@
 
 Результат: 0 forwardRef (было 7), 0 циклических зависимостей, 8/8 tool providers регистрируются.
 
-Детали: [`docs/plans/fuzzy-tinkering-allen.md`](../plans/fuzzy-tinkering-allen.md)
+Детали: [`docs/plans/fuzzy-tinkering-allen.md`](../plans/fuzzy-tinkering-allen.md) — architecture refactoring + extraction context injection
 
 #### Morning Brief Integration Fixes — Completed (verified 2026-02-16)
 
@@ -174,7 +174,7 @@
 
 ---
 
-## Известные пробелы и технический долг (аудит 2026-02-16)
+## Известные пробелы и технический долг (обновлено 2026-02-18)
 
 ### Extraction Pipeline — разрыв функциональности между путями
 
@@ -188,6 +188,7 @@
 | Semantic Dedup (embeddings) | ✅ | ❌ | ✅ (через Draft) |
 | ClientResolutionService | ✅ | ❌ | ✅ (через Draft) |
 | ActivityMember wiring | ✅ | ❌ | ✅ (через Draft) |
+| Activity Context (existing projects) | ✅ | ❌ | ✅ |
 | create_fact без дедупликации | — | ⚠️ Да | — |
 
 **Риск:** UnifiedExtractionService (agent mode, приватные чаты) создаёт факты без dedup и fusion → дубликаты в БД.
@@ -198,8 +199,17 @@
 |----------|------|----------|
 | `getPendingApprovalsForBatch()` — stub | `daily-synthesis-extraction.service.ts:192-197` | Возвращает `[]`, approval flow не интегрирован |
 | `matchProjectsToActivities()` — substring only | `daily-synthesis-extraction.service.ts:484-515` | Не использует ProjectMatchingService (fuzzy matching) |
-| Orphaned TopicalSegments | `packing-job.service.ts` | Сегменты без activityId логируются, но не линкуются автоматически |
-| Birthday lookup — TODO | `brief-data-provider.service.ts:103` | Комментарий TODO, поиск дней рождения не реализован |
+
+### ~~Решённые пробелы (2026-02-17..18)~~
+
+| Проблема | Решение | Дата |
+|----------|---------|------|
+| ~~Birthday lookup — TODO~~ | ✅ Реализован через EntityFact с factType='birthday' и value_date | 2026-02-18 |
+| ~~Orphaned TopicalSegments~~ | ✅ OrphanSegmentLinkerService + manual endpoint `POST /segments/run-orphan-linker` | 2026-02-17 |
+| ~~Segmentation не вызывается~~ | ✅ Cron каждый час + manual endpoint `POST /segments/run-segmentation` | 2026-02-17 |
+| ~~Knowledge tools не интегрированы~~ | ✅ `search_discussions` и `get_knowledge_summary` в recall/prepare agents | 2026-02-18 |
+| ~~Activity context не в SecondBrain~~ | ✅ `loadExistingActivities()` + `formatActivityContext()` + `projectName` в mappers | 2026-02-18 |
+| ~~Cross-chat context 30 мин~~ | ✅ Расширено до 120 мин (настраиваемо) | 2026-02-18 |
 
 ### Confirmation System — неполные обработчики
 
@@ -212,13 +222,14 @@
 | `identifier_attributed` | ❌ TODO | Привязка идентификаторов не подтверждается |
 | `entity_merged` | ❌ TODO | Слияние сущностей не подтверждается |
 
-### Segmentation Pipeline — не интегрирован в extraction
+### Segmentation Pipeline — частично интегрирован
 
-Сегментация (Phase E) **реализована**, но **не вызывается из extraction pipeline**:
-- `SegmentationJobService` работает только по cron (каждый час)
-- После extraction фактов/событий TopicalSegments НЕ создаются
-- PackingJobService (weekly) пакует только сегменты с `activityId`, orphans пропускает
-- **Результат:** Knowledge Packing фактически бездействует — нет входных данных
+Сегментация (Phase E) **реализована** и работает:
+- ✅ `SegmentationJobService` работает по cron (каждый час) — обрабатывает unsegmented messages
+- ✅ Manual endpoints: `POST /segments/run-segmentation`, `POST /segments/run-orphan-linker`
+- ✅ OrphanSegmentLinkerService автоматически линкует orphan сегменты к activities
+- ⚠️ Для чатов с >80 сообщений batch — Sonnet может выдать `error_max_structured_output_retries`
+- ⚠️ PackingJobService (weekly) пакует только сегменты с `activityId`
 
 ### Тест-покрытие контроллеров — 23%
 

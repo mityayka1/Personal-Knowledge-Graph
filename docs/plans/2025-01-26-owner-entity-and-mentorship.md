@@ -1,6 +1,6 @@
 # Owner Entity & Mentorship Relations — Design
 
-> **Статус:** 🔄 In Progress
+> **Статус:** ✅ Completed — MENTORSHIP добавлен в RelationType, ownerEntity реализован
 > **Дата:** 2025-01-26
 
 ---
