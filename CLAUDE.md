@@ -89,7 +89,7 @@ Entities находятся в `packages/entities/src/`.
 | `transcript-segment.entity.ts` | Сегменты транскрипции звонков |
 | `interaction-summary.entity.ts` | Summaries для tiered retrieval |
 | **Activity Management (Phase D)** | |
-| `activity.entity.ts` | Иерархическая модель дел: AREA → BUSINESS → PROJECT → TASK → MILESTONE. Closure-table. |
+| `activity.entity.ts` | Центральная сущность — любое целенаправленное дело. Произвольная вложенность: AREA → BUSINESS → PROJECT → TASK. Ценность = иерархический контекст + участники. |
 | `activity-member.entity.ts` | Участники активности (entity + role) |
 | `commitment.entity.ts` | Обещания/обязательства между людьми (PROMISE, REQUEST, AGREEMENT, FOLLOW_UP) |
 | `entity-event.entity.ts` | События: встречи, дедлайны, напоминания, follow-ups |
@@ -133,8 +133,29 @@ Telegram сообщения группируются в sessions (Interactions).
 ### Entity Facts
 Структурированные атрибуты сущностей (birthday, position, phone) с историей изменений (valid_from/valid_until) и источником (manual, extracted, imported).
 
-### Activity Management
-Иерархическая модель всех дел: AREA → BUSINESS → PROJECT → TASK → MILESTONE. Closure-table в TypeORM. Commitments привязываются к Activity. ActivityMembers связывают Entity с Activity через роли.
+### Activity (Активность)
+
+**Activity — любое целенаправленное дело**, которое имеет участников, существует во времени и порождает обязательства, задачи, факты. Это центральная сущность для организации всей информации в PKG.
+
+**Ценность Activity = иерархический контекст + участники.** Отдельно "Ожидание ответа от Куприкова" малоинформативно, но в цепочке "Работа → ИИ-Сервисы → Панавто → Битрикс-хаб → Подключение Авито → Ожидание ответа от Куприкова" — это полная картина: кто, что, зачем, в рамках чего.
+
+**Типы** (по масштабу):
+
+| Тип | Что отражает | Время жизни | Пример |
+|-----|-------------|-------------|--------|
+| **AREA** | Зона ответственности / сфера жизни | Постоянно | Работа, Семья, Здоровье |
+| **BUSINESS** | Направление/клиент/компания | Долгосрочно | ООО "ИИ-Сервисы", Клиент Панавто |
+| **PROJECT** | Ограниченное дело с целью | Недели-месяцы | Битрикс-хаб, Интеграция с Flowwow |
+| **TASK** | Конкретное действие | Часы-дни | Настроить CI/CD, Купить подарок маме |
+
+**Вложенность произвольной глубины.** Единственное ограничение — тип потомка не может быть крупнее типа родителя (AREA > BUSINESS > PROJECT > TASK). PROJECT может содержать PROJECT, TASK может содержать TASK.
+
+```
+Работа (AREA) → ООО "ИИ-Сервисы" (BUSINESS) → Клиент Панавто (PROJECT)
+  → Битрикс-хаб (PROJECT) → Подключение Авито (TASK) → Настроить креды (TASK)
+```
+
+**Связи:** Commitments привязываются к Activity. ActivityMembers связывают Entity с Activity через роли. TopicalSegments и KnowledgePacks группируют знания по Activity.
 
 ### Extraction Pipeline
 Три пути извлечения: SecondBrain (real-time из Telegram), DailySynthesis (batch), Unified (agent mode). Все проходят через DraftExtractionService с fuzzy matching, client resolution, task dedup и semantic dedup.

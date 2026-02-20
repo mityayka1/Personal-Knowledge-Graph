@@ -1,184 +1,224 @@
-# Plan: Улучшение Extraction Context + Manual Correction
+# Plan: Post-Hierarchy Improvements
 
-> **Статус:** ✅ Completed (verified 2026-02-18)
-> **Все 5 шагов реализованы:** Activity context injection, projectName в mappers, PATCH/GET target endpoints, cross-chat window 120 мин.
+> **Статус:** 📋 В планировании
+> **Контекст:** После реорганизации Activity hierarchy (3 AREA → 3 BUSINESS → проекты) остались задачи по деплою, классификации сирот, обновлению документации и UI.
 
 ## Context
 
-**Проблема:** При extraction из бесед (SecondBrainExtractionService) обязательства и задачи создаются как **сироты** — без привязки к существующим проектам/активностям.
+**Что сделано:** Построена полная иерархия Activity:
+```
+Работа (AREA) → ИИ-Сервисы (BIZ) → Панавто, Butler (PRJ)
+              → GoogleSheets.ru (BIZ) → Автоплан, Flowwow, ...
+              → Freelance (BIZ) → Opsygen, ЛасФлор (PRJ)
+Свои проекты (AREA) → PKG
+Личное (AREA) → 5 проектов + 14 задач
+```
 
-**Конкретный кейс:** Сообщение "Пойду Максу сделаю договор" создаёт commitment с `activity_id = null`, хотя в системе может быть связанный проект. Claude не знает о существующих проектах, потому что ему не передаётся их список.
-
-**Корневая причина:** SecondBrainExtractionService (real-time extraction) НЕ загружает existing activities, в отличие от DailySynthesisExtractionService, который:
-- Вызывает `loadExistingActivities()` — top 100 activities
-- Форматирует их для промпта через `formatActivityContext()`
-- Передаёт projectName + existingActivityId в schema
-
-**Дополнительные проблемы:**
-- CONVERSATION_EXTRACTION_SCHEMA не содержит поля `projectName` для задач/обязательств
-- Нет REST endpoint для редактирования draft entities (метод `updateTargetEntity()` есть в сервисе, но не exposed через контроллер)
-- Cross-chat context window слишком узкий (30 мин)
+**Что осталось:**
+1. Фикс `activityType` в PATCH endpoint — код готов, нужен commit + deploy
+2. 249 задач-сирот на root уровне — нужна автоклассификация
+3. INDEX.md содержит устаревшую информацию о пробелах extraction pipeline
+4. Нет UI для навигации по иерархии Activity
 
 ---
 
-## Шаги реализации
+## Шаг 1: Deploy activityType fix
 
-### Шаг 1: Добавить `projectName` в conversation extraction schema и mappers
+**Файл:** `apps/pkg-core/src/modules/activity/activity.service.ts`
 
-**Файл:** `apps/pkg-core/src/modules/extraction/second-brain-extraction.service.ts`
+**Статус кода:** Фикс уже на месте:
+- Строка 251: `if (dto.activityType !== undefined) activity.activityType = dto.activityType;`
+- Строка 325: `activityType: activity.activityType` в updateSet
 
-**Зачем:** Без поля `projectName` в выходных данных LLM не может указать привязку к проекту, даже если знает о нём.
-
-**Изменения (4 места в одном файле):**
-
-**1a.** Обновить описания типов в `buildConversationSystemPrompt()` (строки 592-608) — добавить `projectName?` к типам task, promise_by_me, promise_by_them, meeting:
-
-```
-4. **task** — задача от собеседника мне
-   data: { what, priority?, deadline?, deadlineText?, projectName?: "точное имя проекта из списка" }
-```
-
-**1b.** Обновить `mapToExtractedTask()` (строка 369) — добавить `projectName` в деструктуризацию и return:
-```typescript
-const data = rawEvent.data as {
-  what?: string;
-  priority?: string;
-  deadline?: string;
-  deadlineText?: string;
-  projectName?: string;  // NEW
-};
-return {
-  ...existing,
-  projectName: data.projectName,  // NEW
-};
-```
-
-**1c.** Обновить `mapToExtractedCommitment()` (строка 394) — аналогично добавить `projectName`.
-
-**1d.** Обновить `mapToExtractedMeeting()` (строка 419) — аналогично.
-
-**Почему schema не меняется:** `CONVERSATION_EXTRACTION_SCHEMA` определяет `data` как `{ type: 'object', additionalProperties: true }` — любые поля уже разрешены. LLM управляется описаниями в system prompt.
-
-**Почему DraftExtractionService не меняется:** Он уже обрабатывает `projectName` для задач (строки 517-529) и обязательств (строки 609-644) через 3-tier fuzzy matching.
+**Действия:**
+1. Commit изменения в `activity.service.ts`
+2. Deploy на production: `git pull && cd docker && docker compose build --no-cache pkg-core && docker compose up -d pkg-core`
+3. Verify: `PATCH /activities/{id}` с `{ "activityType": "task" }` — должен обновить тип
 
 ---
 
-### Шаг 2: Внедрить activity context в conversation extraction prompt
+## Шаг 2: Авто-классификация 249 сирот
 
-**Файл:** `apps/pkg-core/src/modules/extraction/second-brain-extraction.service.ts`
+**Проблема:** 249 задач (type=TASK) висят на root уровне (parentId=null) после реорганизации иерархии.
 
-**Зачем:** Это ключевое изменение — Claude получит список существующих проектов и сможет привязывать задачи/обязательства к ним.
+### 2a. Запустить существующий endpoint
 
-**Что переиспользуем:**
-- `DailySynthesisExtractionService.loadExistingActivities()` (строки 210-227)
-- `DailySynthesisExtractionService.formatActivityContext()` (строки 232-259)
-
-**Изменения (4 места):**
-
-**2a.** Activity repo уже доступен — `Activity` есть в `TypeOrmModule.forFeature()` в `extraction.module.ts:61`. Добавить `@InjectRepository(Activity)` в constructor.
-
-**2b.** Скопировать два метода из DailySynthesisExtractionService:
-- `loadExistingActivities(ownerEntityId?)` — top 100 non-archived activities с client join
-- `formatActivityContext(activities)` — группировка по типу, форматирование с id, name, client, status, tags
-
-**2c.** В `extractFromConversation()` (после строки 179) добавить загрузку активностей:
-```typescript
-const activities = await this.loadExistingActivities(ownerEntityId);
-const activityContext = this.formatActivityContext(activities);
-```
-
-Передать в `buildConversationSystemPrompt(entityContext, crossChatContext, activityContext)`.
-
-**2d.** В `buildConversationSystemPrompt()` добавить третий параметр и секцию:
-```
-═══════════════════════════════════════════════════════════════
-СУЩЕСТВУЮЩИЕ АКТИВНОСТИ (проекты, задачи — для привязки):
-${activityContext}
-═══════════════════════════════════════════════════════════════
-```
-
-Добавить правило extraction:
-```
-6. Используй СУЩЕСТВУЮЩИЕ АКТИВНОСТИ для привязки:
-   - Если задача/обещание связано с известным проектом — укажи projectName
-   - Используй ТОЧНЫЕ имена проектов из списка
-   - Если ничего не подходит — не указывай projectName
-```
-
----
-
-### Шаг 3: REST endpoint для редактирования draft entities
-
-**Файл:** `apps/pkg-core/src/modules/pending-approval/pending-approval.controller.ts`
-
-**Зачем:** Позволит исправлять ошибочные привязки (перепривязать задачу к другому проекту, изменить имя, назначить исполнителя).
-
-**Добавить:**
-
-```typescript
-@Patch(':id/target')
-async updateTarget(
-  @Param('id', ParseUUIDPipe) id: string,
-  @Body() body: UpdateTargetDto,
-): Promise<{ success: true; id: string }> {
-  await this.pendingApprovalService.updateTargetEntity(id, updates);
-  return { success: true, id };
-}
-```
-
-**UpdateTargetDto** — body с полями: `name?`, `description?`, `priority?`, `deadline?`, `parentId?`, `clientEntityId?`, `assignee?`, `dueDate?`. Даты принимаются как ISO strings, конвертируются в Date.
-
-**Метод `updateTargetEntity()` уже реализован** в pending-approval.service.ts:278-358 — обрабатывает все типы (task/project → Activity fields, commitment → Commitment fields).
-
----
-
-### Шаг 4: REST endpoint для просмотра target entity
+**Endpoint:** `POST /api/v1/data-quality/auto-assign-orphans`
 
 **Файлы:**
-- `apps/pkg-core/src/modules/pending-approval/pending-approval.service.ts` — добавить `getTargetEntity()`
-- `apps/pkg-core/src/modules/pending-approval/pending-approval.controller.ts` — добавить endpoint
+- `data-quality/data-quality.controller.ts:138` — endpoint
+- `data-quality/data-quality.service.ts:763` — `autoAssignOrphanedTasks()`
+- `data-quality/orphan-resolution.service.ts:60` — `resolveOrphans()` с 4 стратегиями
 
-**Зачем:** Для UI — посмотреть текущее состояние draft entity перед редактированием.
+**4 текущих стратегии:**
+1. **Name Containment** — имя задачи содержит имя проекта (case-insensitive, `normalizeName()`)
+2. **Batch** — общий `draftBatchId` в metadata со знакомой задачей
+3. **Single Project** — у владельца ровно один активный проект
+4. **Unsorted Fallback** — присвоить к "Unsorted Tasks"
 
-```typescript
-// Service
-async getTargetEntity(id: string): Promise<{ itemType: string; target: Record<string, unknown> } | null> {
-  const approval = await this.approvalRepo.findOne({ where: { id } });
-  if (!approval) return null;
-  const config = getItemTypeConfig(approval.itemType);
-  const target = await this.dataSource.manager.findOne(config.entityClass, { where: { id: approval.targetId } });
-  if (!target) return null;
-  return { itemType: approval.itemType, target };
-}
+**Проблема:** Стратегия 3 не сработает — у владельца >15 активных проектов. Стратегия 1 сработает только если имя задачи содержит имя проекта (маловероятно для большинства). Fallback свалит всё в "Unsorted Tasks" — нежелательно.
 
-// Controller
-@Get(':id/target')
-async getTarget(@Param('id', ParseUUIDPipe) id: string) { ... }
+### 2b. Добавить fuzzy matching стратегию
+
+**Файл:** `data-quality/orphan-resolution.service.ts`
+
+**Новая стратегия** (вставить между Strategy 1 и Strategy 2):
+
+```
+Strategy 1.5: Fuzzy Name Matching
+- Использовать ProjectMatchingService.findBestMatchInList()
+- Порог: 0.6 (ниже стандартных 0.8 для лучшего recall)
+- Матчит задачи по нечёткому сходству имени с проектами
 ```
 
-**Порядок route:** `GET :id/target` должен быть ДО `GET :id` — иначе NestJS может подставить "target" как UUID (ParseUUIDPipe отклонит, но лучше явный порядок).
+**Изменения:**
+1. В `resolveOrphans()` добавить вызов `matchByFuzzyName()` после `matchByNameContainment()` и перед `matchByBatch()`
+2. Новый private метод `matchByFuzzyName(task, projects)`:
+   ```typescript
+   private matchByFuzzyName(task: Activity, projects: Activity[]): Activity | null {
+     const projectNames = projects.map(p => ({ id: p.id, name: p.name }));
+     const result = this.projectMatchingService.findBestMatchInList(task.name, projectNames);
+     if (result && result.score >= 0.6) {
+       return projects.find(p => p.id === result.id) ?? null;
+     }
+     return null;
+   }
+   ```
+3. Добавить `'fuzzy_name'` в `OrphanResolutionMethod` union type
+4. Обновить тесты в `orphan-resolution.service.spec.ts`
+
+### 2c. Запустить и проанализировать результат
+
+1. Вызвать `POST /data-quality/auto-assign-orphans`
+2. Проанализировать `details` в ответе — сколько matched по каждой стратегии
+3. Оставшихся нерешённых — оценить вручную, может потребоваться ручная привязка
+
+**Переиспользуемые функции:**
+- `ProjectMatchingService.findBestMatchInList()` → `project-matching.service.ts`
+- `ProjectMatchingService.normalizeName()` → strips cost annotations
+- `OrphanResolutionService.assignParent()` → sets parentId через `activityService.update()`
 
 ---
 
-### Шаг 5: Расширить окно cross-chat context
+## Шаг 3: Обновить INDEX.md (устаревшие пробелы)
 
-**Файл:** `apps/pkg-core/src/modules/settings/settings.service.ts`
+**Файл:** `docs/second-brain/INDEX.md`
 
-**Изменение:** `DEFAULT_CROSS_CHAT_CONTEXT_MINUTES: 30 → 120` (строка 136)
+**Проблема:** Таблица "Известные пробелы" содержит устаревшую информацию. Проверка кода показала:
 
-**Зачем:** 30 минут слишком мало для бизнес-разговоров. 2 часа покрывает большинство связанных обсуждений за день.
+| Утверждение в INDEX.md | Реальность |
+|------------------------|-----------|
+| `create_fact` без дедупликации в UnifiedExtraction | ❌ Неверно — `create_fact` tool имеет полный dedup + Smart Fusion (`extraction-tools.provider.ts:523-614`) |
+| UnifiedExtraction lacks ProjectMatching | ❌ Неверно — `create_event` делегирует в `draftExtractionService.createDrafts()` который использует полный pipeline |
+| UnifiedExtraction lacks Task Dedup | ❌ Неверно — через `DraftExtractionService.createDrafts()` |
+| UnifiedExtraction lacks Smart Fusion | ❌ Неверно — `create_fact` tool напрямую использует `FactFusionService` |
+| UnifiedExtraction lacks ClientResolution | ❌ Неверно — через `DraftExtractionService` |
+| ConfirmationService — 3 handler'а TODO | ❌ Неверно — все 4 реализованы (`confirmation.service.ts:171-209`) |
 
-**Настраиваемость:** Значение уже можно переопределить через `PATCH /settings` с ключом `extraction.crossChatContextMinutes`.
+**Что действительно остаётся как пробел:**
+- `getPendingApprovalsForBatch()` — проверить актуальность
+- Тест-покрытие контроллеров — 23% (факт)
+
+**Действия:**
+1. Обновить таблицу "Extraction Pipeline — разрыв функциональности" в INDEX.md
+2. Перенести решённые пробелы в секцию "Решённые пробелы"
+3. Убрать ConfirmationService из пробелов
+4. Обновить секцию "Другие пробелы"
 
 ---
 
-## Зависимости между шагами
+## Шаг 4: Dashboard Tree View
+
+**Директория:** `apps/dashboard/`
+
+### 4a. Существующая инфраструктура
+
+| Компонент | Файл | Статус |
+|-----------|------|--------|
+| `useActivityTree()` | `composables/useActivities.ts:235` | ✅ Готов, не используется |
+| `GET /activities/:id/tree` | API | ✅ Работает |
+| `GET /activities?parentId=null` | API | ✅ Root activities |
+| Activity types/colors/labels | `composables/useActivities.ts:122-199` | ✅ Полные |
+| Существующий flat list | `pages/activities/index.vue` | ✅ С фильтрами |
+
+### 4b. Новые компоненты
+
+**1. Рекурсивный TreeNode компонент**
+
+**Файл:** `apps/dashboard/components/ActivityTreeNode.vue`
 
 ```
-Шаг 1 + Шаг 2 → деплоить вместе (1 без 2 бесполезен — LLM не знает проектов; 2 без 1 — LLM знает но не может указать projectName)
-Шаг 3 → независимый
-Шаг 4 → независимый
-Шаг 5 → независимый
+<template>
+  <div :style="{ paddingLeft: depth * 20 + 'px' }">
+    <div class="flex items-center gap-2 py-1 hover:bg-accent/50 rounded cursor-pointer"
+         @click="toggle">
+      <!-- Expand/collapse icon -->
+      <ChevronRight v-if="hasChildren" :class="{ 'rotate-90': expanded }" class="w-4 h-4" />
+      <span v-else class="w-4" />
+
+      <!-- Type badge -->
+      <span :class="ACTIVITY_TYPE_COLORS[node.activityType]" class="px-1.5 py-0.5 text-xs rounded">
+        {{ ACTIVITY_TYPE_LABELS[node.activityType] }}
+      </span>
+
+      <!-- Name -->
+      <NuxtLink :to="`/activities/${node.id}`" class="hover:underline flex-1">
+        {{ node.name }}
+      </NuxtLink>
+
+      <!-- Status badge -->
+      <span :class="ACTIVITY_STATUS_COLORS[node.status]" class="px-1.5 py-0.5 text-xs rounded">
+        {{ ACTIVITY_STATUS_LABELS[node.status] }}
+      </span>
+
+      <!-- Children count -->
+      <span v-if="node.childrenCount" class="text-xs text-muted-foreground">
+        ({{ node.childrenCount }})
+      </span>
+    </div>
+
+    <!-- Children (lazy-loaded on expand) -->
+    <div v-if="expanded && children">
+      <ActivityTreeNode v-for="child in children" :key="child.id"
+        :node="child" :depth="depth + 1" />
+    </div>
+  </div>
+</template>
+```
+
+**Загрузка детей:** При expand → `GET /activities?parentId={id}&limit=100` через `useActivities()` composable.
+
+**2. Tree page**
+
+**Файл:** `apps/dashboard/pages/activities/tree.vue`
+
+- Загружает root activities: `GET /activities?parentId=null&limit=100`
+  (Примечание: `parentId=null` не поддерживается текущим API — нужно `depth=0` или null filter)
+- Рендерит `ActivityTreeNode` для каждого root
+- Фильтры: статус (active/all), поиск
+- "Expand All" / "Collapse All" кнопки
+
+### 4c. Backend: фильтр root activities
+
+**Файл:** `apps/pkg-core/src/modules/activity/activity.controller.ts`
+
+Проверить поддержку фильтра `parentId=null` (root activities) в `GET /activities`. Если нет — добавить: `where.parentId = IsNull()` когда `query.parentId === 'null'`.
+
+### 4d. Навигация
+
+Добавить ссылку "Дерево" в sidebar или как tab на странице `/activities`.
+
+---
+
+## Зависимости
+
+```
+Шаг 1 → независимый (deploy)
+Шаг 2a → зависит от Шага 1 (deploy, чтобы иерархия была видна)
+Шаг 2b → независимый (code change)
+Шаг 2c → зависит от 2a + 2b
+Шаг 3 → независимый (documentation)
+Шаг 4 → независимый (dashboard, может делаться параллельно)
 ```
 
 ---
@@ -187,49 +227,43 @@ async getTarget(@Param('id', ParseUUIDPipe) id: string) { ... }
 
 | Файл | Шаг | Описание |
 |------|-----|----------|
-| `extraction/second-brain-extraction.service.ts` | 1, 2 | Activity context + projectName mappers |
-| `pending-approval/pending-approval.controller.ts` | 3, 4 | PATCH + GET target endpoints |
-| `pending-approval/pending-approval.service.ts` | 4 | getTargetEntity() метод |
-| `settings/settings.service.ts` | 5 | Cross-chat window 30→120 мин |
-
-**Новых файлов: 0. Миграций: 0. Изменений entity: 0.**
-
----
-
-## Существующие функции для переиспользования
-
-| Функция | Файл | Зачем |
-|---------|------|-------|
-| `loadExistingActivities()` | daily-synthesis-extraction.service.ts:210 | Копировать в SecondBrain |
-| `formatActivityContext()` | daily-synthesis-extraction.service.ts:232 | Копировать в SecondBrain |
-| `findExistingProjectEnhanced()` | draft-extraction.service.ts | Уже используется для projectName → parentId |
-| `updateTargetEntity()` | pending-approval.service.ts:278 | Уже реализован, нужен только endpoint |
-| `getItemTypeConfig()` | item-type-registry.ts:79 | Для getTargetEntity() |
-| `ProjectMatchingService.normalizeName()` | project-matching.service.ts | Уже используется в DraftExtraction |
+| `activity/activity.service.ts` | 1 | Commit существующего фикса |
+| `data-quality/orphan-resolution.service.ts` | 2b | Добавить fuzzy matching стратегию |
+| `data-quality/orphan-resolution.service.spec.ts` | 2b | Тесты для fuzzy strategy |
+| `docs/second-brain/INDEX.md` | 3 | Обновить устаревшие пробелы |
+| `dashboard/components/ActivityTreeNode.vue` | 4 | **Новый** — рекурсивный tree node |
+| `dashboard/pages/activities/tree.vue` | 4 | **Новый** — tree page |
+| `activity/activity.controller.ts` | 4c | parentId=null фильтр (если нет) |
 
 ---
 
 ## Verification
 
-### Шаг 1+2 (Activity context injection):
-1. Создать Activity через `POST /activities` с известным именем
-2. Вызвать conversation extraction на беседе с упоминанием этого проекта
-3. Проверить PendingApproval — задача должна иметь `parentId` → Activity
-4. SQL: `SELECT a.name, a.parent_id FROM activities WHERE id = (SELECT target_id FROM pending_approvals WHERE batch_id = '...' AND item_type = 'task')`
+### Шаг 1 (Deploy):
+```bash
+curl -X PATCH https://assistant.mityayka.ru/api/v1/activities/{id} \
+  -H "x-api-key: ..." -H "Content-Type: application/json" \
+  -d '{"activityType": "task"}'
+# Ожидание: 200 OK, activityType обновлён
+```
 
-### Шаг 3 (PATCH endpoint):
-1. `GET /pending-approval?status=pending` → получить ID
-2. `PATCH /pending-approval/{id}/target` с `{ "parentId": "project-uuid" }`
-3. Проверить: `SELECT parent_id FROM activities WHERE id = '{targetId}'`
-4. Попробовать на non-pending → ожидать 409
-5. Попробовать с invalid UUID → ожидать 400
+### Шаг 2 (Orphan resolution):
+```bash
+curl -X POST https://assistant.mityayka.ru/api/v1/data-quality/auto-assign-orphans \
+  -H "x-api-key: ..."
+# Ожидание: JSON с resolved/unresolved/details
+# Цель: resolved > 100 из 249
+```
 
-### Шаг 4 (GET target):
-1. `GET /pending-approval/{id}/target` → ожидать `{ itemType, target: { name, parentId, status, ... } }`
+### Шаг 3 (INDEX.md):
+- Визуальная проверка — таблица пробелов отражает реальность
 
-### Шаг 5 (Cross-chat window):
-1. Проверить через `GET /settings` значение `extraction.crossChatContextMinutes`
-2. Или по логам: cross-chat context включает сообщения за 2 часа
+### Шаг 4 (Dashboard tree):
+- Открыть `/activities/tree` в браузере
+- Root nodes: Работа, Свои проекты, Личное
+- Expand Работа → ИИ-Сервисы, GoogleSheets.ru, Freelance
+- Expand ИИ-Сервисы → Панавто, Butler
+- Клик по проекту → переход на `/activities/{id}`
 
 ### Production deploy:
 ```bash

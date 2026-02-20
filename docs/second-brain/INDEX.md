@@ -174,33 +174,27 @@
 
 ---
 
-## Известные пробелы и технический долг (обновлено 2026-02-18)
+## Известные пробелы и технический долг (обновлено 2026-02-20, верифицировано)
 
-### Extraction Pipeline — разрыв функциональности между путями
+### Extraction Pipeline — функциональный паритет между путями
 
-Система имеет три пути extraction, но **функциональность распределена неравномерно**:
+Система имеет три пути extraction. После рефакторинга ExtractionToolsProvider **все три пути** проходят через полный quality pipeline:
 
 | Возможность | DraftExtraction (oneshot) | UnifiedExtraction (agent) | SecondBrainExtraction |
 |-------------|:-------------------------:|:-------------------------:|:---------------------:|
-| Smart Fusion (FactFusionService) | ✅ | ❌ | ✅ (через Draft) |
-| ProjectMatchingService | ✅ | ❌ | ✅ (через Draft) |
-| Task Dedup (Levenshtein) | ✅ | ❌ | ✅ (через Draft) |
-| Semantic Dedup (embeddings) | ✅ | ❌ | ✅ (через Draft) |
-| ClientResolutionService | ✅ | ❌ | ✅ (через Draft) |
-| ActivityMember wiring | ✅ | ❌ | ✅ (через Draft) |
-| Activity Context (existing projects) | ✅ | ❌ | ✅ |
-| create_fact без дедупликации | — | ⚠️ Да | — |
+| Smart Fusion (FactFusionService) | ✅ | ✅ (через ExtractionToolsProvider) | ✅ (через Draft) |
+| ProjectMatchingService | ✅ | ✅ (через ExtractionToolsProvider) | ✅ (через Draft) |
+| Task Dedup (Levenshtein) | ✅ | ✅ (через DraftExtractionService) | ✅ (через Draft) |
+| Semantic Dedup (embeddings) | ✅ | ✅ (через DraftExtractionService) | ✅ (через Draft) |
+| ClientResolutionService | ✅ | ✅ (через DraftExtractionService) | ✅ (через Draft) |
+| ActivityMember wiring | ✅ | ✅ (через DraftExtractionService) | ✅ (через Draft) |
+| Activity Context (existing projects) | ✅ | ✅ (loadExistingActivities) | ✅ |
 
-**Риск:** UnifiedExtractionService (agent mode, приватные чаты) создаёт факты без dedup и fusion → дубликаты в БД.
+**Ключевые файлы:**
+- `extraction-tools.provider.ts` — `create_fact` tool имеет полный dedup + Smart Fusion (строки 523-614)
+- `extraction-tools.provider.ts` — `create_event` tool делегирует в `draftExtractionService.createDrafts()` (строка 1068)
 
-### Другие пробелы
-
-| Проблема | Файл | Описание |
-|----------|------|----------|
-| `getPendingApprovalsForBatch()` — stub | `daily-synthesis-extraction.service.ts:192-197` | Возвращает `[]`, approval flow не интегрирован |
-| `matchProjectsToActivities()` — substring only | `daily-synthesis-extraction.service.ts:484-515` | Не использует ProjectMatchingService (fuzzy matching) |
-
-### ~~Решённые пробелы (2026-02-17..18)~~
+### ~~Решённые пробелы (2026-02-17..20)~~
 
 | Проблема | Решение | Дата |
 |----------|---------|------|
@@ -210,17 +204,10 @@
 | ~~Knowledge tools не интегрированы~~ | ✅ `search_discussions` и `get_knowledge_summary` в recall/prepare agents | 2026-02-18 |
 | ~~Activity context не в SecondBrain~~ | ✅ `loadExistingActivities()` + `formatActivityContext()` + `projectName` в mappers | 2026-02-18 |
 | ~~Cross-chat context 30 мин~~ | ✅ Расширено до 120 мин (настраиваемо) | 2026-02-18 |
-
-### Confirmation System — неполные обработчики
-
-В `confirmation.service.ts` реализован только обработчик `fact_created`. Три типа событий остаются без обработки:
-
-| Handler | Статус | Влияние |
-|---------|--------|---------|
-| `fact_created` | ✅ Реализован | — |
-| `fact_value` | ❌ TODO | Изменения значений фактов не подтверждаются |
-| `identifier_attributed` | ❌ TODO | Привязка идентификаторов не подтверждается |
-| `entity_merged` | ❌ TODO | Слияние сущностей не подтверждается |
+| ~~UnifiedExtraction без dedup/fusion~~ | ✅ ExtractionToolsProvider имеет полный pipeline: `create_fact` с Smart Fusion + dedup, `create_event` через DraftExtractionService | 2026-02-20 |
+| ~~`getPendingApprovalsForBatch()` — stub~~ | ✅ Реализован через `pendingApprovalService.list()` в `daily-synthesis-extraction.service.ts` | 2026-02-20 |
+| ~~`matchProjectsToActivities()` — substring only~~ | ✅ Использует `ProjectMatchingService.findBestMatchInList()` с порогом 0.8 | 2026-02-20 |
+| ~~Confirmation System — неполные обработчики~~ | ✅ Все 4 handler'а реализованы в `confirmation.service.ts`: `fact_created`, `fact_value`, `identifier_attributed`, `entity_merged` | 2026-02-20 |
 
 ### Segmentation Pipeline — частично интегрирован
 
