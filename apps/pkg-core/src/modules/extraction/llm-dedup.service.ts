@@ -3,7 +3,7 @@ import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 
 // --- Interfaces ---
 
-export type DedupItemType = 'entity' | 'task' | 'commitment' | 'fact';
+export type DedupItemType = 'entity' | 'task' | 'commitment' | 'fact' | 'activity';
 
 export interface DedupItemInfo {
   type: DedupItemType;

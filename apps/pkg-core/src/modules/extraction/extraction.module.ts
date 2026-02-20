@@ -38,6 +38,7 @@ import { GroupExtractionService } from './group-extraction.service';
 import { EventCleanupService } from './event-cleanup.service';
 import { LlmDedupService } from './llm-dedup.service';
 import { DeduplicationGatewayService } from './dedup-gateway.service';
+import { DedupBatchCleanupJob } from './dedup-batch-cleanup.job';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { InteractionModule } from '../interaction/interaction.module';
@@ -114,6 +115,7 @@ import { JobModule } from '../job/job.module';
     EventCleanupService,
     LlmDedupService,
     DeduplicationGatewayService,
+    DedupBatchCleanupJob,
   ],
   exports: [
     FactExtractionService,
