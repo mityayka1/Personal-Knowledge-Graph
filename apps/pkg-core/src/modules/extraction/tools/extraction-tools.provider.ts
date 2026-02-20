@@ -450,13 +450,19 @@ export class ExtractionToolsProvider {
 - location: местоположение ("Москва", "работает удалённо")
 - education: образование ("МГУ", "PhD Computer Science")
 
-ВАЖНО: Создавай факт для КОНКРЕТНОЙ сущности. "Маша работает в Сбере" → факт для Маши, не для текущего контакта.`,
+ВАЖНО: Создавай факт для КОНКРЕТНОЙ сущности. "Маша работает в Сбере" → факт для Маши, не для текущего контакта.
+Если факт связан с конкретным проектом или делом — укажи activityId. Используй find_activity для поиска проекта.`,
       {
         entityId: z.string().uuid().describe('UUID сущности-владельца факта'),
         factType: z.string().describe('Тип факта (position, company, phone, email, etc.)'),
         value: z.string().describe('Значение факта на русском языке'),
         confidence: z.number().min(0).max(1).describe('Уверенность в факте от 0 до 1'),
         sourceQuote: z.string().max(200).describe('Цитата из сообщения (до 200 символов)'),
+        activityId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('UUID активности/проекта, к которому относится факт. Используй find_activity для поиска.'),
         category: z
           .enum(['professional', 'personal', 'contact', 'preferences'])
           .optional()
@@ -643,6 +649,7 @@ export class ExtractionToolsProvider {
                 value: factValue,
                 sourceQuote: args.sourceQuote?.substring(0, 200),
                 confidence: args.confidence,
+                activityId: args.activityId,
               },
             ],
             tasks: [],

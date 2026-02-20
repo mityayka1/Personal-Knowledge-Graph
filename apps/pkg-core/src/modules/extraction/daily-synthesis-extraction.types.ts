@@ -123,6 +123,8 @@ export interface ExtractedFact {
   sourceQuote?: string;
   /** Confidence of extraction (0-1) */
   confidence: number;
+  /** Optional activity/project ID for linking fact to project context */
+  activityId?: string;
 }
 
 /**
