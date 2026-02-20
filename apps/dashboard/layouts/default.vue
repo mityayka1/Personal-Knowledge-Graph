@@ -14,6 +14,7 @@ import {
   User,
   GitMerge,
   FolderKanban,
+  TreePine,
 } from 'lucide-vue-next';
 import Toaster from '~/components/ui/toast/Toaster.vue';
 
@@ -24,6 +25,7 @@ const navigation = [
   { name: 'Сущности', href: '/entities', icon: Users },
   { name: 'Слияние', href: '/entities/merge-requests', icon: GitMerge },
   { name: 'Активности', href: '/activities', icon: FolderKanban },
+  { name: 'Дерево', href: '/activities/tree', icon: TreePine },
   { name: 'Взаимодействия', href: '/interactions', icon: MessageSquare },
   { name: 'Чаты', href: '/chats', icon: MessagesSquare },
   { name: 'Поиск', href: '/search', icon: Search },

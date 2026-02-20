@@ -14,6 +14,7 @@ import {
   CalendarRange,
   Clock,
   AlertTriangle,
+  TreePine,
 } from 'lucide-vue-next';
 import { useDebounceFn } from '@vueuse/core';
 import {
@@ -118,12 +119,20 @@ function isOverdue(deadline: string | null): boolean {
         <h1 class="text-3xl font-bold tracking-tight">Активности</h1>
         <p class="text-muted-foreground">Проекты, задачи и другие активности</p>
       </div>
-      <NuxtLink to="/activities/new">
-        <Button>
-          <Plus class="mr-2 h-4 w-4" />
-          Добавить
-        </Button>
-      </NuxtLink>
+      <div class="flex items-center gap-2">
+        <NuxtLink to="/activities/tree">
+          <Button variant="outline">
+            <TreePine class="mr-2 h-4 w-4" />
+            Дерево
+          </Button>
+        </NuxtLink>
+        <NuxtLink to="/activities/new">
+          <Button>
+            <Plus class="mr-2 h-4 w-4" />
+            Добавить
+          </Button>
+        </NuxtLink>
+      </div>
     </div>
 
     <!-- Filters -->
