@@ -248,6 +248,7 @@ export class ActivityService {
     const activity = await this.findOne(id);
 
     // Обновить простые поля
+    if (dto.activityType !== undefined) activity.activityType = dto.activityType;
     if (dto.name !== undefined) activity.name = dto.name;
     if (dto.description !== undefined) activity.description = dto.description;
     if (dto.status !== undefined) activity.status = dto.status;
@@ -321,6 +322,7 @@ export class ActivityService {
     // при изменении parentId на closure-table сущности.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updateSet: any = {
+      activityType: activity.activityType,
       name: activity.name,
       description: activity.description,
       status: activity.status,
