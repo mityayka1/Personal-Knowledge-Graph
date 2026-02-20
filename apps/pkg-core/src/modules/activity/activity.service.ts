@@ -786,7 +786,7 @@ export class ActivityService {
     // Update descendants using raw query to avoid closure-table bug
     // (TypeORM 0.3.x save() crashes with ClosureSubjectExecutor.getEntityValue)
     await this.activityRepo.query(
-      `UPDATE activity
+      `UPDATE activities
        SET "materializedPath" = REPLACE("materializedPath", $1, $2),
            "depth" = "depth" + $3
        WHERE "materializedPath" LIKE $4`,
