@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Activity, ActivityType, ActivityStatus, EntityRecord } from '@pkg/entities';
+import { Activity, ActivityType, ActivityStatus, EntityRecord, EntityType } from '@pkg/entities';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { ProjectMatchingService } from './project-matching.service';
 import { LlmDedupService, DedupPair } from './llm-dedup.service';
@@ -44,7 +44,7 @@ export interface TaskCandidate {
 
 export interface EntityCandidate {
   name: string;
-  type: string; // 'person' | 'organization'
+  type: EntityType;
   context?: string;
 }
 
@@ -256,9 +256,10 @@ export class DeduplicationGatewayService {
       .where('LOWER(a.name) = :name', { name: normalizedName })
       .andWhere('a.ownerEntityId = :ownerId', { ownerId: ownerEntityId })
       .andWhere('a.activityType = :type', { type: ActivityType.TASK })
-      .andWhere('a.status != :cancelled', {
-        cancelled: ActivityStatus.CANCELLED,
+      .andWhere('a.status NOT IN (:...excludedStatuses)', {
+        excludedStatuses: [ActivityStatus.CANCELLED, ActivityStatus.ARCHIVED],
       })
+      .andWhere('a.deletedAt IS NULL')
       .getOne();
 
     return result;
@@ -304,9 +305,10 @@ export class DeduplicationGatewayService {
         .addSelect('1 - (a.embedding <=> :embedding)', 'similarity')
         .where('a.ownerEntityId = :ownerId', { ownerId: ownerEntityId })
         .andWhere('a.activityType = :type', { type: ActivityType.TASK })
-        .andWhere('a.status != :cancelled', {
-          cancelled: ActivityStatus.CANCELLED,
+        .andWhere('a.status NOT IN (:...excludedStatuses)', {
+          excludedStatuses: [ActivityStatus.CANCELLED, ActivityStatus.ARCHIVED],
         })
+        .andWhere('a.deletedAt IS NULL')
         .andWhere('a.embedding IS NOT NULL')
         .andWhere('1 - (a.embedding <=> :embedding) >= :threshold')
         .orderBy('similarity', 'DESC')
@@ -334,12 +336,13 @@ export class DeduplicationGatewayService {
    */
   private async findExactEntityMatch(
     normalizedName: string,
-    type: string,
+    type: EntityType,
   ): Promise<EntityRecord | null> {
     const result = await this.entityRepo
       .createQueryBuilder('e')
       .where('LOWER(e.name) = :name', { name: normalizedName })
       .andWhere('e.type = :type', { type })
+      .andWhere('e.deletedAt IS NULL')
       .getOne();
 
     return result;
@@ -351,16 +354,18 @@ export class DeduplicationGatewayService {
    */
   private async findPartialEntityMatches(
     normalizedName: string,
-    type: string,
+    type: EntityType,
   ): Promise<EntityRecord[]> {
     try {
+      const escaped = this.escapeLikePattern(normalizedName);
       const candidates = await this.entityRepo
         .createQueryBuilder('e')
         .where('e.type = :type', { type })
-        .andWhere('LOWER(e.name) LIKE :pattern', {
-          pattern: `%${normalizedName}%`,
+        .andWhere('e.name ILIKE :pattern', {
+          pattern: `%${escaped}%`,
         })
         .andWhere('LOWER(e.name) != :exact', { exact: normalizedName })
+        .andWhere('e.deletedAt IS NULL')
         .limit(TOP_K)
         .getMany();
 
@@ -420,6 +425,13 @@ export class DeduplicationGatewayService {
     return this.createDecision(
       `Low confidence duplicate (${llmDecision.confidence}): ${llmDecision.reason}`,
     );
+  }
+
+  /**
+   * Escape special LIKE/ILIKE pattern characters (%, _) in user input.
+   */
+  private escapeLikePattern(value: string): string {
+    return value.replace(/%/g, '\\%').replace(/_/g, '\\_');
   }
 
   /**

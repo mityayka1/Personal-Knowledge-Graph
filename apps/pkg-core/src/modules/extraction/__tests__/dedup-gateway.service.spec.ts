@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Activity, ActivityType, ActivityStatus, EntityRecord } from '@pkg/entities';
+import { Activity, ActivityType, ActivityStatus, EntityRecord, EntityType } from '@pkg/entities';
 import {
   DeduplicationGatewayService,
   DedupAction,
@@ -306,7 +306,7 @@ describe('DeduplicationGatewayService', () => {
 
       const candidate: EntityCandidate = {
         name: '  Иванов Иван Иванович  ',
-        type: 'person',
+        type: EntityType.PERSON,
       };
 
       const decision = await service.checkEntity(candidate);
@@ -328,7 +328,7 @@ describe('DeduplicationGatewayService', () => {
 
       const candidate: EntityCandidate = {
         name: 'Абсолютно новый человек',
-        type: 'person',
+        type: EntityType.PERSON,
       };
 
       const decision = await service.checkEntity(candidate);
@@ -363,7 +363,7 @@ describe('DeduplicationGatewayService', () => {
 
       const candidate: EntityCandidate = {
         name: 'Иванов',
-        type: 'person',
+        type: EntityType.PERSON,
         context: 'Из переписки в Telegram',
       };
 
@@ -375,7 +375,7 @@ describe('DeduplicationGatewayService', () => {
 
       // Verify ILIKE query was built
       expect(partialQb.andWhere).toHaveBeenCalledWith(
-        'LOWER(e.name) LIKE :pattern',
+        'e.name ILIKE :pattern',
         expect.objectContaining({ pattern: expect.stringContaining('%') }),
       );
 
@@ -462,6 +462,46 @@ describe('DeduplicationGatewayService', () => {
 
       // Embedding should NOT have been called
       expect(mockEmbeddingService.generate).not.toHaveBeenCalled();
+    });
+
+    it('should include deletedAt IS NULL filter in task queries', async () => {
+      // No exact match
+      const exactQb = createMockQueryBuilder(null);
+      mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+
+      // Verify the exact match query includes deletedAt filter
+      const candidate: TaskCandidate = {
+        name: 'Some task',
+        ownerEntityId: 'owner-111',
+      };
+
+      // Need semantic step too — no embedding service
+      const module = await buildModule(false);
+      const svc = module.get(DeduplicationGatewayService);
+      await svc.checkTask(candidate);
+
+      expect(exactQb.andWhere).toHaveBeenCalledWith('a.deletedAt IS NULL');
+    });
+
+    it('should include deletedAt IS NULL filter in entity queries', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      const partialQb = createMockQueryBuilder(null, []);
+      partialQb.getMany = jest.fn().mockResolvedValue([]);
+
+      mockEntityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(partialQb);
+
+      const candidate: EntityCandidate = {
+        name: 'Тестовый человек',
+        type: EntityType.PERSON,
+      };
+
+      await service.checkEntity(candidate);
+
+      // Both exact and partial queries should filter deleted
+      expect(exactQb.andWhere).toHaveBeenCalledWith('e.deletedAt IS NULL');
+      expect(partialQb.andWhere).toHaveBeenCalledWith('e.deletedAt IS NULL');
     });
 
     it('should return CREATE when embedding generation throws', async () => {
