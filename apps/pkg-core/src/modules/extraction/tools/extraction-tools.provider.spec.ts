@@ -81,6 +81,7 @@ describe('ExtractionToolsProvider', () => {
       { checkDuplicateHybrid: jest.fn().mockResolvedValue({ action: 'create', reason: 'No duplicates found' }) } as any, // FactDeduplicationService
       null, // FactFusionService (optional)
       { findOne: jest.fn().mockResolvedValue(null) } as any, // EntityFact repository
+      null as any, // DeduplicationGatewayService (optional)
     );
   });
 

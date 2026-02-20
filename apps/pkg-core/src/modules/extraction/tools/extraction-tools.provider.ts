@@ -23,6 +23,10 @@ import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
 import { CreateFactDto } from '../../entity/dto/create-entity.dto';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import {
+  DeduplicationGatewayService,
+  DedupAction,
+} from '../dedup-gateway.service';
+import {
   EntityDisambiguationService,
   DisambiguationContext,
 } from '../../entity/entity-disambiguation.service';
@@ -101,6 +105,8 @@ export class ExtractionToolsProvider {
     private readonly factFusionService: FactFusionService | null,
     @InjectRepository(EntityFact)
     private readonly factRepo: Repository<EntityFact>,
+    @Optional()
+    private readonly dedupGateway: DeduplicationGatewayService,
   ) {}
 
   /**
@@ -861,6 +867,33 @@ export class ExtractionToolsProvider {
                 status: 'already_exists',
                 message: `Entity "${match.name}" already has telegram username "${cleanName}". Use this entityId.`,
               });
+            }
+          }
+
+          // Check for semantic duplicate via gateway
+          if (this.dedupGateway) {
+            try {
+              const decision = await this.dedupGateway.checkEntity({
+                name: args.suggestedName,
+                type: EntityType.PERSON,
+                context: args.mentionedAs,
+              });
+
+              if (decision.action === DedupAction.MERGE && decision.existingId) {
+                this.logger.log(
+                  `Gateway: entity "${args.suggestedName}" matches existing ${decision.existingId} (confidence: ${decision.confidence.toFixed(2)})`,
+                );
+                return toolSuccess({
+                  entityId: decision.existingId,
+                  suggestedName: args.suggestedName,
+                  status: 'matched_existing',
+                  message: `Entity matched via semantic dedup (confidence: ${decision.confidence.toFixed(2)}). Use this entityId.`,
+                });
+              }
+            } catch (gatewayError: any) {
+              this.logger.warn(
+                `Gateway entity dedup failed for "${args.suggestedName}", proceeding with creation: ${gatewayError.message}`,
+              );
             }
           }
 
