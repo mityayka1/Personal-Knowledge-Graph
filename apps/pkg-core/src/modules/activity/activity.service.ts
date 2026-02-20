@@ -118,6 +118,7 @@ export class ActivityService {
       .leftJoinAndSelect('activity.parent', 'parent')
       .leftJoinAndSelect('activity.ownerEntity', 'ownerEntity')
       .leftJoinAndSelect('activity.clientEntity', 'clientEntity')
+      .loadRelationCountAndMap('activity.childrenCount', 'activity.children')
       .take(limit)
       .skip(offset)
       .orderBy('activity.updatedAt', 'DESC');
