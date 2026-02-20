@@ -23,6 +23,7 @@
 | [05-JARVIS-FOUNDATION.md](./05-JARVIS-FOUNDATION.md) | **Фаза D: Jarvis Foundation** — Activity-based модель, Reasoning Engine | ✅ Completed (Phase 1-6) |
 | [06-PHASE-E-KNOWLEDGE-PACKING.md](./06-PHASE-E-KNOWLEDGE-PACKING.md) | **Фаза E: Knowledge Packing** — Сегментация обсуждений, упаковка знаний | ✅ Completed |
 | [Knowledge System Evolution](../plans/2026-02-15-knowledge-system-evolution-plan.md) | Эволюция системы знаний — 3 волны улучшений | ✅ Completed |
+| [Extraction Quality Sprint](../plans/2026-02-21-extraction-quality-sprint.md) | LLM-powered dedup, DeduplicationGateway, batch cleanup | ✅ Completed |
 
 ---
 
@@ -154,6 +155,20 @@
 | **Wave 2 — Deepen Extraction** | Activity enrichment, semantic dedup (embeddings), find_activity tool | ✅ Completed |
 | **Wave 3 — Knowledge Layer** | TopicBoundaryDetector, PackingService, Smart Fusion, Cross-Chat Linking, Entity Disambiguation | ✅ Completed |
 
+#### Extraction Quality Sprint — Completed
+
+LLM-powered дедупликация для всех путей extraction. Устраняет дубли активностей, сущностей и фактов на этапе создания.
+
+| Компонент | Описание |
+|-----------|----------|
+| **LlmDedupService** | Wrapper над Claude Haiku для семантических решений по дедупликации |
+| **DeduplicationGatewayService** | Единая точка входа: normalize → exact match → embedding → LLM → решение (CREATE/MERGE/PENDING_APPROVAL) |
+| **DedupBatchCleanupJob** | Daily cron (3:00 AM): cosine similarity по Activity embeddings → LLM confirm → auto-merge |
+| **Gateway интеграция** | DraftExtractionService, ExtractionToolsProvider, DailySynthesisExtractionService |
+| **create_fact activityId** | Факты привязываются к конкретным проектам через activityId |
+
+Детали: [`docs/plans/2026-02-21-extraction-quality-sprint.md`](../plans/2026-02-21-extraction-quality-sprint.md)
+
 #### Architecture Refactoring — Completed
 
 | Компонент | Описание |
@@ -174,7 +189,7 @@
 
 ---
 
-## Известные пробелы и технический долг (обновлено 2026-02-20, верифицировано)
+## Известные пробелы и технический долг (обновлено 2026-02-21)
 
 ### Extraction Pipeline — функциональный паритет между путями
 
@@ -189,10 +204,15 @@
 | ClientResolutionService | ✅ | ✅ (через DraftExtractionService) | ✅ (через Draft) |
 | ActivityMember wiring | ✅ | ✅ (через DraftExtractionService) | ✅ (через Draft) |
 | Activity Context (existing projects) | ✅ | ✅ (loadExistingActivities) | ✅ |
+| DeduplicationGateway (LLM dedup) | ✅ (через DraftExtraction) | ✅ (через ExtractionToolsProvider) | ✅ (через Draft) |
+| DedupBatchCleanupJob (daily cron) | — | — | — |
 
 **Ключевые файлы:**
-- `extraction-tools.provider.ts` — `create_fact` tool имеет полный dedup + Smart Fusion (строки 523-614)
-- `extraction-tools.provider.ts` — `create_event` tool делегирует в `draftExtractionService.createDrafts()` (строка 1068)
+- `extraction-tools.provider.ts` — `create_fact` tool имеет полный dedup + Smart Fusion
+- `extraction-tools.provider.ts` — `create_event` tool делегирует в `draftExtractionService.createDrafts()`
+- `dedup-gateway.service.ts` — единая точка входа для дедупликации (normalize → exact → embedding → LLM)
+- `llm-dedup.service.ts` — LLM wrapper (Claude Haiku) для семантических решений
+- `dedup-batch-cleanup.job.ts` — ежедневный cron для обнаружения и мержа существующих дублей
 
 ### ~~Решённые пробелы (2026-02-17..20)~~
 
