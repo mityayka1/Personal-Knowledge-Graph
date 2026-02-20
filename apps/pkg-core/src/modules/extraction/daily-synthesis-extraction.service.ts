@@ -15,6 +15,7 @@ import { DraftExtractionService, DraftExtractionResult } from './draft-extractio
 import { ProjectMatchingService } from './project-matching.service';
 import { PendingApprovalService } from '../pending-approval/pending-approval.service';
 import { VAGUE_PATTERNS } from './extraction-quality.constants';
+import { DeduplicationGatewayService, DedupAction } from './dedup-gateway.service';
 
 /**
  * DailySynthesisExtractionService — extracts structured data from /daily synthesis.
@@ -48,6 +49,8 @@ export class DailySynthesisExtractionService {
     @Optional()
     @Inject(forwardRef(() => DraftExtractionService))
     private readonly draftExtractionService: DraftExtractionService | null,
+    @Optional()
+    private readonly dedupGateway: DeduplicationGatewayService,
   ) {}
 
   /**
@@ -106,6 +109,7 @@ export class DailySynthesisExtractionService {
     const enrichedProjects = await this.matchProjectsToActivities(
       filteredProjects,
       existingActivities,
+      ownerEntityId,
     );
 
     // Filter out low-quality tasks and commitments
@@ -528,6 +532,7 @@ ${synthesisText}
   private async matchProjectsToActivities(
     projects: DailySynthesisExtractionResponse['projects'],
     existingActivities: Activity[],
+    ownerEntityId?: string,
   ): Promise<DailySynthesisExtractionResponse['projects']> {
     const results: DailySynthesisExtractionResponse['projects'] = [];
 
@@ -538,7 +543,35 @@ ${synthesisText}
         continue;
       }
 
-      // Use ProjectMatchingService for fuzzy Levenshtein matching
+      // Try gateway (embedding + LLM) if available
+      if (this.dedupGateway && ownerEntityId) {
+        try {
+          const decision = await this.dedupGateway.checkTask({
+            name: project.name,
+            ownerEntityId,
+            description: project.description,
+          });
+
+          if (decision.action !== DedupAction.CREATE && decision.existingId) {
+            this.logger.debug(
+              `[daily-extraction] Gateway matched project "${project.name}" → ${decision.existingId} ` +
+                `(confidence: ${decision.confidence.toFixed(2)})`,
+            );
+            results.push({
+              ...project,
+              isNew: false,
+              existingActivityId: decision.existingId,
+            });
+            continue;
+          }
+        } catch (error: any) {
+          this.logger.warn(
+            `[daily-extraction] Gateway match failed for "${project.name}", falling back to Levenshtein: ${error.message}`,
+          );
+        }
+      }
+
+      // Fallback: ProjectMatchingService (Levenshtein fuzzy matching)
       const match = this.projectMatchingService.findBestMatchInList(
         project.name,
         existingActivities,
@@ -546,7 +579,7 @@ ${synthesisText}
 
       if (match && match.similarity >= DailySynthesisExtractionService.MATCH_THRESHOLD) {
         this.logger.debug(
-          `[daily-extraction] Matched project "${project.name}" → ` +
+          `[daily-extraction] Levenshtein matched project "${project.name}" → ` +
             `"${match.activity.name}" (similarity: ${match.similarity.toFixed(3)})`,
         );
         results.push({
