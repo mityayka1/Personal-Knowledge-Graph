@@ -118,7 +118,6 @@ export class ActivityService {
       .leftJoinAndSelect('activity.parent', 'parent')
       .leftJoinAndSelect('activity.ownerEntity', 'ownerEntity')
       .leftJoinAndSelect('activity.clientEntity', 'clientEntity')
-      .loadRelationCountAndMap('activity.childrenCount', 'activity.children')
       .take(limit)
       .skip(offset)
       .orderBy('activity.updatedAt', 'DESC');
@@ -180,6 +179,27 @@ export class ActivityService {
     }
 
     const [items, total] = await qb.getManyAndCount();
+
+    // Batch-load childrenCount (single query instead of N+1)
+    if (items.length > 0) {
+      const ids = items.map((i) => i.id);
+      const counts: { parentId: string; count: string }[] =
+        await this.activityRepo
+          .createQueryBuilder('child')
+          .select('child.parentId', 'parentId')
+          .addSelect('COUNT(*)', 'count')
+          .where('child.parentId IN (:...ids)', { ids })
+          .groupBy('child.parentId')
+          .getRawMany();
+
+      const countMap = new Map(
+        counts.map((c) => [c.parentId, parseInt(c.count, 10)]),
+      );
+      for (const item of items) {
+        (item as Activity & { childrenCount: number }).childrenCount =
+          countMap.get(item.id) ?? 0;
+      }
+    }
 
     return { items, total };
   }
