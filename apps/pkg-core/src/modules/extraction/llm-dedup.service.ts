@@ -1,10 +1,12 @@
-import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 
 // --- Interfaces ---
 
+export type DedupItemType = 'entity' | 'task' | 'commitment' | 'fact';
+
 export interface DedupItemInfo {
-  type: string; // 'entity' | 'task' | 'commitment' | 'fact'
+  type: DedupItemType;
   name: string;
   description?: string;
   context?: string;
@@ -82,8 +84,7 @@ export class LlmDedupService {
 
   constructor(
     @Optional()
-    @Inject(forwardRef(() => ClaudeAgentService))
-    private claudeAgentService: ClaudeAgentService,
+    private readonly claudeAgentService: ClaudeAgentService,
   ) {}
 
   /**
@@ -126,6 +127,15 @@ export class LlmDedupService {
         schema: DEDUP_DECISION_SCHEMA,
         model: 'haiku',
       });
+
+      if (!data) {
+        this.logger.warn('LLM returned no structured data, defaulting to non-duplicate');
+        return pairs.map(() => ({
+          isDuplicate: false,
+          confidence: 0,
+          reason: 'LLM returned no structured data',
+        }));
+      }
 
       return this.mapDecisions(pairs, data);
     } catch (error: any) {

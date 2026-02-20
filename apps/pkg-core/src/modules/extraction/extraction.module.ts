@@ -36,6 +36,7 @@ import { ProjectMatchingService } from './project-matching.service';
 import { FactDedupReviewService } from './fact-dedup-review.service';
 import { GroupExtractionService } from './group-extraction.service';
 import { EventCleanupService } from './event-cleanup.service';
+import { LlmDedupService } from './llm-dedup.service';
 import { ResolutionModule } from '../resolution/resolution.module';
 import { PendingApprovalModule } from '../pending-approval/pending-approval.module';
 import { InteractionModule } from '../interaction/interaction.module';
@@ -110,6 +111,7 @@ import { JobModule } from '../job/job.module';
     FactDedupReviewService,
     GroupExtractionService,
     EventCleanupService,
+    LlmDedupService,
   ],
   exports: [
     FactExtractionService,
@@ -132,6 +134,7 @@ import { JobModule } from '../job/job.module';
     ProjectMatchingService,
     FactDedupReviewService,
     GroupExtractionService,
+    LlmDedupService,
   ],
 })
 export class ExtractionModule {}

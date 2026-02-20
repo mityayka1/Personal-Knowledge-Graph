@@ -223,6 +223,20 @@ describe('LlmDedupService', () => {
       expect(result.reason).toContain('unavailable');
     });
 
+    it('should return isDuplicate=false when LLM returns null data', async () => {
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: null,
+        usage: { inputTokens: 100, outputTokens: 0, totalCostUsd: 0.001 },
+      });
+
+      const pair = makePair();
+      const result = await service.decideDuplicate(pair);
+
+      expect(result.isDuplicate).toBe(false);
+      expect(result.confidence).toBe(0);
+      expect(result.reason).toContain('no structured data');
+    });
+
     it('should handle missing pairIndex in LLM response gracefully', async () => {
       // LLM returns only 1 decision for 2 pairs
       mockClaudeAgentService.call.mockResolvedValue({
