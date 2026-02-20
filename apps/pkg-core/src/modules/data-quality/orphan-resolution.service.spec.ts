@@ -76,9 +76,9 @@ describe('OrphanResolutionService', () => {
     update: jest.fn(),
   };
 
-  // ProjectMatchingService is only used for its static method normalizeName(),
-  // so we provide it as an empty object — no instance methods are called.
-  const mockProjectMatchingService = {};
+  const mockProjectMatchingService = {
+    findBestMatchInList: jest.fn().mockReturnValue(null),
+  };
 
   // ---------------------------------------------------------------------------
   // Factory
@@ -251,10 +251,136 @@ describe('OrphanResolutionService', () => {
   });
 
   // =========================================================================
-  // Strategy 2: Batch Matching
+  // Strategy 2: Fuzzy Name Matching
   // =========================================================================
 
-  describe('Strategy 2: Batch Matching', () => {
+  describe('Strategy 2: Fuzzy Name Matching', () => {
+    it('should match task to project when fuzzy similarity >= 0.6', async () => {
+      const task = makeActivity({
+        id: ACTIVITY_ID_1,
+        name: 'Настроить Панавто интеграцию',
+        activityType: ActivityType.TASK,
+        ownerEntityId: OWNER_ID,
+      });
+
+      const project = makeActivity({
+        id: PROJECT_ID,
+        name: 'Панавто',
+        activityType: ActivityType.PROJECT,
+        status: ActivityStatus.ACTIVE,
+        ownerEntityId: OWNER_ID,
+      });
+
+      // Name containment won't match: "панавто" is in "настроить панавто интеграцию",
+      // but let's test a case where name containment misses but fuzzy catches it
+      const projectWithDifferentName = makeActivity({
+        id: PROJECT_ID,
+        name: 'Клиент Панавто (424.39₽)',
+        activityType: ActivityType.PROJECT,
+        status: ActivityStatus.ACTIVE,
+        ownerEntityId: OWNER_ID,
+      });
+
+      // normalizeName strips cost annotations, so "клиент панавто" — not contained in task name
+      mockActivityRepo.find.mockResolvedValue([projectWithDifferentName]);
+
+      // Fuzzy matching returns a match with similarity 0.65
+      mockProjectMatchingService.findBestMatchInList.mockReturnValue({
+        activity: projectWithDifferentName,
+        similarity: 0.65,
+      });
+
+      mockActivityService.update.mockResolvedValue(undefined);
+
+      const result = await service.resolveOrphans([task]);
+
+      expect(result.resolved).toBe(1);
+      expect(result.details[0]).toEqual({
+        taskId: ACTIVITY_ID_1,
+        taskName: 'Настроить Панавто интеграцию',
+        assignedParentId: PROJECT_ID,
+        assignedParentName: 'Клиент Панавто (424.39₽)',
+        method: 'fuzzy_name',
+      });
+      expect(mockProjectMatchingService.findBestMatchInList).toHaveBeenCalledWith(
+        'Настроить Панавто интеграцию',
+        [projectWithDifferentName],
+      );
+    });
+
+    it('should skip fuzzy matching when similarity < 0.6', async () => {
+      const task = makeActivity({
+        id: ACTIVITY_ID_1,
+        name: 'Completely different task',
+        activityType: ActivityType.TASK,
+        ownerEntityId: OWNER_ID,
+        metadata: null,
+      });
+
+      const project = makeActivity({
+        id: PROJECT_ID,
+        name: 'Some Project',
+        activityType: ActivityType.PROJECT,
+        status: ActivityStatus.ACTIVE,
+        ownerEntityId: OWNER_ID,
+      });
+
+      mockActivityRepo.find.mockResolvedValue([project]);
+
+      // Fuzzy returns low similarity
+      mockProjectMatchingService.findBestMatchInList.mockReturnValue({
+        activity: project,
+        similarity: 0.45,
+      });
+
+      // Falls through to single_project (only one project for owner)
+      mockActivityService.update.mockResolvedValue(undefined);
+
+      const result = await service.resolveOrphans([task]);
+
+      expect(result.resolved).toBe(1);
+      expect(result.details[0].method).toBe('single_project');
+    });
+
+    it('should skip fuzzy matching when findBestMatchInList returns null', async () => {
+      const task = makeActivity({
+        id: ACTIVITY_ID_1,
+        name: 'No match at all',
+        activityType: ActivityType.TASK,
+        ownerEntityId: OWNER_ID,
+        metadata: null,
+      });
+
+      // No projects
+      mockActivityRepo.find.mockResolvedValue([]);
+
+      // findBestMatchInList returns null (no candidates)
+      mockProjectMatchingService.findBestMatchInList.mockReturnValue(null);
+
+      // Falls through all strategies to unsorted
+      mockActivityRepo.findOne.mockResolvedValue(null);
+      mockActivityService.create.mockResolvedValue(
+        makeActivity({
+          id: UNSORTED_ID,
+          name: 'Unsorted Tasks',
+          activityType: ActivityType.PROJECT,
+          ownerEntityId: OWNER_ID,
+        }),
+      );
+      mockActivityService.update.mockResolvedValue(undefined);
+
+      const result = await service.resolveOrphans([task]);
+
+      expect(result.resolved).toBe(1);
+      expect(result.details[0].method).toBe('unsorted');
+    });
+  });
+
+  // =========================================================================
+  // Strategy 3: Batch Matching
+  // =========================================================================
+
+  describe('Strategy 3: Batch Matching', () => {
     it('should find sibling with parent in same batch', async () => {
       const batchId = 'batch-abc-123';
       const task = makeActivity({
@@ -332,10 +458,10 @@ describe('OrphanResolutionService', () => {
   });
 
   // =========================================================================
-  // Strategy 3: Single Project
+  // Strategy 4: Single Project
   // =========================================================================
 
-  describe('Strategy 3: Single Project', () => {
+  describe('Strategy 4: Single Project', () => {
     it('should assign to single active project owned by task owner', async () => {
       const task = makeActivity({
         id: ACTIVITY_ID_1,
@@ -418,10 +544,10 @@ describe('OrphanResolutionService', () => {
   });
 
   // =========================================================================
-  // Strategy 4: Unsorted Fallback
+  // Strategy 5: Unsorted Fallback
   // =========================================================================
 
-  describe('Strategy 4: Unsorted Fallback', () => {
+  describe('Strategy 5: Unsorted Fallback', () => {
     it('should create "Unsorted Tasks" project when it does not exist', async () => {
       const task = makeActivity({
         id: ACTIVITY_ID_1,

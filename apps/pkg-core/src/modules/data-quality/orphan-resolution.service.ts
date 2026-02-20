@@ -10,6 +10,7 @@ import { ProjectMatchingService } from '../extraction/project-matching.service';
  */
 export type OrphanResolutionMethod =
   | 'name_containment'
+  | 'fuzzy_name'
   | 'batch'
   | 'single_project'
   | 'unsorted';
@@ -37,9 +38,10 @@ const UNSORTED_PROJECT_NAME = 'Unsorted Tasks';
  *
  * Strategies (in priority order):
  * 1. Name Containment — task name contains an active project name
- * 2. Batch — task shares draftBatchId with a known assigned task
- * 3. Single Project — task owner has only one active project
- * 4. Fallback — assign to "Unsorted Tasks" project
+ * 2. Fuzzy Name Matching — task name is fuzzy-similar to a project name (threshold 0.6)
+ * 3. Batch — task shares draftBatchId with a known assigned task
+ * 4. Single Project — task owner has only one active project
+ * 5. Fallback — assign to "Unsorted Tasks" project
  */
 @Injectable()
 export class OrphanResolutionService {
@@ -98,7 +100,22 @@ export class OrphanResolutionService {
         continue;
       }
 
-      // Strategy 2: Batch matching
+      // Strategy 2: Fuzzy Name Matching (Levenshtein + Jaccard, threshold 0.6)
+      const fuzzyMatch = this.matchByFuzzyName(task, activeProjects);
+      if (fuzzyMatch) {
+        await this.assignParent(task, fuzzyMatch);
+        result.resolved++;
+        result.details.push({
+          taskId: task.id,
+          taskName: task.name,
+          assignedParentId: fuzzyMatch.id,
+          assignedParentName: fuzzyMatch.name,
+          method: 'fuzzy_name',
+        });
+        continue;
+      }
+
+      // Strategy 3: Batch matching
       const batchMatch = await this.matchByBatch(task);
       if (batchMatch) {
         await this.assignParent(task, batchMatch);
@@ -113,7 +130,7 @@ export class OrphanResolutionService {
         continue;
       }
 
-      // Strategy 3: Owner's single project
+      // Strategy 4: Owner's single project
       const singleMatch = await this.matchBySingleProject(task, activeProjects);
       if (singleMatch) {
         await this.assignParent(task, singleMatch);
@@ -128,7 +145,7 @@ export class OrphanResolutionService {
         continue;
       }
 
-      // Strategy 4: Fallback to "Unsorted Tasks"
+      // Strategy 5: Fallback to "Unsorted Tasks"
       if (!unsortedProject) {
         unsortedProject = await this.getOrCreateUnsortedProject(task.ownerEntityId);
         if (!unsortedProject) {
@@ -179,7 +196,26 @@ export class OrphanResolutionService {
   }
 
   /**
-   * Strategy 2: Match by shared draftBatchId metadata.
+   * Strategy 2: Fuzzy match task name against project names.
+   * Uses ProjectMatchingService.findBestMatchInList() with lowered threshold (0.6)
+   * for better recall on orphan resolution.
+   */
+  private matchByFuzzyName(
+    task: Activity,
+    projects: Activity[],
+  ): Activity | null {
+    const result = this.projectMatchingService.findBestMatchInList(task.name, projects);
+    if (result && result.similarity >= 0.6) {
+      this.logger.debug(
+        `Fuzzy matched "${task.name}" → "${result.activity.name}" (similarity: ${result.similarity.toFixed(3)})`,
+      );
+      return result.activity;
+    }
+    return null;
+  }
+
+  /**
+   * Strategy 3: Match by shared draftBatchId metadata.
    * If the task has metadata.draftBatchId, find other tasks in the same batch
    * that already have a parent, and use that parent.
    */
@@ -208,7 +244,7 @@ export class OrphanResolutionService {
   }
 
   /**
-   * Strategy 3: If task owner has exactly one active project, assign there.
+   * Strategy 4: If task owner has exactly one active project, assign there.
    */
   private async matchBySingleProject(
     task: Activity,
