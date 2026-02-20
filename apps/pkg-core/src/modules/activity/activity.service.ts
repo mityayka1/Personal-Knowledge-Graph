@@ -783,16 +783,15 @@ export class ActivityService {
       `Cascade updating ${descendants.length} descendants of activity ${activityId}`,
     );
 
-    // Update each descendant's path and depth
-    for (const descendant of descendants) {
-      // Replace oldFullPath prefix with newFullPath
-      const newPath = descendant.materializedPath!.replace(oldFullPath, newFullPath);
-      descendant.materializedPath = newPath;
-      descendant.depth += depthDelta;
-    }
-
-    // Bulk save
-    await this.activityRepo.save(descendants);
+    // Update descendants using raw query to avoid closure-table bug
+    // (TypeORM 0.3.x save() crashes with ClosureSubjectExecutor.getEntityValue)
+    await this.activityRepo.query(
+      `UPDATE activity
+       SET "materializedPath" = REPLACE("materializedPath", $1, $2),
+           "depth" = "depth" + $3
+       WHERE "materializedPath" LIKE $4`,
+      [oldFullPath, newFullPath, depthDelta, `${oldFullPath}%`],
+    );
 
     this.logger.log(
       `Cascade updated ${descendants.length} descendants: path "${oldFullPath}" → "${newFullPath}"`,
