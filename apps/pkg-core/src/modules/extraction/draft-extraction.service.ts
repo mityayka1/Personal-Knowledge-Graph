@@ -46,6 +46,7 @@ import { ExtractionFusionAction } from './fusion-action.enum';
 import { CreateFactDto } from '../entity/dto/create-entity.dto';
 import { CreateFactResult } from '../entity/entity-fact/entity-fact.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { DeduplicationGatewayService, DedupAction } from './dedup-gateway.service';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -180,6 +181,8 @@ export class DraftExtractionService {
     @Optional()
     @Inject(forwardRef(() => ClaudeAgentService))
     private readonly claudeAgentService: ClaudeAgentService | null,
+    @Optional()
+    private readonly dedupGateway: DeduplicationGatewayService,
   ) {}
 
   /**
@@ -477,22 +480,48 @@ export class DraftExtractionService {
           continue;
         }
 
-        // DEDUPLICATION: Enhanced check -- pending approvals + active tasks via fuzzy match
-        const existingTask = await this.findExistingTaskEnhanced(
-          task.title,
-          input.ownerEntityId,
-        );
-        if (existingTask.found) {
+        // DEDUPLICATION: Use DeduplicationGateway if available, fallback to legacy
+        let taskDuplicate = false;
+        let taskExistingId: string | undefined;
+        let taskParentId: string | null | undefined;
+
+        if (this.dedupGateway) {
+          const dedupResult = await this.dedupGateway.checkTask({
+            name: task.title,
+            ownerEntityId: input.ownerEntityId,
+            projectName: task.projectName,
+          });
+
+          if (dedupResult.action === DedupAction.MERGE) {
+            taskDuplicate = true;
+            taskExistingId = dedupResult.existingId;
+            this.logger.debug(
+              `Gateway: skip duplicate task "${task.title}" → ${dedupResult.existingId} (confidence: ${dedupResult.confidence.toFixed(2)})`,
+            );
+          } else if (dedupResult.action === DedupAction.PENDING_APPROVAL) {
+            this.logger.log(
+              `Gateway: potential duplicate task "${task.title}" → ${dedupResult.existingId} (confidence: ${dedupResult.confidence.toFixed(2)}), creating with approval`,
+            );
+          }
+        } else {
+          // Legacy fallback
+          const existingTask = await this.findExistingTaskEnhanced(task.title, input.ownerEntityId);
+          if (existingTask.found) {
+            taskDuplicate = true;
+            taskExistingId = existingTask.activityId;
+            taskParentId = existingTask.parentId;
+          }
+        }
+
+        if (taskDuplicate) {
           this.logger.debug(
-            `Skipping duplicate task "${task.title}" - ` +
-              `matched via ${existingTask.source} (activityId: ${existingTask.activityId}` +
-              `${existingTask.similarity != null ? `, similarity: ${existingTask.similarity.toFixed(3)}` : ''})`,
+            `Skipping duplicate task "${task.title}" (activityId: ${taskExistingId})`,
           );
 
           // Re-link: if duplicate has no parent but new task has projectName, resolve and update
           if (
-            existingTask.activityId &&
-            existingTask.parentId == null &&
+            taskExistingId &&
+            taskParentId == null &&
             task.projectName
           ) {
             let resolvedParentId: string | undefined;
@@ -519,10 +548,10 @@ export class DraftExtractionService {
                 .createQueryBuilder()
                 .update()
                 .set({ parentId: resolvedParentId })
-                .where('id = :id', { id: existingTask.activityId })
+                .where('id = :id', { id: taskExistingId })
                 .execute();
               this.logger.log(
-                `Re-linked duplicate task "${task.title}" (${existingTask.activityId}) ` +
+                `Re-linked duplicate task "${task.title}" (${taskExistingId}) ` +
                   `to project ${resolvedParentId} via projectName="${task.projectName}"`,
               );
             }
@@ -636,17 +665,42 @@ export class DraftExtractionService {
           continue;
         }
 
-        // DEDUPLICATION: Check pending approvals + fuzzy match against active commitments
-        const existingCommitment = await this.findExistingCommitmentEnhanced(
-          commitment.what,
-          input.ownerEntityId,
-        );
-        if (existingCommitment.found) {
-          this.logger.debug(
-            `Skipping duplicate commitment "${commitment.what}" - ` +
-              `matched via ${existingCommitment.source} (id: ${existingCommitment.commitmentId}, ` +
-              `similarity: ${existingCommitment.similarity?.toFixed(3) ?? 'exact'})`,
+        // DEDUPLICATION: Use DeduplicationGateway if available, fallback to legacy
+        let commitmentDuplicate = false;
+
+        if (this.dedupGateway) {
+          const dedupResult = await this.dedupGateway.checkCommitment({
+            what: commitment.what,
+            entityId: input.ownerEntityId,
+            activityContext: commitment.projectName,
+          });
+          if (dedupResult.action === DedupAction.MERGE) {
+            commitmentDuplicate = true;
+            this.logger.debug(
+              `Gateway: skip duplicate commitment "${commitment.what}" → ${dedupResult.existingId} (confidence: ${dedupResult.confidence.toFixed(2)})`,
+            );
+          } else if (dedupResult.action === DedupAction.PENDING_APPROVAL) {
+            this.logger.log(
+              `Gateway: potential duplicate commitment "${commitment.what}" → ${dedupResult.existingId} (confidence: ${dedupResult.confidence.toFixed(2)}), creating with approval`,
+            );
+          }
+        } else {
+          // Legacy fallback
+          const existingCommitment = await this.findExistingCommitmentEnhanced(
+            commitment.what,
+            input.ownerEntityId,
           );
+          if (existingCommitment.found) {
+            commitmentDuplicate = true;
+            this.logger.debug(
+              `Skipping duplicate commitment "${commitment.what}" - ` +
+                `matched via ${existingCommitment.source} (id: ${existingCommitment.commitmentId}, ` +
+                `similarity: ${existingCommitment.similarity?.toFixed(3) ?? 'exact'})`,
+            );
+          }
+        }
+
+        if (commitmentDuplicate) {
           result.skipped.commitments++;
           continue;
         }
