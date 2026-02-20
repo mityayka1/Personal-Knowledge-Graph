@@ -21,7 +21,7 @@ export interface FindActivitiesOptions {
   type?: ActivityType | ActivityType[];
   status?: ActivityStatus | ActivityStatus[];
   context?: ActivityContext;
-  parentId?: string;
+  parentId?: string | null;
   ownerEntityId?: string;
   clientEntityId?: string;
   hasDeadline?: boolean;

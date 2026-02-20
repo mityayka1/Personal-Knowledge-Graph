@@ -7,8 +7,9 @@ import {
   Min,
   Max,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import {
   ActivityType,
   ActivityStatus,
@@ -41,11 +42,14 @@ export class ActivityQueryDto {
   context?: ActivityContext;
 
   /**
-   * Фильтр по родительской активности
+   * Фильтр по родительской активности.
+   * Передайте UUID для конкретного родителя или "null" для root activities (parentId IS NULL).
    */
   @IsOptional()
+  @Transform(({ value }) => (value === 'null' ? null : value))
+  @ValidateIf((o) => o.parentId !== null)
   @IsUUID()
-  parentId?: string;
+  parentId?: string | null;
 
   /**
    * Фильтр по владельцу
