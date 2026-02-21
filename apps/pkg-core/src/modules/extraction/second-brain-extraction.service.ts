@@ -22,6 +22,10 @@ import {
 } from '@pkg/entities';
 import { DraftExtractionService } from './draft-extraction.service';
 import {
+  DeduplicationGatewayService,
+  DedupAction,
+} from './dedup-gateway.service';
+import {
   ExtractedFact,
   ExtractedTask,
   ExtractedCommitment,
@@ -156,6 +160,8 @@ export class SecondBrainExtractionService {
     @Optional()
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService | null,
+    @Optional()
+    private readonly dedupGateway: DeduplicationGatewayService,
   ) {}
 
   /**
@@ -531,6 +537,28 @@ export class SecondBrainExtractionService {
       throw new Error(
         `EntityService not available, cannot create extracted entity for "${name}"`,
       );
+    }
+
+    // Use gateway for semantic dedup if available
+    if (this.dedupGateway) {
+      try {
+        const decision = await this.dedupGateway.checkEntity({
+          name,
+          type: EntityType.PERSON,
+          context: `Упомянут в контексте entity ${relatedToEntityId}`,
+        });
+
+        if (decision.action === DedupAction.MERGE && decision.existingId) {
+          this.logger.log(
+            `Gateway matched entity "${name}" → existing ${decision.existingId} (confidence: ${decision.confidence.toFixed(2)})`,
+          );
+          return decision.existingId;
+        }
+      } catch (error: any) {
+        this.logger.warn(
+          `Gateway entity dedup failed for "${name}", creating new: ${error.message}`,
+        );
+      }
     }
 
     const entity = await this.entityService.create({

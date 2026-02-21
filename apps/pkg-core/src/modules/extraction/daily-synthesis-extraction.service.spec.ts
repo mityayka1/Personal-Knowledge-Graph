@@ -7,6 +7,9 @@ import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
 import { DraftExtractionService } from './draft-extraction.service';
 import { DailySynthesisExtractionResponse } from './daily-synthesis-extraction.types';
+import { ProjectMatchingService } from './project-matching.service';
+import { PendingApprovalService } from '../pending-approval/pending-approval.service';
+import { DeduplicationGatewayService } from './dedup-gateway.service';
 
 describe('DailySynthesisExtractionService', () => {
   let service: DailySynthesisExtractionService;
@@ -134,6 +137,42 @@ describe('DailySynthesisExtractionService', () => {
               counts: { projects: 0, tasks: 0, commitments: 0 },
               approvals: [],
             }),
+          },
+        },
+        {
+          provide: ProjectMatchingService,
+          useValue: {
+            findBestMatchInList: jest.fn().mockImplementation(
+              (name: string, activities: Array<{ id: string; name: string }>) => {
+                const normalized = name.toLowerCase();
+                for (const act of activities) {
+                  if (act.name.toLowerCase() === normalized) {
+                    return { activity: act, similarity: 1.0 };
+                  }
+                  // Simple containment check for fuzzy matching mock
+                  if (
+                    act.name.toLowerCase().includes(normalized) ||
+                    normalized.includes(act.name.toLowerCase())
+                  ) {
+                    return { activity: act, similarity: 0.85 };
+                  }
+                }
+                return null;
+              },
+            ),
+          },
+        },
+        {
+          provide: PendingApprovalService,
+          useValue: {
+            findByBatchId: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: DeduplicationGatewayService,
+          useValue: {
+            checkTask: jest.fn().mockResolvedValue({ action: 'create', confidence: 0, reason: 'No match' }),
+            checkEntity: jest.fn().mockResolvedValue({ action: 'create', confidence: 0, reason: 'No match' }),
           },
         },
       ],

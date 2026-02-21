@@ -26,7 +26,8 @@ export type ClaudeTaskType =
   | 'activity_semantic_dedup'
   | 'topic_segmentation'
   | 'knowledge_packing'
-  | 'project_name_match';
+  | 'project_name_match'
+  | 'dedup_decision';
 
 /**
  * Model types

@@ -23,6 +23,10 @@ import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
 import { CreateFactDto } from '../../entity/dto/create-entity.dto';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import {
+  DeduplicationGatewayService,
+  DedupAction,
+} from '../dedup-gateway.service';
+import {
   EntityDisambiguationService,
   DisambiguationContext,
 } from '../../entity/entity-disambiguation.service';
@@ -101,6 +105,8 @@ export class ExtractionToolsProvider {
     private readonly factFusionService: FactFusionService | null,
     @InjectRepository(EntityFact)
     private readonly factRepo: Repository<EntityFact>,
+    @Optional()
+    private readonly dedupGateway: DeduplicationGatewayService,
   ) {}
 
   /**
@@ -444,13 +450,19 @@ export class ExtractionToolsProvider {
 - location: местоположение ("Москва", "работает удалённо")
 - education: образование ("МГУ", "PhD Computer Science")
 
-ВАЖНО: Создавай факт для КОНКРЕТНОЙ сущности. "Маша работает в Сбере" → факт для Маши, не для текущего контакта.`,
+ВАЖНО: Создавай факт для КОНКРЕТНОЙ сущности. "Маша работает в Сбере" → факт для Маши, не для текущего контакта.
+Если факт связан с конкретным проектом или делом — укажи activityId. Используй find_activity для поиска проекта.`,
       {
         entityId: z.string().uuid().describe('UUID сущности-владельца факта'),
         factType: z.string().describe('Тип факта (position, company, phone, email, etc.)'),
         value: z.string().describe('Значение факта на русском языке'),
         confidence: z.number().min(0).max(1).describe('Уверенность в факте от 0 до 1'),
         sourceQuote: z.string().max(200).describe('Цитата из сообщения (до 200 символов)'),
+        activityId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe('UUID активности/проекта, к которому относится факт. Используй find_activity для поиска.'),
         category: z
           .enum(['professional', 'personal', 'contact', 'preferences'])
           .optional()
@@ -637,6 +649,7 @@ export class ExtractionToolsProvider {
                 value: factValue,
                 sourceQuote: args.sourceQuote?.substring(0, 200),
                 confidence: args.confidence,
+                activityId: args.activityId,
               },
             ],
             tasks: [],
@@ -861,6 +874,33 @@ export class ExtractionToolsProvider {
                 status: 'already_exists',
                 message: `Entity "${match.name}" already has telegram username "${cleanName}". Use this entityId.`,
               });
+            }
+          }
+
+          // Check for semantic duplicate via gateway
+          if (this.dedupGateway) {
+            try {
+              const decision = await this.dedupGateway.checkEntity({
+                name: args.suggestedName,
+                type: EntityType.PERSON,
+                context: args.mentionedAs,
+              });
+
+              if (decision.action === DedupAction.MERGE && decision.existingId) {
+                this.logger.log(
+                  `Gateway: entity "${args.suggestedName}" matches existing ${decision.existingId} (confidence: ${decision.confidence.toFixed(2)})`,
+                );
+                return toolSuccess({
+                  entityId: decision.existingId,
+                  suggestedName: args.suggestedName,
+                  status: 'matched_existing',
+                  message: `Entity matched via semantic dedup (confidence: ${decision.confidence.toFixed(2)}). Use this entityId.`,
+                });
+              }
+            } catch (gatewayError: any) {
+              this.logger.warn(
+                `Gateway entity dedup failed for "${args.suggestedName}", proceeding with creation: ${gatewayError.message}`,
+              );
             }
           }
 

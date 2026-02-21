@@ -74,6 +74,8 @@ describe('DraftExtractionService', () => {
             create: jest.fn((data) => ({ id: 'commitment-id', ...data })),
             save: jest.fn((data) => Promise.resolve({ id: 'commitment-id', ...data })),
             createQueryBuilder: jest.fn().mockReturnValue(createQueryBuilderMock()),
+            find: jest.fn().mockResolvedValue([]),
+            query: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -267,9 +269,9 @@ describe('DraftExtractionService', () => {
         ownerEntityId: 'owner-123',
         facts: [],
         projects: [{ name: 'Project A', isNew: true, participants: [], confidence: 0.9 }],
-        tasks: [{ title: 'Task B', status: 'pending', confidence: 0.85 }],
+        tasks: [{ title: 'Complete the final review report', status: 'pending', confidence: 0.85 }],
         commitments: [
-          { type: 'promise', what: 'Commitment C', from: 'self', to: 'self', confidence: 0.8 },
+          { type: 'promise', what: 'Send integration report to client', from: 'self', to: 'self', confidence: 0.8 },
         ],
       };
 
@@ -325,7 +327,7 @@ describe('DraftExtractionService', () => {
         })
         .mockResolvedValueOnce({
           id: 'task-id',
-          name: 'Child Task',
+          name: 'Implement authentication module',
           activityType: ActivityType.TASK,
           status: ActivityStatus.DRAFT,
         });
@@ -344,7 +346,7 @@ describe('DraftExtractionService', () => {
         projects: [{ name: 'Parent Project', isNew: true, participants: [], confidence: 0.9 }],
         tasks: [
           {
-            title: 'Child Task',
+            title: 'Implement authentication module',
             projectName: 'Parent Project',
             status: 'pending',
             confidence: 0.85,
@@ -603,7 +605,7 @@ describe('DraftExtractionService', () => {
         commitments: [
           {
             type: 'promise',
-            what: 'Deliver report',
+            what: 'Deliver final project report to stakeholders',
             from: 'self',
             to: 'self',
             projectName: 'My Project',
