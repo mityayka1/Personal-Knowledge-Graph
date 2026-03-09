@@ -423,9 +423,9 @@ export class OrphanSegmentLinkerService {
       return 0;
     }
 
-    // Build activity context for LLM
+    // Build activity context for LLM (compact: skip description to reduce tokens)
     const activityContext = activities
-      .map((a) => `- ${a.id}: "${a.name}" (${a.activityType})${a.description ? ` — ${a.description}` : ''}`)
+      .map((a) => `- ${a.id}: "${a.name}" (${a.activityType})`)
       .join('\n');
 
     // Validate activity IDs for fast lookup
@@ -434,9 +434,15 @@ export class OrphanSegmentLinkerService {
     let totalLinked = 0;
 
     // Process in batches to respect context window limits
+    const totalBatches = Math.ceil(segments.length / LLM_BATCH_SIZE);
     for (let i = 0; i < segments.length; i += LLM_BATCH_SIZE) {
+      const batchNum = Math.floor(i / LLM_BATCH_SIZE) + 1;
       const batch = segments.slice(i, i + LLM_BATCH_SIZE);
       const segmentIdSet = new Set(batch.map((s) => s.id));
+
+      this.logger.log(
+        `[orphan-linker] LLM batch ${batchNum}/${totalBatches} (${batch.length} segments)`,
+      );
 
       const segmentContext = batch
         .map(
@@ -499,7 +505,7 @@ ${segmentContext}
             },
             required: ['classifications'],
           },
-          timeout: 60000,
+          timeout: 120000,
         });
 
         if (!result.data?.classifications) {
