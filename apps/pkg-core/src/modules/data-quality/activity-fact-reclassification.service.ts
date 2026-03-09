@@ -145,8 +145,8 @@ ${factsText}`;
       taskType: 'fact_reclassification',
       prompt,
       schema: RECLASSIFICATION_SCHEMA,
-      model: 'haiku',
-      timeout: 240000,
+      model: 'sonnet',
+      timeout: 300000,
     });
 
     return data?.decisions ?? [];
