@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import {
@@ -9,6 +9,7 @@ import {
   ActivityStatus,
 } from '@pkg/entities';
 import { ProjectMatchingService } from '../extraction/project-matching.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 
 /**
  * Result of attempting to link a single orphan segment.
@@ -62,6 +63,16 @@ const EXCLUDED_STATUSES: ActivityStatus[] = [
 const SIMILARITY_THRESHOLD = 0.5;
 
 /**
+ * Minimum LLM confidence to accept a classification result.
+ */
+const LLM_CONFIDENCE_THRESHOLD = 0.6;
+
+/**
+ * Maximum number of orphan segments to send in a single LLM batch.
+ */
+const LLM_BATCH_SIZE = 15;
+
+/**
  * OrphanSegmentLinkerService — автоматическая привязка TopicalSegment к Activity.
  *
  * Сегменты без activityId ("orphans") пропускаются PackingJobService.
@@ -86,6 +97,8 @@ export class OrphanSegmentLinkerService {
     private readonly activityRepo: Repository<Activity>,
     private readonly dataSource: DataSource,
     private readonly projectMatchingService: ProjectMatchingService,
+    @Optional()
+    private readonly claudeAgentService: ClaudeAgentService,
   ) {}
 
   /**
@@ -203,18 +216,66 @@ export class OrphanSegmentLinkerService {
 
     let linked = 0;
     let errors = 0;
+    const remainingOrphanIds: string[] = [];
 
+    // Phase 1: Try deterministic strategies (chat mapping + similarity)
     for (const { id } of orphanRows) {
       try {
         const result = await this.linkOrphanSegment(id);
         if (result.activityId && !result.skipReason) {
           linked++;
+        } else if (!result.activityId) {
+          remainingOrphanIds.push(id);
         }
       } catch (error: unknown) {
         errors++;
         const err = error instanceof Error ? error : new Error(String(error));
         this.logger.error(
           `[orphan-linker] Error processing segment ${id}: ${err.message}`,
+          err.stack,
+        );
+      }
+    }
+
+    // Phase 2: LLM fallback for remaining orphans
+    if (remainingOrphanIds.length > 0 && this.claudeAgentService) {
+      this.logger.log(
+        `[orphan-linker] ${remainingOrphanIds.length} orphans remain after deterministic strategies, trying LLM`,
+      );
+
+      try {
+        // Load remaining orphan segments
+        const remainingSegments = await Promise.all(
+          remainingOrphanIds.map((id) =>
+            this.segmentRepo.findOne({ where: { id } }),
+          ),
+        );
+        const validSegments = remainingSegments.filter(
+          (s): s is TopicalSegment => s !== null && s.activityId === null,
+        );
+
+        // Load all linkable activities for LLM context
+        const allActivities = await this.activityRepo
+          .createQueryBuilder('a')
+          .where('a.activityType IN (:...types)', { types: LINKABLE_ACTIVITY_TYPES })
+          .andWhere('a.status NOT IN (:...excludedStatuses)', { excludedStatuses: EXCLUDED_STATUSES })
+          .andWhere('a.deleted_at IS NULL')
+          .select(['a.id', 'a.name', 'a.description', 'a.activityType'])
+          .orderBy('a.last_activity_at', 'DESC', 'NULLS LAST')
+          .limit(100)
+          .getMany();
+
+        if (allActivities.length > 0 && validSegments.length > 0) {
+          const llmLinked = await this.linkByLlmClassification(
+            validSegments,
+            allActivities,
+          );
+          linked += llmLinked;
+        }
+      } catch (error: unknown) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.error(
+          `[orphan-linker] LLM fallback failed: ${err.message}`,
           err.stack,
         );
       }
@@ -267,6 +328,143 @@ export class OrphanSegmentLinkerService {
       activityId: chatActivities[0].activity_id,
       activityName: chatActivities[0].activity_name,
     };
+  }
+
+  /**
+   * LLM-based classification of orphan segments into activities.
+   *
+   * Sends batches of orphan segments + available activities to Claude Haiku.
+   * The LLM returns a classification with confidence for each segment.
+   * Only classifications with confidence >= LLM_CONFIDENCE_THRESHOLD are applied.
+   *
+   * @returns Number of segments successfully linked
+   */
+  private async linkByLlmClassification(
+    segments: TopicalSegment[],
+    activities: Activity[],
+  ): Promise<number> {
+    if (segments.length === 0 || activities.length === 0) return 0;
+    if (!this.claudeAgentService) {
+      this.logger.debug('[orphan-linker] ClaudeAgentService not available, skipping LLM classification');
+      return 0;
+    }
+
+    // Build activity context for LLM
+    const activityContext = activities
+      .map((a) => `- ${a.id}: "${a.name}" (${a.activityType})${a.description ? ` — ${a.description}` : ''}`)
+      .join('\n');
+
+    // Validate activity IDs for fast lookup
+    const activityIdSet = new Set(activities.map((a) => a.id));
+
+    let totalLinked = 0;
+
+    // Process in batches to respect context window limits
+    for (let i = 0; i < segments.length; i += LLM_BATCH_SIZE) {
+      const batch = segments.slice(i, i + LLM_BATCH_SIZE);
+
+      const segmentContext = batch
+        .map(
+          (s) =>
+            `- ${s.id}: topic="${s.topic}"${s.summary ? `, summary="${s.summary}"` : ''}` +
+            ` (chat=${s.chatId})`,
+        )
+        .join('\n');
+
+      const prompt = `Ты — классификатор сегментов обсуждений. Определи, к какой Activity относится каждый сегмент.
+
+Доступные Activity:
+${activityContext}
+
+Сегменты для классификации:
+${segmentContext}
+
+Для каждого сегмента определи наиболее подходящую Activity.
+Если сегмент не подходит ни к одной Activity (например, личная беседа, не связанная с работой), установи activityId = null.
+Верни confidence от 0 до 1, где 1 = полная уверенность.`;
+
+      try {
+        const result = await this.claudeAgentService.call<{
+          classifications: Array<{
+            segmentId: string;
+            activityId: string | null;
+            confidence: number;
+            reasoning: string;
+          }>;
+        }>({
+          mode: 'oneshot',
+          taskType: 'orphan_classification',
+          prompt,
+          model: 'haiku',
+          schema: {
+            type: 'object',
+            properties: {
+              classifications: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    segmentId: { type: 'string', description: 'UUID сегмента' },
+                    activityId: {
+                      type: ['string', 'null'],
+                      description: 'UUID Activity или null если не подходит',
+                    },
+                    confidence: {
+                      type: 'number',
+                      description: 'Уверенность классификации от 0 до 1',
+                    },
+                    reasoning: {
+                      type: 'string',
+                      description: 'Краткое обоснование решения',
+                    },
+                  },
+                  required: ['segmentId', 'activityId', 'confidence', 'reasoning'],
+                },
+              },
+            },
+            required: ['classifications'],
+          },
+          timeout: 60000,
+        });
+
+        if (!result.data?.classifications) {
+          this.logger.warn('[orphan-linker] LLM returned no classifications');
+          continue;
+        }
+
+        for (const classification of result.data.classifications) {
+          if (
+            classification.activityId &&
+            classification.confidence >= LLM_CONFIDENCE_THRESHOLD &&
+            activityIdSet.has(classification.activityId)
+          ) {
+            await this.segmentRepo.update(classification.segmentId, {
+              activityId: classification.activityId,
+            });
+
+            const activityName = activities.find(
+              (a) => a.id === classification.activityId,
+            )?.name;
+            this.logger.log(
+              `[orphan-linker] LLM linked segment ${classification.segmentId} → ` +
+                `"${activityName}" (confidence=${classification.confidence.toFixed(2)}, ` +
+                `reason: ${classification.reasoning})`,
+            );
+            totalLinked++;
+          }
+        }
+      } catch (error: unknown) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.error(
+          `[orphan-linker] LLM batch classification failed: ${err.message}`,
+          err.stack,
+        );
+        // Continue with next batch
+      }
+    }
+
+    this.logger.log(`[orphan-linker] LLM classified ${totalLinked}/${segments.length} segments`);
+    return totalLinked;
   }
 
   /**

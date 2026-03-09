@@ -205,6 +205,9 @@ describe('OrphanSegmentLinkerService', () => {
 
       mockSegmentRepo.findOne.mockResolvedValue(segment);
 
+      // Chat mapping returns no match (falls through to similarity)
+      mockDataSource.query.mockResolvedValue([]);
+
       // Mock activity query builder
       const qb = {
         where: jest.fn().mockReturnThis(),
@@ -248,6 +251,9 @@ describe('OrphanSegmentLinkerService', () => {
     it('should skip when no participants found', async () => {
       const segment = createSegment({ participantIds: [], interactionId: null });
       mockSegmentRepo.findOne.mockResolvedValue(segment);
+
+      // Chat mapping returns no match
+      mockDataSource.query.mockResolvedValue([]);
 
       const result = await service.linkOrphanSegment(segment.id);
 
