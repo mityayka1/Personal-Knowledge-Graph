@@ -26,7 +26,7 @@ export class FtsService {
         m.sender_entity_id,
         e.name as entity_name,
         i.type as interaction_type,
-        ts_rank(to_tsvector('russian', m.content), plainto_tsquery('russian', $1)) as score,
+        ts_rank_cd(to_tsvector('russian', m.content), plainto_tsquery('russian', $1), 2|32) as score,
         ts_headline('russian', m.content, plainto_tsquery('russian', $1), 'MaxFragments=2') as highlight
       FROM messages m
       LEFT JOIN entities e ON m.sender_entity_id = e.id AND e.deleted_at IS NULL

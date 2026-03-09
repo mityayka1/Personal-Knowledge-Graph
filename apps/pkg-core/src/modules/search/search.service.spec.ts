@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { SearchService } from './search.service';
 import { FtsService } from './fts.service';
 import { VectorService } from './vector.service';
+import { RerankerService } from './reranker.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { SearchResult } from '@pkg/shared';
 
@@ -38,6 +39,10 @@ describe('SearchService', () => {
     generate: jest.fn(),
   };
 
+  const mockRerankerService = {
+    rerank: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -49,6 +54,10 @@ describe('SearchService', () => {
         {
           provide: VectorService,
           useValue: mockVectorService,
+        },
+        {
+          provide: RerankerService,
+          useValue: mockRerankerService,
         },
         {
           provide: EmbeddingService,

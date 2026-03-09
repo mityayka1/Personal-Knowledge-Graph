@@ -34,6 +34,7 @@ import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SettingsService } from '../settings/settings.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { EntityService } from '../entity/entity.service';
+import { normalizeFactType } from '../../common/utils/fact-validation';
 
 /**
  * Raw event extracted by LLM
@@ -286,7 +287,10 @@ export class SecondBrainExtractionService {
               }
             }
 
-            facts.push(this.mapToExtractedFact(rawEvent, factEntityId));
+            const mappedFact = this.mapToExtractedFact(rawEvent, factEntityId);
+            if (mappedFact) {
+              facts.push(mappedFact);
+            }
             break;
           }
 
@@ -364,11 +368,17 @@ export class SecondBrainExtractionService {
   /**
    * Map raw event to ExtractedFact format.
    */
-  private mapToExtractedFact(rawEvent: RawExtractedEvent, entityId: string): ExtractedFact {
+  private mapToExtractedFact(rawEvent: RawExtractedEvent, entityId: string): ExtractedFact | null {
     const data = rawEvent.data as { factType?: string; value?: string };
+    const rawType = String(data.factType || '');
+    const normalized = normalizeFactType(rawType);
+    if (!normalized) {
+      this.logger.debug(`Skipping fact with unknown type "${rawType}"`);
+      return null;
+    }
     return {
       entityId,
-      factType: String(data.factType || 'other'),
+      factType: normalized,
       value: String(data.value || ''),
       sourceQuote: rawEvent.sourceQuote,
       confidence: rawEvent.confidence,
@@ -742,7 +752,10 @@ ${activityContext}
 4. **task** — задача от собеседника мне
    data: { what, priority?: "low"|"normal"|"high"|"urgent", deadline?, deadlineText?, projectName?: "точное имя проекта из списка СУЩЕСТВУЮЩИХ АКТИВНОСТЕЙ" }
 
-5. **fact** — факт о человеке (ДР, телефон, email, должность, компания)
+5. **fact** — стабильный атрибут человека, сохраняющийся долгое время
+   ЯВЛЯЕТСЯ фактом: должность, компания, навык, хобби, день рождения, место жительства, образование
+   НЕ является фактом: временные действия ("анализировал ошибки"), финансовые транзакции, намерения, текущее состояние
+   factType: position, company, department, specialization, skill, education, role, birthday, location, family, hobby, language, health, status, communication, preference, inn, legal_address
    data: { factType, value, quote }
    + subjectMention если факт о третьем лице
 
