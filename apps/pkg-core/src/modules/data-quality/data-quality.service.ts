@@ -22,6 +22,8 @@ import {
   ClientResolutionService,
   ClientResolutionMethod,
 } from '../extraction/client-resolution.service';
+import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
+import { ActivityService } from '../activity/activity.service';
 
 /**
  * Group of duplicate activities (same LOWER(name) and type)
@@ -134,6 +136,8 @@ export class DataQualityService {
     private readonly dataSource: DataSource,
     private readonly orphanResolutionService: OrphanResolutionService,
     private readonly clientResolutionService: ClientResolutionService,
+    private readonly claudeAgentService: ClaudeAgentService,
+    private readonly activityService: ActivityService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────
@@ -966,5 +970,255 @@ export class DataQualityService {
     }
 
     return issues;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // LLM-based Reclassification of Unsorted Tasks
+  // ─────────────────────────────────────────────────────────────
+
+  private static readonly CLASSIFICATION_SCHEMA = {
+    type: 'object',
+    properties: {
+      classifications: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string', description: 'Task ID from input' },
+            projectId: { type: 'string', description: 'Best matching project ID, or empty string if no match' },
+            confidence: { type: 'number', description: 'Confidence 0.0-1.0' },
+            reasoning: { type: 'string', description: 'Brief explanation (1 sentence)' },
+          },
+          required: ['taskId', 'projectId', 'confidence', 'reasoning'],
+        },
+      },
+    },
+    required: ['classifications'],
+  };
+
+  /**
+   * LLM-based reclassification of tasks from "Unsorted Tasks" project.
+   *
+   * Fetches tasks from the Unsorted project, sends them in batches to Claude
+   * for semantic classification against active projects, then moves matched tasks.
+   *
+   * @param dryRun If true, returns classifications without moving tasks
+   * @param confidenceThreshold Minimum confidence to auto-move (default 0.7)
+   */
+  async llmReclassifyUnsorted(
+    dryRun = false,
+    confidenceThreshold = 0.7,
+  ): Promise<{
+    total: number;
+    classified: number;
+    moved: number;
+    skipped: number;
+    costUsd: number;
+    details: Array<{
+      taskId: string;
+      taskName: string;
+      projectId: string;
+      projectName: string;
+      confidence: number;
+      reasoning: string;
+      moved: boolean;
+    }>;
+  }> {
+    // 1. Find Unsorted Tasks project
+    const unsortedProject = await this.activityRepo.findOne({
+      where: {
+        name: 'Unsorted Tasks',
+        activityType: ActivityType.PROJECT,
+        deletedAt: IsNull(),
+      },
+    });
+
+    if (!unsortedProject) {
+      this.logger.log('No "Unsorted Tasks" project found');
+      return { total: 0, classified: 0, moved: 0, skipped: 0, costUsd: 0, details: [] };
+    }
+
+    // 2. Fetch tasks in Unsorted
+    const tasks = await this.activityRepo.find({
+      where: {
+        parentId: unsortedProject.id,
+        activityType: ActivityType.TASK,
+        deletedAt: IsNull(),
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (tasks.length === 0) {
+      this.logger.log('No tasks in Unsorted Tasks project');
+      return { total: 0, classified: 0, moved: 0, skipped: 0, costUsd: 0, details: [] };
+    }
+
+    // 3. Fetch active projects with hierarchy context
+    const projects = await this.activityRepo.find({
+      where: [
+        { activityType: ActivityType.PROJECT, status: ActivityStatus.ACTIVE, deletedAt: IsNull() },
+        { activityType: ActivityType.BUSINESS, status: ActivityStatus.ACTIVE, deletedAt: IsNull() },
+        { activityType: ActivityType.AREA, status: ActivityStatus.ACTIVE, deletedAt: IsNull() },
+      ],
+      select: ['id', 'name', 'activityType', 'parentId', 'description'],
+    });
+
+    // Build hierarchy map for context
+    const projectMap = new Map(projects.map(p => [p.id, p]));
+    const projectsForPrompt = projects
+      .filter(p => p.activityType === ActivityType.PROJECT)
+      .map(p => {
+        const parts = [p.name];
+        let parentId = p.parentId;
+        while (parentId) {
+          const parent = projectMap.get(parentId);
+          if (parent) {
+            parts.unshift(parent.name);
+            parentId = parent.parentId;
+          } else {
+            break;
+          }
+        }
+        const hierarchy = parts.join(' → ');
+        const desc = p.description ? ` (${p.description.slice(0, 100)})` : '';
+        return { id: p.id, label: `${hierarchy}${desc}` };
+      });
+
+    // Also include AREA and BUSINESS as possible targets for personal/general tasks
+    const areasForPrompt = projects
+      .filter(p => p.activityType === ActivityType.AREA)
+      .map(p => ({ id: p.id, label: `[AREA] ${p.name}` }));
+
+    const allTargets = [...projectsForPrompt, ...areasForPrompt];
+
+    this.logger.log(
+      `LLM reclassification: ${tasks.length} tasks against ${allTargets.length} targets`,
+    );
+
+    // 4. Process in batches of 25
+    const BATCH_SIZE = 25;
+    const allDetails: Array<{
+      taskId: string;
+      taskName: string;
+      projectId: string;
+      projectName: string;
+      confidence: number;
+      reasoning: string;
+      moved: boolean;
+    }> = [];
+    let totalCost = 0;
+
+    for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
+      const batch = tasks.slice(i, i + BATCH_SIZE);
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(tasks.length / BATCH_SIZE);
+
+      this.logger.log(`Processing batch ${batchNum}/${totalBatches} (${batch.length} tasks)`);
+
+      const tasksText = batch.map(t => {
+        const meta = t.metadata as Record<string, unknown> | null;
+        const sourceQuote = meta?.sourceQuote ? ` | Контекст: "${(meta.sourceQuote as string).slice(0, 200)}"` : '';
+        return `- [${t.id}] ${t.name}${sourceQuote}`;
+      }).join('\n');
+
+      const projectsText = allTargets.map(p => `- [${p.id}] ${p.label}`).join('\n');
+
+      const prompt = `Ты классификатор задач. Определи, к какому проекту относится каждая задача.
+
+ПРОЕКТЫ:
+${projectsText}
+
+ЗАДАЧИ:
+${tasksText}
+
+Правила:
+- Используй контекст (sourceQuote) для понимания, к какому проекту относится задача
+- "Avito", "объявления", "panavto", "навигатор" → Панавто или Панавто-Хаб
+- "звонки", "оценка", "скрипт", "прослушка", "колл центр" → Панавто Оценка звонков
+- "googlesheets", "GAS", "статьи", "SEO", "лендинг", "/blog/" → проекты GoogleSheets.ru
+- "флорист", "UFLOR", "цветы", "МойСклад" → ЛасФлор
+- "warehouse", "ДомДач" → Warehouse Distribution System
+- Личные задачи (квартира, баня, семья, билеты, оплата) → [AREA] Личное
+- Если не уверен (confidence < 0.5) — ставь пустой projectId
+- Каждой задаче — ровно один projectId (лучший) или пустая строка`;
+
+      try {
+        const { data, usage } = await this.claudeAgentService.call<{
+          classifications: Array<{
+            taskId: string;
+            projectId: string;
+            confidence: number;
+            reasoning: string;
+          }>;
+        }>({
+          mode: 'oneshot',
+          taskType: 'orphan_classification',
+          prompt,
+          schema: DataQualityService.CLASSIFICATION_SCHEMA,
+          model: 'haiku',
+        });
+
+        totalCost += usage?.totalCostUsd ?? 0;
+
+        if (!data?.classifications) continue;
+
+        for (const cls of data.classifications) {
+          const task = batch.find(t => t.id === cls.taskId);
+          if (!task) continue;
+
+          const targetProject = cls.projectId ? projectMap.get(cls.projectId) : null;
+
+          if (targetProject && cls.confidence >= confidenceThreshold) {
+            let moved = false;
+            if (!dryRun) {
+              try {
+                await this.activityService.update(task.id, { parentId: targetProject.id });
+                moved = true;
+              } catch (err) {
+                this.logger.warn(`Failed to move task ${task.id}: ${err}`);
+              }
+            }
+            allDetails.push({
+              taskId: task.id,
+              taskName: task.name,
+              projectId: targetProject.id,
+              projectName: targetProject.name,
+              confidence: cls.confidence,
+              reasoning: cls.reasoning,
+              moved,
+            });
+          } else {
+            allDetails.push({
+              taskId: task.id,
+              taskName: task.name,
+              projectId: cls.projectId || '',
+              projectName: targetProject?.name || 'unclassified',
+              confidence: cls.confidence,
+              reasoning: cls.reasoning,
+              moved: false,
+            });
+          }
+        }
+      } catch (err) {
+        this.logger.error(`LLM classification batch ${batchNum} failed: ${err}`);
+      }
+    }
+
+    const moved = allDetails.filter(d => d.moved).length;
+    const classified = allDetails.filter(d => d.projectId && d.confidence >= confidenceThreshold).length;
+    const skipped = allDetails.filter(d => !d.projectId || d.confidence < confidenceThreshold).length;
+
+    this.logger.log(
+      `LLM reclassification complete: ${classified} classified, ${moved} moved, ${skipped} skipped, cost=$${totalCost.toFixed(4)}`,
+    );
+
+    return {
+      total: tasks.length,
+      classified,
+      moved,
+      skipped,
+      costUsd: totalCost,
+      details: allDetails,
+    };
   }
 }

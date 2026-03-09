@@ -158,6 +158,27 @@ export class DataQualityController {
   }
 
   /**
+   * LLM-based reclassification of tasks from "Unsorted Tasks" project.
+   * Uses Claude to semantically match tasks to projects based on name + sourceQuote context.
+   *
+   * Query params:
+   * - dryRun=true — preview classifications without moving tasks
+   * - threshold=0.7 — minimum confidence to auto-move (0.0-1.0)
+   */
+  @Post('llm-reclassify-unsorted')
+  async llmReclassifyUnsorted(
+    @Query('dryRun') dryRun?: string,
+    @Query('threshold') threshold?: string,
+  ) {
+    const isDryRun = dryRun === 'true';
+    const confidenceThreshold = threshold ? parseFloat(threshold) : 0.7;
+    this.logger.log(
+      `LLM reclassify unsorted: dryRun=${isDryRun}, threshold=${confidenceThreshold}`,
+    );
+    return this.dataQualityService.llmReclassifyUnsorted(isDryRun, confidenceThreshold);
+  }
+
+  /**
    * Reclassify "activity" type facts using LLM.
    * Converts temporary events to proper types or soft-deletes non-facts.
    */
