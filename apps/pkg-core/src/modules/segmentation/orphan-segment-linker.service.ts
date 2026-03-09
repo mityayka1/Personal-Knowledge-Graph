@@ -249,15 +249,18 @@ export class OrphanSegmentLinkerService {
       );
 
       try {
-        // Load remaining orphan segments
-        const remainingSegments = await Promise.all(
-          remainingOrphanIds.map((id) =>
-            this.segmentRepo.findOne({ where: { id } }),
-          ),
-        );
-        const validSegments = remainingSegments.filter(
-          (s): s is TopicalSegment => s !== null && s.activityId === null,
-        );
+        // Load remaining orphan segments in bulk (avoids connection pool exhaustion)
+        const CHUNK_SIZE = 500;
+        const validSegments: TopicalSegment[] = [];
+        for (let j = 0; j < remainingOrphanIds.length; j += CHUNK_SIZE) {
+          const chunk = remainingOrphanIds.slice(j, j + CHUNK_SIZE);
+          const loaded = await this.segmentRepo
+            .createQueryBuilder('s')
+            .where('s.id IN (:...ids)', { ids: chunk })
+            .andWhere('s.activity_id IS NULL')
+            .getMany();
+          validSegments.push(...loaded);
+        }
 
         // Load all linkable activities for LLM context
         const allActivities = await this.activityRepo
