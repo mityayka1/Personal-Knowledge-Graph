@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { TopicalSegment, SegmentStatus } from '@pkg/entities';
 import { PackingService } from './packing.service';
 import { OrphanSegmentLinkerService } from './orphan-segment-linker.service';
@@ -31,6 +31,7 @@ export class PackingJobService {
     private readonly packingService: PackingService,
     private readonly orphanLinker: OrphanSegmentLinkerService,
     private readonly settingsService: SettingsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -182,5 +183,37 @@ export class PackingJobService {
     } finally {
       this.isRunning = false;
     }
+  }
+
+  /**
+   * Collect segments from an activity AND all its descendants via the closure table.
+   *
+   * Returns own ACTIVE segments first, then descendant ACTIVE segments,
+   * all ordered by startedAt ASC within each group.
+   */
+  private async collectHierarchicalSegments(activityId: string): Promise<TopicalSegment[]> {
+    // Get own segments
+    const ownSegments = await this.segmentRepo.find({
+      where: { activityId, status: SegmentStatus.ACTIVE },
+      order: { startedAt: 'ASC' },
+    });
+
+    // Get descendant activity IDs via closure table
+    const descendants: Array<{ id: string }> = await this.dataSource.query(`
+      SELECT a.id FROM activities a
+      INNER JOIN activities_closure ac ON ac.id_descendant = a.id
+      WHERE ac.id_ancestor = $1 AND ac.id_descendant != $1 AND a.status = 'active'
+    `, [activityId]);
+
+    if (descendants.length === 0) return ownSegments;
+
+    const descendantIds = descendants.map((d) => d.id);
+    const childSegments = await this.segmentRepo.createQueryBuilder('s')
+      .where('s.activityId IN (:...ids)', { ids: descendantIds })
+      .andWhere('s.status = :status', { status: SegmentStatus.ACTIVE })
+      .orderBy('s.startedAt', 'ASC')
+      .getMany();
+
+    return [...ownSegments, ...childSegments];
   }
 }
