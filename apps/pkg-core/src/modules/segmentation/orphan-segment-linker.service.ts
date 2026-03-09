@@ -194,11 +194,17 @@ export class OrphanSegmentLinkerService {
   /**
    * Link all orphan segments (no activityId, status ACTIVE or CLOSED).
    *
-   * Processes each segment independently — errors on one segment
-   * do not block processing of the rest.
+   * Two-phase approach:
+   * Phase 1 (bulk, in-memory): Load all segments + all candidate activities
+   *   in 2 DB queries, then do similarity matching in memory.
+   * Phase 2 (LLM): Classify remaining orphans via Claude Haiku batches.
    */
   async linkAllOrphans(): Promise<BulkLinkResult> {
-    // Use QueryBuilder for proper IS NULL check (TypeORM find() doesn't support null equality)
+    // Load all orphan segments in bulk (not just IDs — need topic/summary/participantIds)
+    const CHUNK_SIZE = 500;
+    const orphanSegments: TopicalSegment[] = [];
+
+    // First get IDs (lightweight query)
     const orphanRows = await this.segmentRepo
       .createQueryBuilder('s')
       .select('s.id', 'id')
@@ -214,68 +220,128 @@ export class OrphanSegmentLinkerService {
       return { linked: 0, total: 0, skipped: 0, errors: 0 };
     }
 
-    this.logger.log(`[orphan-linker] Processing ${total} orphan segments`);
+    this.logger.log(`[orphan-linker] Processing ${total} orphan segments (bulk mode)`);
 
-    let linked = 0;
-    let skipped = 0;
-    let errors = 0;
-    const remainingOrphanIds: string[] = [];
+    // Load full segments in chunks
+    const orphanIds = orphanRows.map((r) => r.id);
+    for (let j = 0; j < orphanIds.length; j += CHUNK_SIZE) {
+      const chunk = orphanIds.slice(j, j + CHUNK_SIZE);
+      const loaded = await this.segmentRepo
+        .createQueryBuilder('s')
+        .where('s.id IN (:...ids)', { ids: chunk })
+        .andWhere('s.activity_id IS NULL')
+        .getMany();
+      orphanSegments.push(...loaded);
+    }
 
-    // Phase 1: Try deterministic strategies (chat mapping + similarity)
-    for (const { id } of orphanRows) {
-      try {
-        const result = await this.linkOrphanSegment(id);
-        if (result.activityId && !result.skipReason) {
-          linked++;
-        } else if (result.skipReason === 'already_linked') {
-          skipped++;
-        } else if (!result.activityId) {
-          remainingOrphanIds.push(id);
+    this.logger.log(`[orphan-linker] Loaded ${orphanSegments.length} orphan segments`);
+
+    // Collect all unique participant entity IDs across all segments
+    const allParticipantIds = new Set<string>();
+    for (const seg of orphanSegments) {
+      if (seg.participantIds?.length > 0) {
+        for (const pid of seg.participantIds) {
+          allParticipantIds.add(pid);
         }
-      } catch (error: unknown) {
-        errors++;
-        const err = error instanceof Error ? error : new Error(String(error));
-        this.logger.error(
-          `[orphan-linker] Error processing segment ${id}: ${err.message}`,
-          err.stack,
-        );
       }
     }
 
+    // Load all candidate activities for ALL participants in one query
+    let allCandidateActivities: Activity[] = [];
+    if (allParticipantIds.size > 0) {
+      allCandidateActivities = await this.findCandidateActivities(
+        Array.from(allParticipantIds),
+      );
+    }
+
+    this.logger.log(
+      `[orphan-linker] Found ${allCandidateActivities.length} candidate activities ` +
+        `for ${allParticipantIds.size} unique participants`,
+    );
+
+    let linked = 0;
+    const skipped = 0;
+    let errors = 0;
+    const remainingOrphans: TopicalSegment[] = [];
+
+    // Phase 1: In-memory similarity matching (no per-segment DB queries)
+    if (allCandidateActivities.length > 0) {
+      for (const segment of orphanSegments) {
+        try {
+          const segmentText = this.buildSegmentText(segment);
+          if (!segmentText) {
+            remainingOrphans.push(segment);
+            continue;
+          }
+
+          // Filter candidate activities to those relevant for this segment's participants
+          const segParticipants = new Set(segment.participantIds ?? []);
+          const relevantActivities = segParticipants.size > 0
+            ? allCandidateActivities.filter(
+                (a) =>
+                  (a.ownerEntityId && segParticipants.has(a.ownerEntityId)) ||
+                  // For members/client — we already loaded all activities for all participants,
+                  // so the full set is a superset of what's relevant. Use the full set
+                  // if there's no ownerEntityId match to avoid missing member-based matches.
+                  true,
+              )
+            : allCandidateActivities;
+
+          const bestMatch = this.findBestActivityMatch(segmentText, relevantActivities);
+
+          if (bestMatch && bestMatch.similarity >= SIMILARITY_THRESHOLD) {
+            await this.segmentRepo.update(segment.id, {
+              activityId: bestMatch.activity.id,
+            });
+            linked++;
+            this.logger.debug(
+              `[orphan-linker] Phase1: linked segment ${segment.id} → "${bestMatch.activity.name}" ` +
+                `(similarity=${bestMatch.similarity.toFixed(3)})`,
+            );
+          } else {
+            remainingOrphans.push(segment);
+          }
+        } catch (error: unknown) {
+          errors++;
+          const err = error instanceof Error ? error : new Error(String(error));
+          this.logger.error(
+            `[orphan-linker] Phase1 error for segment ${segment.id}: ${err.message}`,
+          );
+          remainingOrphans.push(segment);
+        }
+      }
+    } else {
+      // No candidate activities at all — all segments go to LLM
+      remainingOrphans.push(...orphanSegments);
+    }
+
+    this.logger.log(
+      `[orphan-linker] Phase 1 complete: ${linked} linked, ${remainingOrphans.length} remaining for LLM`,
+    );
+
     // Phase 2: LLM fallback for remaining orphans
-    if (remainingOrphanIds.length > 0 && this.claudeAgentService) {
+    if (remainingOrphans.length > 0 && this.claudeAgentService) {
       this.logger.log(
-        `[orphan-linker] ${remainingOrphanIds.length} orphans remain after deterministic strategies, trying LLM`,
+        `[orphan-linker] Phase 2: classifying ${remainingOrphans.length} orphans via LLM`,
       );
 
       try {
-        // Load remaining orphan segments in bulk (avoids connection pool exhaustion)
-        const CHUNK_SIZE = 500;
-        const validSegments: TopicalSegment[] = [];
-        for (let j = 0; j < remainingOrphanIds.length; j += CHUNK_SIZE) {
-          const chunk = remainingOrphanIds.slice(j, j + CHUNK_SIZE);
-          const loaded = await this.segmentRepo
-            .createQueryBuilder('s')
-            .where('s.id IN (:...ids)', { ids: chunk })
-            .andWhere('s.activity_id IS NULL')
-            .getMany();
-          validSegments.push(...loaded);
-        }
+        // Load all linkable activities for LLM context (broader set than Phase 1)
+        const allActivities = allCandidateActivities.length > 0
+          ? allCandidateActivities
+          : await this.activityRepo
+              .createQueryBuilder('a')
+              .where('a.activityType IN (:...types)', { types: LINKABLE_ACTIVITY_TYPES })
+              .andWhere('a.status NOT IN (:...excludedStatuses)', { excludedStatuses: EXCLUDED_STATUSES })
+              .andWhere('a.deleted_at IS NULL')
+              .select(['a.id', 'a.name', 'a.description', 'a.activityType'])
+              .orderBy('a.last_activity_at', 'DESC', 'NULLS LAST')
+              .limit(100)
+              .getMany();
 
-        // Load all linkable activities for LLM context
-        const allActivities = await this.activityRepo
-          .createQueryBuilder('a')
-          .where('a.activityType IN (:...types)', { types: LINKABLE_ACTIVITY_TYPES })
-          .andWhere('a.status NOT IN (:...excludedStatuses)', { excludedStatuses: EXCLUDED_STATUSES })
-          .andWhere('a.deleted_at IS NULL')
-          .select(['a.id', 'a.name', 'a.description', 'a.activityType'])
-          .orderBy('a.last_activity_at', 'DESC', 'NULLS LAST')
-          .limit(100)
-          .getMany();
-
-        if (allActivities.length > 0 && validSegments.length > 0) {
+        if (allActivities.length > 0) {
           const llmLinked = await this.linkByLlmClassification(
-            validSegments,
+            remainingOrphans,
             allActivities,
           );
           linked += llmLinked;

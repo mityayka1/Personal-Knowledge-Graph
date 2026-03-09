@@ -401,7 +401,7 @@ describe('OrphanSegmentLinkerService', () => {
   });
 
   // =========================================================================
-  // linkAllOrphans — full pipeline
+  // linkAllOrphans — full pipeline (bulk mode)
   // =========================================================================
 
   describe('linkAllOrphans', () => {
@@ -417,6 +417,126 @@ describe('OrphanSegmentLinkerService', () => {
       const result = await service.linkAllOrphans();
 
       expect(result).toEqual({ linked: 0, total: 0, skipped: 0, errors: 0 });
+    });
+
+    it('should use bulk mode: load all segments and activities in few queries', async () => {
+      const segment = createSegment({
+        id: 'seg-bulk-1',
+        topic: 'Интеграция Flowwow',
+        participantIds: ['entity-1'],
+      });
+
+      const activity = createActivity({
+        id: 'act-bulk-1',
+        name: 'Интеграция Flowwow',
+        ownerEntityId: 'entity-1',
+      });
+
+      // First call: getRawMany for orphan IDs
+      const idsQb = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([{ id: 'seg-bulk-1' }]),
+      };
+
+      // Second call: getMany for full segments
+      const segmentsQb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([segment]),
+      };
+
+      mockSegmentRepo.createQueryBuilder
+        .mockReturnValueOnce(idsQb as any)
+        .mockReturnValueOnce(segmentsQb as any);
+
+      // Activity query builder for findCandidateActivities
+      const actQb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([activity]),
+      };
+      mockActivityRepo.createQueryBuilder.mockReturnValue(actQb as any);
+
+      mockSegmentRepo.update.mockResolvedValue({ affected: 1 } as any);
+
+      const result = await service.linkAllOrphans();
+
+      expect(result.total).toBe(1);
+      expect(result.linked).toBe(1);
+      // Should NOT call linkOrphanSegment (no per-segment DB queries)
+      expect(mockSegmentRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should pass unmatched segments to LLM Phase 2', async () => {
+      const segment = createSegment({
+        id: 'seg-unmatched',
+        topic: 'совершенно случайная тема',
+        participantIds: ['entity-1'],
+      });
+
+      const activity = createActivity({
+        id: 'act-llm',
+        name: 'Специфический проект',
+        ownerEntityId: 'entity-1',
+      });
+
+      // Orphan IDs
+      const idsQb = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([{ id: 'seg-unmatched' }]),
+      };
+
+      // Full segments
+      const segmentsQb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([segment]),
+      };
+
+      mockSegmentRepo.createQueryBuilder
+        .mockReturnValueOnce(idsQb as any)
+        .mockReturnValueOnce(segmentsQb as any);
+
+      // Activities for Phase 1 (similarity won't match)
+      const actQb = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([activity]),
+      };
+      mockActivityRepo.createQueryBuilder.mockReturnValue(actQb as any);
+
+      // LLM classifies successfully
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          classifications: [
+            {
+              segmentId: 'seg-unmatched',
+              activityId: 'act-llm',
+              confidence: 0.85,
+              reasoning: 'LLM matched',
+            },
+          ],
+        },
+        usage: { inputTokens: 100, outputTokens: 50, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      mockSegmentRepo.update.mockResolvedValue({ affected: 1 } as any);
+
+      const result = await service.linkAllOrphans();
+
+      expect(result.linked).toBe(1);
+      expect(mockClaudeAgentService.call).toHaveBeenCalled();
     });
   });
 
