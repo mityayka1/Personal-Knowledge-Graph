@@ -321,7 +321,7 @@ ${taskHint}`);
     // PERMANENT: Facts (with confidence percentage if decay applied)
     const factsSection = facts.length > 0
       ? facts.map(f => {
-          const conf = (f as any).effectiveConfidence ?? f.confidence;
+          const conf = (f as EntityFact & { effectiveConfidence?: number }).effectiveConfidence ?? f.confidence;
           const confStr = conf != null ? ` [confidence: ${(Number(conf) * 100).toFixed(0)}%]` : '';
           return `- ${f.factType}: ${f.value || f.valueDate || 'N/A'}${confStr}`;
         }).join('\n')

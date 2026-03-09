@@ -480,7 +480,7 @@ export class EntityFactService {
         const validFrom = fact.validFrom ?? fact.updatedAt ?? fact.createdAt;
         const ageDays = (now - new Date(validFrom).getTime()) / (1000 * 60 * 60 * 24);
         const effectiveConfidence = getEffectiveConfidence({
-          baseConfidence: Number(fact.confidence) || 0.5,
+          baseConfidence: fact.confidence != null ? Number(fact.confidence) : 0.5,
           factType: fact.factType,
           ageDays,
           halfLifeConfig: config,
@@ -496,7 +496,7 @@ export class EntityFactService {
     try {
       const json = await this.settingsService.getValue<string>('factType.halfLifeDays');
       if (!json) return DEFAULT_HALF_LIFE_DAYS;
-      return JSON.parse(json);
+      return typeof json === 'string' ? JSON.parse(json) : json;
     } catch {
       return DEFAULT_HALF_LIFE_DAYS;
     }

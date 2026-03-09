@@ -59,6 +59,30 @@ describe('getEffectiveConfidence', () => {
     expect(result).toBe(0.85);
   });
 
+  it('should treat halfLife of 0 as permanent (no decay)', () => {
+    const customConfig: Record<string, number | null> = {
+      ...halfLifeConfig,
+      broken: 0,
+    };
+    const result = getEffectiveConfidence({
+      baseConfidence: 0.8,
+      factType: 'broken',
+      ageDays: 100,
+      halfLifeConfig: customConfig,
+    });
+    expect(result).toBe(0.8);
+  });
+
+  it('should return 0 when baseConfidence is 0', () => {
+    const result = getEffectiveConfidence({
+      baseConfidence: 0,
+      factType: 'position',
+      ageDays: 100,
+      halfLifeConfig,
+    });
+    expect(result).toBe(0);
+  });
+
   it('should filter facts below minimum threshold 0.1', () => {
     const result = getEffectiveConfidence({
       baseConfidence: 0.5,

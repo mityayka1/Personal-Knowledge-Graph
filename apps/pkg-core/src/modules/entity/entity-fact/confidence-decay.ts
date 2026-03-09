@@ -34,6 +34,9 @@ export function getEffectiveConfidence(params: DecayParams): number {
   // null halfLife = permanent (no decay)
   if (halfLife === null) return baseConfidence;
 
+  // invalid halfLife = treat as permanent
+  if (halfLife <= 0) return baseConfidence;
+
   if (ageDays <= 0) return baseConfidence;
 
   const decayFactor = Math.exp((-Math.LN2 / halfLife) * ageDays);
