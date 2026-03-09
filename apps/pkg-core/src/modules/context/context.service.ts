@@ -14,6 +14,7 @@ import {
 import { ContextRequest, ContextResponse, SynthesizedContext, SearchResult } from '@pkg/shared';
 import { EntityService } from '../entity/entity.service';
 import { VectorService } from '../search/vector.service';
+import { RerankerService, RerankItem } from '../search/reranker.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SchemaLoaderService } from '../claude-agent/schema-loader.service';
@@ -43,6 +44,7 @@ export class ContextService {
     @Inject(forwardRef(() => EntityService))
     private entityService: EntityService,
     private vectorService: VectorService,
+    private rerankerService: RerankerService,
     private embeddingService: EmbeddingService,
     @Inject(forwardRef(() => ClaudeAgentService))
     private claudeAgentService: ClaudeAgentService,
@@ -97,7 +99,29 @@ export class ContextService {
 
     // 4. WARM tier: Summaries (7-90 days)
     const warmCutoff = new Date(now.getTime() - this.WARM_TIER_DAYS * 24 * 60 * 60 * 1000);
-    const warmSummaries = await this.getWarmSummaries(entityId, warmCutoff, hotCutoff);
+    let warmSummaries = await this.getWarmSummaries(entityId, warmCutoff, hotCutoff);
+
+    // 4.1. Rerank warm summaries by task relevance
+    if (taskHint && warmSummaries.length > 3) {
+      try {
+        const summaryItems: RerankItem[] = warmSummaries.map(s => ({
+          id: s.id,
+          content: (s.summaryText || '') + ' ' + (s.keyPoints || []).join(' '),
+          score: 1,
+        }));
+        const reranked = await this.rerankerService.rerank(summaryItems, taskHint, { topK: 5 });
+        const rerankedIds = new Set(reranked.map(r => r.id));
+        warmSummaries = warmSummaries
+          .filter(s => rerankedIds.has(s.id))
+          .sort((a, b) => {
+            const aIdx = reranked.findIndex(r => r.id === a.id);
+            const bIdx = reranked.findIndex(r => r.id === b.id);
+            return aIdx - bIdx;
+          });
+      } catch (error) {
+        this.logger.warn(`Warm summary reranking failed, using original order: ${error}`);
+      }
+    }
 
     // 5. COLD tier: Entity profile
     const profile = await this.profileRepo.findOne({ where: { entityId } });
