@@ -30,7 +30,8 @@ export type ClaudeTaskType =
   | 'topic_segmentation'
   | 'knowledge_packing'
   | 'project_name_match'
-  | 'dedup_decision';
+  | 'dedup_decision'
+  | 'reranking';
 
 export type ExecutionMode = 'oneshot' | 'agent';
 
