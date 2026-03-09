@@ -64,42 +64,64 @@ export class ActivityFactReclassificationService {
     let reclassified = 0;
     let deleted = 0;
     let errors = 0;
-    const BATCH_SIZE = 50;
+    const BATCH_SIZE = 30;
+    const DELAY_BETWEEN_BATCHES_MS = 5000;
+    const MAX_RETRIES = 2;
 
     for (let i = 0; i < activityFacts.length; i += BATCH_SIZE) {
       const batch = activityFacts.slice(i, i + BATCH_SIZE);
-      try {
-        const decisions = await this.classifyBatch(batch);
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
 
-        for (const decision of decisions) {
-          try {
-            if (decision.newType === null) {
-              await this.factRepo.softDelete(decision.factId);
-              deleted++;
-            } else {
-              const validType = normalizeFactType(decision.newType);
-              if (validType) {
-                await this.factRepo.update(decision.factId, {
-                  factType: validType,
-                  category: getFactCategory(validType),
-                });
-                reclassified++;
-              } else {
-                this.logger.warn(`Invalid reclassification type: ${decision.newType} for fact ${decision.factId}`);
-                errors++;
-              }
-            }
-          } catch (err) {
-            this.logger.error(`Error processing fact ${decision.factId}: ${err}`);
-            errors++;
+      // Delay between batches to avoid rate limiting
+      if (i > 0) {
+        this.logger.debug(`Waiting ${DELAY_BETWEEN_BATCHES_MS}ms before batch ${batchNum}...`);
+        await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES_MS));
+      }
+
+      let decisions: ReclassificationDecision[] | null = null;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          decisions = await this.classifyBatch(batch);
+          break;
+        } catch (err) {
+          if (attempt < MAX_RETRIES) {
+            const backoff = (attempt + 1) * 10000;
+            this.logger.warn(`Batch ${batchNum} attempt ${attempt + 1} failed, retrying in ${backoff}ms: ${err}`);
+            await new Promise(r => setTimeout(r, backoff));
+          } else {
+            this.logger.error(`Batch ${batchNum} failed after ${MAX_RETRIES + 1} attempts: ${err}`);
+            errors += batch.length;
           }
         }
-
-        this.logger.log(`Batch ${Math.floor(i / BATCH_SIZE) + 1}: reclassified=${reclassified}, deleted=${deleted}`);
-      } catch (err) {
-        this.logger.error(`Batch error at offset ${i}: ${err}`);
-        errors += batch.length;
       }
+
+      if (!decisions) continue;
+
+      for (const decision of decisions) {
+        try {
+          if (decision.newType === null) {
+            await this.factRepo.softDelete(decision.factId);
+            deleted++;
+          } else {
+            const validType = normalizeFactType(decision.newType);
+            if (validType) {
+              await this.factRepo.update(decision.factId, {
+                factType: validType,
+                category: getFactCategory(validType),
+              });
+              reclassified++;
+            } else {
+              this.logger.warn(`Invalid reclassification type: ${decision.newType} for fact ${decision.factId}`);
+              errors++;
+            }
+          }
+        } catch (err) {
+          this.logger.error(`Error processing fact ${decision.factId}: ${err}`);
+          errors++;
+        }
+      }
+
+      this.logger.log(`Batch ${batchNum}: reclassified=${reclassified}, deleted=${deleted}, errors=${errors}`);
     }
 
     return { total: activityFacts.length, reclassified, deleted, errors };
@@ -124,6 +146,7 @@ ${factsText}`;
       prompt,
       schema: RECLASSIFICATION_SCHEMA,
       model: 'haiku',
+      timeout: 240000,
     });
 
     return data?.decisions ?? [];
