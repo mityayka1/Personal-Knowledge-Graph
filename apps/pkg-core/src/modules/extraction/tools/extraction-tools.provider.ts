@@ -23,6 +23,7 @@ import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
 import { CreateFactDto } from '../../entity/dto/create-entity.dto';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import { normalizeFactType, getFactCategory } from '../../../common/utils/fact-validation';
+import { isValidFactType, VALID_FACT_TYPES } from '../../entity/entity-fact/fact-type-config';
 import {
   DeduplicationGatewayService,
   DedupAction,
@@ -455,12 +456,8 @@ export class ExtractionToolsProvider {
 Если факт связан с конкретным проектом или делом — укажи activityId. Используй find_activity для поиска проекта.`,
       {
         entityId: z.string().uuid().describe('UUID сущности-владельца факта'),
-        factType: z.enum([
-          'position', 'company', 'department', 'specialization', 'skill', 'education', 'role',
-          'birthday', 'location', 'family', 'hobby', 'language', 'health', 'status',
-          'communication', 'preference',
-          'inn', 'legal_address',
-        ]).describe('Тип факта: position (должность), company (компания), department (отдел), specialization (специализация), skill (навык), education (образование), role (роль), birthday (день рождения), location (местоположение), family (семья), hobby (хобби), language (язык), health (здоровье), status (статус), communication (предпочтения общения), preference (предпочтения), inn (ИНН), legal_address (юр. адрес)'),
+        factType: z.enum(VALID_FACT_TYPES as [string, ...string[]])
+          .describe('Тип факта. Допустимые: ' + VALID_FACT_TYPES.join(', ') + '. Используй "position" вместо "role"'),
         value: z.string().describe('Значение факта на русском языке'),
         confidence: z.number().min(0).max(1).describe('Уверенность в факте от 0 до 1'),
         sourceQuote: z.string().max(200).describe('Цитата из сообщения (до 200 символов)'),
@@ -486,6 +483,13 @@ export class ExtractionToolsProvider {
           return toolError(
             'Owner entity ID not provided',
             'Cannot create draft fact without owner entity context.',
+          );
+        }
+
+        if (!isValidFactType(args.factType)) {
+          return toolError(
+            `Invalid factType "${args.factType}". Valid types: ${VALID_FACT_TYPES.join(', ')}. ` +
+            `Note: "role" has been merged into "position".`,
           );
         }
 
