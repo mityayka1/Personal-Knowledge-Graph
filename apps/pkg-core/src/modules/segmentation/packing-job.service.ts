@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { TopicalSegment, SegmentStatus } from '@pkg/entities';
 import { PackingService } from './packing.service';
 import { OrphanSegmentLinkerService } from './orphan-segment-linker.service';
@@ -12,8 +12,11 @@ import { SettingsService } from '../settings/settings.service';
  *
  * Runs every Sunday at 03:00 Moscow time.
  * Before packing, attempts to link orphan segments to Activities via OrphanSegmentLinkerService.
- * For each Activity with >= MIN_SEGMENTS packable segments,
- * calls PackingService.packByActivity() to synthesize consolidated knowledge.
+ * For each Activity with >= MIN_SEGMENTS packable segments:
+ * 1. collectHierarchicalSegments() gathers segments from activity AND all descendants
+ * 2. packByActivityIncremental() creates or updates KP with structured synthesis
+ *
+ * Includes 2s rate limiting between Claude calls to avoid API throttling.
  *
  * Phase E: Knowledge Segmentation & Packing
  */
@@ -31,6 +34,7 @@ export class PackingJobService {
     private readonly packingService: PackingService,
     private readonly orphanLinker: OrphanSegmentLinkerService,
     private readonly settingsService: SettingsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -136,24 +140,46 @@ export class PackingJobService {
         }
       }
 
-      // Pack each eligible activity
+      // Pack each eligible activity using hierarchical collection + incremental updates
       let totalSegmentsPacked = 0;
       let totalTokensUsed = 0;
       let successCount = 0;
       let errorCount = 0;
 
-      for (const { activityId } of eligible) {
+      for (let i = 0; i < eligible.length; i++) {
+        const { activityId } = eligible[i];
+
         try {
-          const result = await this.packingService.packByActivity({ activityId });
+          // Collect segments from activity AND all descendants
+          const segments = await this.collectHierarchicalSegments(activityId);
+
+          if (segments.length < PackingJobService.MIN_SEGMENTS) {
+            this.logger.log(
+              `[packing-job] Skipping activity=${activityId}: ` +
+              `only ${segments.length} hierarchical segments (min: ${PackingJobService.MIN_SEGMENTS})`,
+            );
+            continue;
+          }
+
+          // Use incremental packing (create or update KP)
+          const result = await this.packingService.packByActivityIncremental(activityId, segments);
 
           totalSegmentsPacked += result.segmentCount;
           totalTokensUsed += result.tokensUsed;
-          successCount++;
 
-          this.logger.log(
-            `[packing-job] Packed activity=${activityId}: ` +
-            `segments=${result.segmentCount}, tokens=${result.tokensUsed}`,
-          );
+          if (result.segmentCount > 0) {
+            successCount++;
+            this.logger.log(
+              `[packing-job] Packed activity=${activityId}: ` +
+              `segments=${result.segmentCount}, tokens=${result.tokensUsed}, ` +
+              `isNew=${result.isNew}`,
+            );
+          }
+
+          // Rate limit: 2s delay between Claude calls to avoid throttling
+          if (result.tokensUsed > 0 && i < eligible.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          }
         } catch (error: unknown) {
           errorCount++;
           const err = error instanceof Error ? error : new Error(String(error));
@@ -182,5 +208,37 @@ export class PackingJobService {
     } finally {
       this.isRunning = false;
     }
+  }
+
+  /**
+   * Collect segments from an activity AND all its descendants via the closure table.
+   *
+   * Returns own ACTIVE segments first, then descendant ACTIVE segments,
+   * all ordered by startedAt ASC within each group.
+   */
+  private async collectHierarchicalSegments(activityId: string): Promise<TopicalSegment[]> {
+    // Get own segments
+    const ownSegments = await this.segmentRepo.find({
+      where: { activityId, status: SegmentStatus.ACTIVE },
+      order: { startedAt: 'ASC' },
+    });
+
+    // Get descendant activity IDs via closure table
+    const descendants: Array<{ id: string }> = await this.dataSource.query(`
+      SELECT a.id FROM activities a
+      INNER JOIN activities_closure ac ON ac.id_descendant = a.id
+      WHERE ac.id_ancestor = $1 AND ac.id_descendant != $1 AND a.status = 'active'
+    `, [activityId]);
+
+    if (descendants.length === 0) return ownSegments;
+
+    const descendantIds = descendants.map((d) => d.id);
+    const childSegments = await this.segmentRepo.createQueryBuilder('s')
+      .where('s.activityId IN (:...ids)', { ids: descendantIds })
+      .andWhere('s.status = :status', { status: SegmentStatus.ACTIVE })
+      .orderBy('s.startedAt', 'ASC')
+      .getMany();
+
+    return [...ownSegments, ...childSegments];
   }
 }

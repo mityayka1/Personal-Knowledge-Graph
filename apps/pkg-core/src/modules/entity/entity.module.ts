@@ -22,6 +22,7 @@ import { EmbeddingModule } from '../embedding/embedding.module';
 import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module';
 import { EntityToolsProvider } from '../claude-agent/tools';
 import { NotificationModule } from '../notification/notification.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { NotificationModule } from '../notification/notification.module';
     EmbeddingModule,
     ClaudeAgentCoreModule,
     forwardRef(() => NotificationModule),
+    SettingsModule,
   ],
   controllers: [MergeSuggestionController, EntityController, EntityRelationController],
   providers: [

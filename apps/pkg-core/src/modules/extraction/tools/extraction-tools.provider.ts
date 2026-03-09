@@ -23,6 +23,7 @@ import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
 import { CreateFactDto } from '../../entity/dto/create-entity.dto';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
 import { normalizeFactType, getFactCategory } from '../../../common/utils/fact-validation';
+import { isValidFactType, VALID_FACT_TYPES } from '../../entity/entity-fact/fact-type-config';
 import {
   DeduplicationGatewayService,
   DedupAction,
@@ -441,26 +442,30 @@ export class ExtractionToolsProvider {
       `Создать факт для сущности. Факт создаётся как ЧЕРНОВИК и требует подтверждения пользователем.
 
 Типы фактов:
-- position: должность ("Senior Developer", "CTO")
+- position: должность ("Senior Developer", "CTO"). Используй вместо "role"
 - company: компания ("Сбер", "Яндекс")
-- department: отдел ("Отдел разработки")
-- phone: телефон ("+7 999 123-45-67")
-- email: электронная почта
-- telegram: username (@username)
+- department: отдел ("Отдел разработки", "HR")
+- specialization: специализация ("Backend", "Machine Learning")
+- skill: навык ("Python", "управление проектами")
+- education: образование ("МГУ", "PhD Computer Science")
 - birthday: день рождения ("15 марта", "1990-03-15")
 - location: местоположение ("Москва", "работает удалённо")
-- education: образование ("МГУ", "PhD Computer Science")
+- family: семья ("женат", "двое детей")
+- hobby: хобби ("теннис", "фотография")
+- language: язык ("английский свободно", "немецкий B2")
+- health: здоровье ("аллергия на глютен", "вегетарианец")
+- status: текущий статус ("в отпуске", "ищет работу")
+- communication: предпочтения общения ("предпочитает Telegram", "не звонить до 10")
+- preference: общие предпочтения ("любит зелёный чай", "предпочитает утренние встречи")
+- inn: ИНН организации или ИП
+- legal_address: юридический адрес
 
 ВАЖНО: Создавай факт для КОНКРЕТНОЙ сущности. "Маша работает в Сбере" → факт для Маши, не для текущего контакта.
 Если факт связан с конкретным проектом или делом — укажи activityId. Используй find_activity для поиска проекта.`,
       {
         entityId: z.string().uuid().describe('UUID сущности-владельца факта'),
-        factType: z.enum([
-          'position', 'company', 'department', 'specialization', 'skill', 'education', 'role',
-          'birthday', 'location', 'family', 'hobby', 'language', 'health', 'status',
-          'communication', 'preference',
-          'inn', 'legal_address',
-        ]).describe('Тип факта: position (должность), company (компания), department (отдел), specialization (специализация), skill (навык), education (образование), role (роль), birthday (день рождения), location (местоположение), family (семья), hobby (хобби), language (язык), health (здоровье), status (статус), communication (предпочтения общения), preference (предпочтения), inn (ИНН), legal_address (юр. адрес)'),
+        factType: z.enum(VALID_FACT_TYPES as [string, ...string[]])
+          .describe('Тип факта. Допустимые: ' + VALID_FACT_TYPES.join(', ') + '. Используй "position" вместо "role"'),
         value: z.string().describe('Значение факта на русском языке'),
         confidence: z.number().min(0).max(1).describe('Уверенность в факте от 0 до 1'),
         sourceQuote: z.string().max(200).describe('Цитата из сообщения (до 200 символов)'),
@@ -486,6 +491,13 @@ export class ExtractionToolsProvider {
           return toolError(
             'Owner entity ID not provided',
             'Cannot create draft fact without owner entity context.',
+          );
+        }
+
+        if (!isValidFactType(args.factType)) {
+          return toolError(
+            `Invalid factType "${args.factType}". Valid types: ${VALID_FACT_TYPES.join(', ')}. ` +
+            `Note: "role" has been merged into "position".`,
           );
         }
 

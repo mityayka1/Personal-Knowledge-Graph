@@ -264,6 +264,355 @@ export class PackingService {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Incremental Packing
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Create or incrementally update a KnowledgePack for a given activity.
+   *
+   * - If no ACTIVE KP exists: synthesize all segments into a new KP.
+   * - If an ACTIVE KP exists: filter truly new segments (not already in sourceSegmentIds),
+   *   synthesize with existing content as context, and update the KP.
+   * - If all segments are already packed: skip with zero counts.
+   *
+   * Returns an IncrementalPackingResult with segment/token counts.
+   */
+  async packByActivityIncremental(
+    activityId: string,
+    segments: TopicalSegment[],
+  ): Promise<IncrementalPackingResult> {
+    // Find existing ACTIVE KP for this activity
+    const existingPack = await this.packRepo.findOne({
+      where: { activityId, packType: PackType.ACTIVITY, status: PackStatus.ACTIVE },
+    });
+
+    if (!existingPack) {
+      // No existing pack — synthesize from scratch and create new KP
+      return this.createNewIncrementalPack(activityId, segments);
+    }
+
+    // Filter truly new segments (not already in the existing pack)
+    const existingSegmentIdSet = new Set(existingPack.sourceSegmentIds);
+    const newSegments = segments.filter((s) => !existingSegmentIdSet.has(s.id));
+
+    if (newSegments.length === 0) {
+      this.logger.log(
+        `[packing] No new segments for activity=${activityId}, skipping incremental update`,
+      );
+      return {
+        packId: existingPack.id,
+        segmentCount: 0,
+        tokensUsed: 0,
+        durationMs: 0,
+        isNew: false,
+      };
+    }
+
+    // Synthesize with existing content as context
+    return this.updateExistingPack(existingPack, newSegments);
+  }
+
+  /**
+   * Create a brand new KP from segments (no prior pack exists).
+   */
+  private async createNewIncrementalPack(
+    activityId: string,
+    segments: TopicalSegment[],
+  ): Promise<IncrementalPackingResult> {
+    const startTime = Date.now();
+
+    this.logger.log(
+      `[packing] Creating new incremental KP for activity=${activityId}, segments=${segments.length}`,
+    );
+
+    const structured = await this.synthesizeStructured(segments, null);
+
+    const sourceSegmentIds = segments.map((s) => s.id);
+    const totalMessageCount = segments.reduce((sum, s) => sum + s.messageCount, 0);
+    const { periodStart, periodEnd } = this.computePeriodBounds(segments);
+    const participantIds = this.collectParticipantIds(segments);
+
+    const pack = this.packRepo.create({
+      title: structured.summary.substring(0, 100),
+      packType: PackType.ACTIVITY,
+      activityId,
+      entityId: null,
+      periodStart,
+      periodEnd,
+      summary: structured.summary,
+      decisions: structured.decisions.map((d) => ({
+        what: d.what,
+        when: d.when,
+        context: d.context,
+      })),
+      openQuestions: structured.openQuestions.map((q) => ({
+        question: q.question,
+        raisedAt: q.raisedAt,
+        context: q.context,
+      })),
+      keyFacts: structured.keyFacts.map((f) => ({
+        factType: f.factType,
+        value: f.value,
+        confidence: f.confidence,
+        sourceSegmentIds,
+        lastUpdated: new Date().toISOString(),
+      })),
+      conflicts: structured.conflicts.map((c) => ({
+        type: 'fact_contradiction' as const,
+        description: `${c.fact1} vs ${c.fact2}`,
+        segmentIds: sourceSegmentIds,
+        resolved: false,
+        resolution: c.resolution,
+      })),
+      participantIds,
+      sourceSegmentIds,
+      segmentCount: segments.length,
+      totalMessageCount,
+      status: PackStatus.ACTIVE,
+      metadata: {
+        packingVersion: '2.0.0',
+      },
+    });
+
+    const saved = await this.packRepo.save(pack);
+
+    await this.markSegmentsAsPacked(segments, saved.id);
+
+    const durationMs = Date.now() - startTime;
+
+    this.logger.log(
+      `[packing] Created new incremental KP: id=${saved.id}, segments=${segments.length}, duration=${durationMs}ms`,
+    );
+
+    return {
+      packId: saved.id,
+      segmentCount: segments.length,
+      tokensUsed: structured.tokensUsed,
+      durationMs,
+      isNew: true,
+    };
+  }
+
+  /**
+   * Update an existing KP with new segments, using existing content as context.
+   */
+  private async updateExistingPack(
+    existingPack: KnowledgePack,
+    newSegments: TopicalSegment[],
+  ): Promise<IncrementalPackingResult> {
+    const startTime = Date.now();
+
+    this.logger.log(
+      `[packing] Incremental update of KP=${existingPack.id}, newSegments=${newSegments.length}`,
+    );
+
+    const existingContent = this.parseContent(existingPack);
+    const structured = await this.synthesizeStructured(newSegments, existingContent);
+
+    const newSegmentIds = newSegments.map((s) => s.id);
+    const allSourceSegmentIds = [...existingPack.sourceSegmentIds, ...newSegmentIds];
+    const totalMessageCount =
+      existingPack.totalMessageCount +
+      newSegments.reduce((sum, s) => sum + s.messageCount, 0);
+    const { periodStart, periodEnd } = this.computePeriodBounds([
+      // Virtual segments to represent existing period bounds
+      { startedAt: existingPack.periodStart, endedAt: existingPack.periodEnd } as TopicalSegment,
+      ...newSegments,
+    ]);
+    const existingParticipantIds = existingPack.participantIds || [];
+    const newParticipantIds = this.collectParticipantIds(newSegments);
+    const allParticipantIds = [...new Set([...existingParticipantIds, ...newParticipantIds])];
+
+    // Update existing pack in place
+    existingPack.summary = structured.summary;
+    existingPack.decisions = structured.decisions.map((d) => ({
+      what: d.what,
+      when: d.when,
+      context: d.context,
+    }));
+    existingPack.openQuestions = structured.openQuestions.map((q) => ({
+      question: q.question,
+      raisedAt: q.raisedAt,
+      context: q.context,
+    }));
+    existingPack.keyFacts = structured.keyFacts.map((f) => ({
+      factType: f.factType,
+      value: f.value,
+      confidence: f.confidence,
+      sourceSegmentIds: allSourceSegmentIds,
+      lastUpdated: new Date().toISOString(),
+    }));
+    existingPack.conflicts = structured.conflicts.map((c) => ({
+      type: 'fact_contradiction' as const,
+      description: `${c.fact1} vs ${c.fact2}`,
+      segmentIds: allSourceSegmentIds,
+      resolved: false,
+      resolution: c.resolution,
+    }));
+    existingPack.sourceSegmentIds = allSourceSegmentIds;
+    existingPack.segmentCount = allSourceSegmentIds.length;
+    existingPack.totalMessageCount = totalMessageCount;
+    existingPack.periodStart = periodStart;
+    existingPack.periodEnd = periodEnd;
+    existingPack.participantIds = allParticipantIds;
+    existingPack.metadata = {
+      ...existingPack.metadata,
+      packingVersion: '2.0.0',
+    };
+
+    await this.packRepo.save(existingPack);
+
+    await this.markSegmentsAsPacked(newSegments, existingPack.id);
+
+    const durationMs = Date.now() - startTime;
+
+    this.logger.log(
+      `[packing] Incremental update complete: KP=${existingPack.id}, newSegments=${newSegments.length}, duration=${durationMs}ms`,
+    );
+
+    return {
+      packId: existingPack.id,
+      segmentCount: newSegments.length,
+      tokensUsed: structured.tokensUsed,
+      durationMs,
+      isNew: false,
+    };
+  }
+
+  /**
+   * Synthesize structured KP content from segments, optionally with existing content as context.
+   */
+  private async synthesizeStructured(
+    segments: TopicalSegment[],
+    existingContent: StructuredKpContent | null,
+  ): Promise<StructuredKpContent & { tokensUsed: number }> {
+    const segmentDescriptions = segments.map((s, i) => {
+      const period = `${s.startedAt.toISOString().split('T')[0]} — ${s.endedAt.toISOString().split('T')[0]}`;
+      return (
+        `Сегмент ${i + 1}: "${s.topic}"\n` +
+        `Период: ${period}, Сообщений: ${s.messageCount}\n` +
+        (s.summary ? `Описание: ${s.summary}` : '')
+      );
+    }).join('\n\n');
+
+    let prompt: string;
+
+    if (existingContent) {
+      prompt = `
+Ты — ассистент по обновлению пакетов знаний.
+
+══════════════════════════════════════════
+СУЩЕСТВУЮЩИЙ ПАКЕТ ЗНАНИЙ
+══════════════════════════════════════════
+
+Summary: ${existingContent.summary}
+
+Ключевые факты:
+${existingContent.keyFacts.map((f) => `- [${f.factType}] ${f.value} (confidence: ${f.confidence})`).join('\n')}
+
+Решения:
+${existingContent.decisions.map((d) => `- ${d.what} (${d.when})`).join('\n')}
+
+Открытые вопросы:
+${existingContent.openQuestions.map((q) => `- ${q.question}`).join('\n')}
+
+══════════════════════════════════════════
+НОВЫЕ СЕГМЕНТЫ ДЛЯ ИНТЕГРАЦИИ
+══════════════════════════════════════════
+
+${segmentDescriptions}
+
+══════════════════════════════════════════
+ЗАДАЧА
+══════════════════════════════════════════
+
+Обнови пакет знаний, интегрировав новые сегменты с существующей информацией.
+- Обнови summary, объединив старую и новую информацию
+- Добавь новые факты, решения, вопросы
+- Разреши конфликты между старыми и новыми данными
+- Удали устаревшие открытые вопросы, если они были решены
+- Верни ПОЛНЫЙ обновлённый пакет (не только дельту)
+
+Пиши на русском языке.
+Заполни все обязательные поля JSON Schema.
+`;
+    } else {
+      prompt = `
+Ты — ассистент по консолидации знаний из обсуждений.
+
+══════════════════════════════════════════
+СЕГМЕНТЫ ДЛЯ АНАЛИЗА
+══════════════════════════════════════════
+
+${segmentDescriptions}
+
+══════════════════════════════════════════
+ЗАДАЧА
+══════════════════════════════════════════
+
+Создай структурированный пакет знаний:
+1. summary — сводка (3-5 абзацев) на русском
+2. keyFacts — важные факты с confidence (0-1)
+3. decisions — принятые решения
+4. openQuestions — нерешённые вопросы
+5. conflicts — противоречия (если есть)
+6. timeline — ключевые события по датам
+
+Пиши на русском языке.
+Заполни все обязательные поля JSON Schema.
+`;
+    }
+
+    const result = await this.claudeAgentService.call<StructuredKpContent>({
+      mode: 'oneshot',
+      taskType: 'knowledge_packing',
+      prompt,
+      model: 'sonnet',
+      schema: INCREMENTAL_PACKING_SCHEMA,
+      maxTurns: PackingService.SYNTHESIS_MAX_TURNS,
+      timeout: PackingService.SYNTHESIS_TIMEOUT_MS,
+    });
+
+    const tokensUsed = result.usage.inputTokens + result.usage.outputTokens;
+
+    if (!result.data) {
+      throw new Error('Incremental synthesis returned empty response from Claude');
+    }
+
+    return { ...result.data, tokensUsed };
+  }
+
+  /**
+   * Parse existing KP content into StructuredKpContent for use as context.
+   */
+  private parseContent(pack: KnowledgePack): StructuredKpContent {
+    return {
+      summary: pack.summary,
+      keyFacts: (pack.keyFacts || []).map((f) => ({
+        factType: f.factType,
+        value: f.value,
+        confidence: f.confidence,
+      })),
+      decisions: (pack.decisions || []).map((d) => ({
+        what: d.what,
+        when: d.when,
+        context: d.context || '',
+      })),
+      openQuestions: (pack.openQuestions || []).map((q) => ({
+        question: q.question,
+        raisedAt: q.raisedAt,
+        context: q.context || '',
+      })),
+      conflicts: (pack.conflicts || []).map((c) => ({
+        fact1: c.description.split(' vs ')[0] || c.description,
+        fact2: c.description.split(' vs ')[1] || '',
+        resolution: c.resolution || '',
+      })),
+      timeline: [],
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Pack Supersession
   // ─────────────────────────────────────────────────────────────
 
@@ -695,3 +1044,141 @@ interface CreatePackParams {
   segments: TopicalSegment[];
   participantIds: string[];
 }
+
+// ─────────────────────────────────────────────────────────────
+// Incremental Packing Types
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Structured content for a KnowledgePack — used for incremental synthesis.
+ */
+export interface StructuredKpContent {
+  summary: string;
+  keyFacts: Array<{
+    factType: string;
+    value: string;
+    confidence: number;
+  }>;
+  decisions: Array<{
+    what: string;
+    when: string;
+    context: string;
+  }>;
+  openQuestions: Array<{
+    question: string;
+    raisedAt: string;
+    context: string;
+  }>;
+  conflicts: Array<{
+    fact1: string;
+    fact2: string;
+    resolution: string;
+  }>;
+  timeline: Array<{
+    date: string;
+    event: string;
+  }>;
+}
+
+/**
+ * Result from an incremental packing operation.
+ */
+export interface IncrementalPackingResult {
+  packId: string;
+  segmentCount: number;
+  tokensUsed: number;
+  durationMs: number;
+  isNew: boolean;
+}
+
+/**
+ * JSON Schema for incremental packing synthesis.
+ * IMPORTANT: Uses raw JSON Schema, NOT z.toJSONSchema().
+ */
+const INCREMENTAL_PACKING_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: {
+      type: 'string',
+      description:
+        'Consolidated summary in Russian (3-5 paragraphs). ' +
+        'If updating existing pack, merge old and new information.',
+    },
+    keyFacts: {
+      type: 'array',
+      description: 'Important facts consolidated from segments',
+      items: {
+        type: 'object',
+        properties: {
+          factType: {
+            type: 'string',
+            description:
+              'Category: "agreement", "requirement", "status", "contact", ' +
+              '"deadline", "budget", "technical", "other"',
+          },
+          value: {
+            type: 'string',
+            description: 'The fact value as a clear statement',
+          },
+          confidence: {
+            type: 'number',
+            description: 'Confidence level 0-1',
+          },
+        },
+        required: ['factType', 'value', 'confidence'],
+      },
+    },
+    decisions: {
+      type: 'array',
+      description: 'Key decisions',
+      items: {
+        type: 'object',
+        properties: {
+          what: { type: 'string', description: 'What was decided' },
+          when: { type: 'string', description: 'When (date or context)' },
+          context: { type: 'string', description: 'Reasoning' },
+        },
+        required: ['what', 'when', 'context'],
+      },
+    },
+    openQuestions: {
+      type: 'array',
+      description: 'Unresolved questions',
+      items: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'The question' },
+          raisedAt: { type: 'string', description: 'When raised' },
+          context: { type: 'string', description: 'Why important' },
+        },
+        required: ['question', 'raisedAt', 'context'],
+      },
+    },
+    conflicts: {
+      type: 'array',
+      description: 'Contradictions between old and new information',
+      items: {
+        type: 'object',
+        properties: {
+          fact1: { type: 'string', description: 'First statement' },
+          fact2: { type: 'string', description: 'Conflicting statement' },
+          resolution: { type: 'string', description: 'Suggested resolution' },
+        },
+        required: ['fact1', 'fact2', 'resolution'],
+      },
+    },
+    timeline: {
+      type: 'array',
+      description: 'Key events in chronological order',
+      items: {
+        type: 'object',
+        properties: {
+          date: { type: 'string', description: 'Date (ISO or approximate)' },
+          event: { type: 'string', description: 'What happened' },
+        },
+        required: ['date', 'event'],
+      },
+    },
+  },
+  required: ['summary', 'keyFacts', 'decisions', 'openQuestions', 'conflicts', 'timeline'],
+};

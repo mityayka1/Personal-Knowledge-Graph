@@ -119,6 +119,24 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Дней до истечения неподтверждённых извлечённых событий',
     category: 'notification',
   },
+  // Confidence decay settings
+  {
+    key: 'factType.halfLifeDays',
+    value: JSON.stringify({
+      birthday: null,
+      location: 365,
+      position: 730,
+      company: 730,
+      skill: 1095,
+      project: 180,
+      status: 90,
+      preference: 365,
+      hobby: 730,
+      default: 365,
+    }),
+    description: 'JSON конфиг half-life в днях для каждого типа факта. null = без decay (постоянный факт). Используется при retrieval для расчёта effective confidence.',
+    category: 'decay',
+  },
 ];
 
 @Injectable()

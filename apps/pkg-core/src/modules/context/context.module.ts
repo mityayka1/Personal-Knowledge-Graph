@@ -10,6 +10,7 @@ import {
 } from '@pkg/entities';
 import { ContextController } from './context.controller';
 import { ContextService } from './context.service';
+import { GraphTraversalService } from './graph-traversal.service';
 import { EntityModule } from '../entity/entity.module';
 import { InteractionModule } from '../interaction/interaction.module';
 import { SearchModule } from '../search/search.module';
@@ -34,7 +35,7 @@ import { ContextToolsProvider } from '../claude-agent/tools';
     ClaudeAgentCoreModule,
   ],
   controllers: [ContextController],
-  providers: [ContextService, ContextToolsProvider],
-  exports: [ContextService],
+  providers: [ContextService, GraphTraversalService, ContextToolsProvider],
+  exports: [ContextService, GraphTraversalService],
 })
 export class ContextModule {}

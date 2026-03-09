@@ -12,6 +12,8 @@ import {
 import { FactFusionService } from './fact-fusion.service';
 import { normalizeFactType, getFactCategory } from '../../../common/utils/fact-validation';
 import { EntityRelationService, RelationWithContext } from '../entity-relation/entity-relation.service';
+import { getEffectiveConfidence, MIN_EFFECTIVE_CONFIDENCE, DEFAULT_HALF_LIFE_DAYS } from './confidence-decay';
+import { SettingsService } from '../../settings/settings.service';
 
 export interface CreateFactResult {
   fact: EntityFact;
@@ -43,6 +45,9 @@ export class EntityFactService {
     @Optional()
     @Inject(forwardRef(() => EntityRelationService))
     private entityRelationService: EntityRelationService | null,
+    @Optional()
+    @Inject(forwardRef(() => SettingsService))
+    private settingsService: SettingsService,
   ) {}
 
   /**
@@ -452,5 +457,48 @@ export class EntityFactService {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     return `${year}-${month}`;
+  }
+
+  /**
+   * Get facts with temporal confidence decay applied.
+   * Filters out facts below MIN_EFFECTIVE_CONFIDENCE threshold.
+   */
+  async getFactsWithDecay(
+    entityId: string,
+    halfLifeConfig?: Record<string, number | null>,
+  ): Promise<Array<EntityFact & { effectiveConfidence: number }>> {
+    const facts = await this.factRepo.find({
+      where: { entityId, validUntil: IsNull() },
+      order: { createdAt: 'DESC' },
+    });
+
+    const config = halfLifeConfig ?? await this.loadHalfLifeConfig();
+    const now = Date.now();
+
+    return facts
+      .map(fact => {
+        const validFrom = fact.validFrom ?? fact.updatedAt ?? fact.createdAt;
+        const ageDays = (now - new Date(validFrom).getTime()) / (1000 * 60 * 60 * 24);
+        const effectiveConfidence = getEffectiveConfidence({
+          baseConfidence: fact.confidence != null ? Number(fact.confidence) : 0.5,
+          factType: fact.factType,
+          ageDays,
+          halfLifeConfig: config,
+        });
+        return { ...fact, effectiveConfidence };
+      })
+      .filter(f => f.effectiveConfidence >= MIN_EFFECTIVE_CONFIDENCE)
+      .sort((a, b) => b.effectiveConfidence - a.effectiveConfidence);
+  }
+
+  private async loadHalfLifeConfig(): Promise<Record<string, number | null>> {
+    if (!this.settingsService) return DEFAULT_HALF_LIFE_DAYS;
+    try {
+      const json = await this.settingsService.getValue<string>('factType.halfLifeDays');
+      if (!json) return DEFAULT_HALF_LIFE_DAYS;
+      return typeof json === 'string' ? JSON.parse(json) : json;
+    } catch {
+      return DEFAULT_HALF_LIFE_DAYS;
+    }
   }
 }
