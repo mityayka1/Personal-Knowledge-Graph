@@ -39,7 +39,7 @@ import { ClaudeAgentCoreModule } from '../claude-agent/claude-agent-core.module'
       EntityFact,
     ]),
     ActivityModule,
-    EntityModule,
+    forwardRef(() => EntityModule),
     forwardRef(() => ExtractionModule),
     ClaudeAgentCoreModule,
   ],
