@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository, IsNull } from 'typeorm';
@@ -13,6 +13,7 @@ import {
 } from '@pkg/entities';
 import { ContextRequest, ContextResponse, SynthesizedContext, SearchResult } from '@pkg/shared';
 import { EntityService } from '../entity/entity.service';
+import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { VectorService } from '../search/vector.service';
 import { RerankerService, RerankItem } from '../search/reranker.service';
 import { EmbeddingService } from '../embedding/embedding.service';
@@ -50,6 +51,9 @@ export class ContextService {
     private claudeAgentService: ClaudeAgentService,
     private schemaLoader: SchemaLoaderService,
     private configService: ConfigService,
+    @Optional()
+    @Inject(forwardRef(() => EntityFactService))
+    private entityFactService: EntityFactService,
   ) {
     // Load tier boundaries from config (with defaults)
     this.HOT_TIER_DAYS = this.configService.get<number>('context.hotTierDays', 7);
@@ -86,11 +90,13 @@ export class ContextService {
       };
     }
 
-    // 2. PERMANENT tier: Get current facts
-    const facts = await this.factRepo.find({
-      where: { entityId, validUntil: IsNull() },
-      order: { createdAt: 'DESC' },
-    });
+    // 2. PERMANENT tier: Get current facts with confidence decay
+    const facts = this.entityFactService
+      ? await this.entityFactService.getFactsWithDecay(entityId)
+      : await this.factRepo.find({
+          where: { entityId, validUntil: IsNull() },
+          order: { createdAt: 'DESC' },
+        });
 
     // 3. HOT tier: Recent messages and transcript segments (< 7 days)
     const hotCutoff = new Date(now.getTime() - this.HOT_TIER_DAYS * 24 * 60 * 60 * 1000);
@@ -312,9 +318,13 @@ ${entity.organization ? `- Организация: ${entity.organization.name}` 
 ${taskHint}`);
     }
 
-    // PERMANENT: Facts
+    // PERMANENT: Facts (with confidence percentage if decay applied)
     const factsSection = facts.length > 0
-      ? facts.map(f => `- ${f.factType}: ${f.value || f.valueDate || 'N/A'}`).join('\n')
+      ? facts.map(f => {
+          const conf = (f as any).effectiveConfidence ?? f.confidence;
+          const confStr = conf != null ? ` [confidence: ${(Number(conf) * 100).toFixed(0)}%]` : '';
+          return `- ${f.factType}: ${f.value || f.valueDate || 'N/A'}${confStr}`;
+        }).join('\n')
       : '(нет известных фактов)';
     sections.push(`\n## PERMANENT: Facts
 ${factsSection}`);
