@@ -55,10 +55,11 @@ const EXCLUDED_STATUSES: ActivityStatus[] = [
 
 /**
  * Minimum similarity score to link a segment to an activity.
- * Matches the project matching threshold to avoid false positives
- * that would pack segments into wrong Activities.
+ * Lowered from 0.8 to 0.5 — segment topics are verbose descriptions
+ * while activity names are short labels, so token overlap is naturally low.
+ * Combined with participant filtering this prevents false positives.
  */
-const SIMILARITY_THRESHOLD = 0.8;
+const SIMILARITY_THRESHOLD = 0.5;
 
 /**
  * OrphanSegmentLinkerService — автоматическая привязка TopicalSegment к Activity.
@@ -69,7 +70,7 @@ const SIMILARITY_THRESHOLD = 0.8;
  * 1. Из сегмента получает interactionId → participants → entityIds
  * 2. Для каждого участника ищет его активные Activities (PROJECT/TASK/INITIATIVE)
  * 3. Сравнивает summary/topic сегмента с name/description Activity (Levenshtein similarity)
- * 4. Если similarity >= 0.8 — привязывает сегмент к лучшей Activity
+ * 4. Если similarity >= 0.5 — привязывает сегмент к лучшей Activity
  *
  * Phase E: Knowledge Segmentation & Packing
  */
