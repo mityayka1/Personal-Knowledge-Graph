@@ -67,10 +67,11 @@ const SIMILARITY_THRESHOLD = 0.5;
  * Сегменты без activityId ("orphans") пропускаются PackingJobService.
  * Этот сервис пытается найти наиболее подходящую Activity для каждого orphan:
  *
- * 1. Из сегмента получает interactionId → participants → entityIds
- * 2. Для каждого участника ищет его активные Activities (PROJECT/TASK/INITIATIVE)
- * 3. Сравнивает summary/topic сегмента с name/description Activity (Levenshtein similarity)
- * 4. Если similarity >= 0.5 — привязывает сегмент к лучшей Activity
+ * 1. Chat→Activity mapping — если чат однозначно связан с одной Activity
+ * 2. Из сегмента получает interactionId → participants → entityIds
+ * 3. Для каждого участника ищет его активные Activities (PROJECT/TASK/INITIATIVE)
+ * 4. Сравнивает summary/topic сегмента с name/description Activity (Levenshtein similarity)
+ * 5. Если similarity >= 0.5 — привязывает сегмент к лучшей Activity
  *
  * Phase E: Knowledge Segmentation & Packing
  */
@@ -111,7 +112,22 @@ export class OrphanSegmentLinkerService {
       return { activityId: segment.activityId, similarity: 1.0, skipReason: 'already_linked' };
     }
 
-    // 2. Resolve participant entity IDs
+    // 2. Try chat→activity mapping (fast path for single-activity chats)
+    const chatMapping = await this.linkByChatActivityMapping(segment);
+    if (chatMapping) {
+      await this.segmentRepo.update(segmentId, { activityId: chatMapping.activityId });
+      this.logger.log(
+        `[orphan-linker] Linked segment ${segmentId} → activity "${chatMapping.activityName}" ` +
+          `(${chatMapping.activityId}) via chat mapping`,
+      );
+      return {
+        activityId: chatMapping.activityId,
+        similarity: 1.0,
+        activityName: chatMapping.activityName,
+      };
+    }
+
+    // 3. Resolve participant entity IDs
     const participantEntityIds = await this.resolveParticipantEntityIds(segment);
     if (participantEntityIds.length === 0) {
       this.logger.debug(
@@ -120,7 +136,7 @@ export class OrphanSegmentLinkerService {
       return { activityId: null, similarity: 0, skipReason: 'no_participants' };
     }
 
-    // 3. Find candidate activities for these participants
+    // 4. Find candidate activities for these participants
     const candidateActivities = await this.findCandidateActivities(participantEntityIds);
     if (candidateActivities.length === 0) {
       this.logger.debug(
@@ -129,7 +145,7 @@ export class OrphanSegmentLinkerService {
       return { activityId: null, similarity: 0, skipReason: 'no_candidate_activities' };
     }
 
-    // 4. Score each activity against segment text
+    // 5. Score each activity against segment text
     const segmentText = this.buildSegmentText(segment);
     const bestMatch = this.findBestActivityMatch(segmentText, candidateActivities);
 
@@ -145,7 +161,7 @@ export class OrphanSegmentLinkerService {
       };
     }
 
-    // 5. Link segment to activity
+    // 6. Link segment to activity
     await this.segmentRepo.update(segmentId, { activityId: bestMatch.activity.id });
 
     this.logger.log(
@@ -214,6 +230,44 @@ export class OrphanSegmentLinkerService {
   // ─────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Try to link segment by chat→activity mapping.
+   *
+   * If ALL segments in a given chat belong to a single Activity, this segment
+   * likely belongs to the same Activity. This is a fast path that avoids
+   * similarity scoring entirely.
+   *
+   * Returns null if the chat maps to 0 or 2+ distinct activities.
+   */
+  private async linkByChatActivityMapping(
+    segment: TopicalSegment,
+  ): Promise<{ activityId: string; activityName: string } | null> {
+    if (!segment.chatId) return null;
+
+    // Find distinct activities already linked to segments in this chat
+    const chatActivities: Array<{ activity_id: string; activity_name: string }> =
+      await this.dataSource.query(
+        `SELECT DISTINCT a.id AS activity_id, a.name AS activity_name
+         FROM topical_segments ts
+         JOIN activities a ON a.id = ts.activity_id
+         WHERE ts.chat_id = $1
+           AND ts.activity_id IS NOT NULL
+           AND a.deleted_at IS NULL
+           AND a.status NOT IN ($2, $3)`,
+        [segment.chatId, ActivityStatus.ARCHIVED, ActivityStatus.CANCELLED],
+      );
+
+    // Only link when chat unambiguously maps to exactly one activity
+    if (chatActivities.length !== 1) {
+      return null;
+    }
+
+    return {
+      activityId: chatActivities[0].activity_id,
+      activityName: chatActivities[0].activity_name,
+    };
+  }
 
   /**
    * Resolve participant entity IDs for a segment.
