@@ -461,6 +461,11 @@ ${segmentContext}
         );
         // Continue with next batch
       }
+
+      // Rate limiting between batches to avoid API rate limits
+      if (i + LLM_BATCH_SIZE < segments.length) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
     }
 
     this.logger.log(`[orphan-linker] LLM classified ${totalLinked}/${segments.length} segments`);
