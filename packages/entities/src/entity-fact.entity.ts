@@ -13,50 +13,38 @@ import { EntityRecord } from './entity.entity';
 import { Interaction } from './interaction.entity';
 
 export enum FactType {
-  // Personal
-  BIRTHDAY = 'birthday',
-  NAME_FULL = 'name_full',
-  NICKNAME = 'nickname',
-
-  // Contact
-  PHONE_WORK = 'phone_work',
-  PHONE_PERSONAL = 'phone_personal',
-  EMAIL_WORK = 'email_work',
-  EMAIL_PERSONAL = 'email_personal',
-  ADDRESS = 'address',
-  TELEGRAM = 'telegram',
-
-  // Professional
+  // PROFESSIONAL
   POSITION = 'position',
-  DEPARTMENT = 'department',
   COMPANY = 'company',
+  DEPARTMENT = 'department',
   SPECIALIZATION = 'specialization',
+  SKILL = 'skill',
+  EDUCATION = 'education',
+  ROLE = 'role',
 
-  // Business (Organization)
-  INN = 'inn',
-  KPP = 'kpp',
-  OGRN = 'ogrn',
-  LEGAL_ADDRESS = 'legal_address',
-  ACTUAL_ADDRESS = 'actual_address',
-  BANK_ACCOUNT = 'bank_account',
-
-  // Preferences
-  COMMUNICATION_PREFERENCE = 'communication_preference',
-  TIMEZONE = 'timezone',
+  // PERSONAL
+  BIRTHDAY = 'birthday',
+  LOCATION = 'location',
+  FAMILY = 'family',
+  HOBBY = 'hobby',
   LANGUAGE = 'language',
+  HEALTH = 'health',
+  STATUS = 'status',
 
-  // AI-generated
-  DAILY_SUMMARY = 'daily_summary',
+  // PREFERENCES
+  COMMUNICATION = 'communication',
+  PREFERENCE = 'preference',
+
+  // BUSINESS
+  INN = 'inn',
+  LEGAL_ADDRESS = 'legal_address',
 }
 
 export enum FactCategory {
-  PERSONAL = 'personal',
-  CONTACT = 'contact',
   PROFESSIONAL = 'professional',
-  BUSINESS = 'business',
-  LEGAL = 'legal',
-  FINANCIAL = 'financial',
+  PERSONAL = 'personal',
   PREFERENCES = 'preferences',
+  BUSINESS = 'business',
 }
 
 export enum FactSource {
@@ -93,7 +81,7 @@ export class EntityFact {
 
   @Column({ name: 'fact_type', length: 50 })
   @Index()
-  factType: FactType | string;
+  factType: FactType;
 
   @Column({ length: 50 })
   category: FactCategory;
