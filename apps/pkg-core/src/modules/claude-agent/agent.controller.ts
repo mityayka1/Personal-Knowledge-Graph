@@ -606,10 +606,10 @@ export class AgentController {
       };
     }
 
-    // 2. Create fact with daily_summary type
+    // 2. Create fact with status type (daily summary)
     try {
       const fact = await this.entityFactService.create(owner.id, {
-        type: FactType.DAILY_SUMMARY,
+        type: FactType.STATUS,
         category: FactCategory.PERSONAL,
         value: session.answer.slice(0, FACT_VALUE_PREVIEW_LENGTH),
         valueJson: {

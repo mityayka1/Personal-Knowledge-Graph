@@ -22,6 +22,7 @@ import { FactFusionService } from '../../entity/entity-fact/fact-fusion.service'
 import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
 import { CreateFactDto } from '../../entity/dto/create-entity.dto';
 import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
+import { normalizeFactType, getFactCategory } from '../../../common/utils/fact-validation';
 import {
   DeduplicationGatewayService,
   DedupAction,
@@ -454,7 +455,12 @@ export class ExtractionToolsProvider {
 Если факт связан с конкретным проектом или делом — укажи activityId. Используй find_activity для поиска проекта.`,
       {
         entityId: z.string().uuid().describe('UUID сущности-владельца факта'),
-        factType: z.string().describe('Тип факта (position, company, phone, email, etc.)'),
+        factType: z.enum([
+          'position', 'company', 'department', 'specialization', 'skill', 'education', 'role',
+          'birthday', 'location', 'family', 'hobby', 'language', 'health', 'status',
+          'communication', 'preference',
+          'inn', 'legal_address',
+        ]).describe('Тип факта: position (должность), company (компания), department (отдел), specialization (специализация), skill (навык), education (образование), role (роль), birthday (день рождения), location (местоположение), family (семья), hobby (хобби), language (язык), health (здоровье), status (статус), communication (предпочтения общения), preference (предпочтения), inn (ИНН), legal_address (юр. адрес)'),
         value: z.string().describe('Значение факта на русском языке'),
         confidence: z.number().min(0).max(1).describe('Уверенность в факте от 0 до 1'),
         sourceQuote: z.string().max(200).describe('Цитата из сообщения (до 200 символов)'),
@@ -464,9 +470,9 @@ export class ExtractionToolsProvider {
           .optional()
           .describe('UUID активности/проекта, к которому относится факт. Используй find_activity для поиска.'),
         category: z
-          .enum(['professional', 'personal', 'contact', 'preferences'])
+          .enum(['professional', 'personal', 'preferences', 'business'])
           .optional()
-          .describe('Категория факта'),
+          .describe('Категория факта (auto-derived from factType if omitted)'),
       },
       async (args) => {
         if (!this.draftExtractionService) {
@@ -1410,30 +1416,8 @@ export class ExtractionToolsProvider {
    * Mirrors DraftExtractionService.inferFactCategory().
    */
   private inferFactCategory(factType: string): FactCategory {
-    const categoryMap: Record<string, FactCategory> = {
-      // Personal
-      birthday: FactCategory.PERSONAL,
-      name_full: FactCategory.PERSONAL,
-      nickname: FactCategory.PERSONAL,
-      // Contact
-      phone: FactCategory.CONTACT,
-      phone_work: FactCategory.CONTACT,
-      phone_personal: FactCategory.CONTACT,
-      email: FactCategory.CONTACT,
-      email_work: FactCategory.CONTACT,
-      email_personal: FactCategory.CONTACT,
-      address: FactCategory.CONTACT,
-      telegram: FactCategory.CONTACT,
-      // Professional
-      position: FactCategory.PROFESSIONAL,
-      department: FactCategory.PROFESSIONAL,
-      company: FactCategory.PROFESSIONAL,
-      specialization: FactCategory.PROFESSIONAL,
-      education: FactCategory.PROFESSIONAL,
-      // Location
-      location: FactCategory.PERSONAL,
-    };
-
-    return categoryMap[factType.toLowerCase()] ?? FactCategory.PERSONAL;
+    const normalized = normalizeFactType(factType);
+    if (normalized) return getFactCategory(normalized);
+    return FactCategory.PERSONAL;
   }
 }

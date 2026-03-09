@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
-import { EntityFact } from '@pkg/entities';
+import { EntityFact, FactType } from '@pkg/entities';
 import { EmbeddingService } from '../embedding/embedding.service';
 import {
   SEMANTIC_SIMILARITY_THRESHOLD,
@@ -60,7 +60,7 @@ export class FactDeduplicationService {
     const existingFacts = await this.factRepo.find({
       where: {
         entityId,
-        factType: newFact.factType,
+        factType: newFact.factType as FactType,
         validUntil: IsNull(), // Only active facts
       },
       order: { createdAt: 'DESC' },

@@ -47,6 +47,7 @@ import { CreateFactDto } from '../entity/dto/create-entity.dto';
 import { CreateFactResult } from '../entity/entity-fact/entity-fact.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { DeduplicationGatewayService, DedupAction } from './dedup-gateway.service';
+import { normalizeFactType, getFactCategory } from '../../common/utils/fact-validation';
 
 /**
  * Input for creating draft entities with pending approvals.
@@ -343,14 +344,19 @@ export class DraftExtractionService {
     // Pass 3: Create all approved draft facts
     for (const { fact, embedding } of factsToCreate) {
       try {
-        const { entity, approval } = await this.createDraftFact(
+        const draftResult = await this.createDraftFact(
           fact, input, batchId, embedding,
         );
 
-        result.approvals.push(approval);
+        if (!draftResult) {
+          result.errors.push({ item: `fact:${fact.factType}:${fact.value}`, error: `Unknown fact type "${fact.factType}"` });
+          continue;
+        }
+
+        result.approvals.push(draftResult.approval);
         result.counts.facts++;
         this.logger.debug(
-          `Created draft fact: ${entity.factType}="${entity.value}" (${entity.id})`,
+          `Created draft fact: ${draftResult.entity.factType}="${draftResult.entity.value}" (${draftResult.entity.id})`,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
@@ -993,14 +999,20 @@ export class DraftExtractionService {
     input: DraftExtractionInput,
     batchId: string,
     embedding?: number[],
-  ): Promise<{ entity: EntityFact; approval: PendingApproval }> {
-    // Determine fact category from fact type
-    const category = this.inferFactCategory(fact.factType);
+  ): Promise<{ entity: EntityFact; approval: PendingApproval } | null> {
+    // Normalize fact type to canonical enum value
+    const normalizedType = normalizeFactType(fact.factType);
+    if (!normalizedType) {
+      this.logger.debug(`Skipping fact with unknown type "${fact.factType}"`);
+      return null;
+    }
+
+    const category = getFactCategory(normalizedType);
 
     // Create draft EntityFact — with embedding for future semantic dedup
     const entity = this.factRepo.create({
       entityId: fact.entityId,
-      factType: fact.factType,
+      factType: normalizedType,
       category,
       value: fact.value,
       source: FactSource.EXTRACTED,
@@ -2058,37 +2070,9 @@ export class DraftExtractionService {
    * Infer fact category from fact type.
    */
   private inferFactCategory(factType: string): FactCategory {
-    const categoryMap: Record<string, FactCategory> = {
-      // Personal
-      birthday: FactCategory.PERSONAL,
-      name_full: FactCategory.PERSONAL,
-      nickname: FactCategory.PERSONAL,
-      // Contact
-      phone_work: FactCategory.CONTACT,
-      phone_personal: FactCategory.CONTACT,
-      email_work: FactCategory.CONTACT,
-      email_personal: FactCategory.CONTACT,
-      address: FactCategory.CONTACT,
-      telegram: FactCategory.CONTACT,
-      // Professional
-      position: FactCategory.PROFESSIONAL,
-      department: FactCategory.PROFESSIONAL,
-      company: FactCategory.PROFESSIONAL,
-      specialization: FactCategory.PROFESSIONAL,
-      // Business
-      inn: FactCategory.BUSINESS,
-      kpp: FactCategory.BUSINESS,
-      ogrn: FactCategory.BUSINESS,
-      legal_address: FactCategory.BUSINESS,
-      actual_address: FactCategory.BUSINESS,
-      bank_account: FactCategory.FINANCIAL,
-      // Preferences
-      communication_preference: FactCategory.PREFERENCES,
-      timezone: FactCategory.PREFERENCES,
-      language: FactCategory.PREFERENCES,
-    };
-
-    return categoryMap[factType.toLowerCase()] ?? FactCategory.PERSONAL;
+    const normalized = normalizeFactType(factType);
+    if (normalized) return getFactCategory(normalized);
+    return FactCategory.PERSONAL;
   }
 
   private mapCommitmentPriority(priority?: string): CommitmentPriority {

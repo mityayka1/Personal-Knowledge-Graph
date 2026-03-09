@@ -1,9 +1,11 @@
 import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
+import { FactType } from '@pkg/entities';
 import { PendingFactService } from '../resolution/pending-fact/pending-fact.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { EntityFactService } from '../entity/entity-fact/entity-fact.service';
 import { EntityService } from '../entity/entity.service';
 import { ExtractionToolsProvider, EXTRACTION_MCP_NAME } from './tools/extraction-tools.provider';
+import { normalizeFactType } from '../../common/utils/fact-validation';
 
 export interface ExtractedFact {
   factType: string;
@@ -36,6 +38,7 @@ export interface AgentExtractionResult {
 }
 
 // JSON Schema for structured output
+const FACT_TYPE_ENUM = Object.values(FactType) as string[];
 const FACTS_SCHEMA = {
   type: 'object',
   properties: {
@@ -44,7 +47,11 @@ const FACTS_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          factType: { type: 'string' },
+          factType: {
+            type: 'string',
+            enum: FACT_TYPE_ENUM,
+            description: 'Тип факта: position, company, department, specialization, skill, education, role, birthday, location, family, hobby, language, health, status, communication, preference, inn, legal_address',
+          },
           value: { type: 'string' },
           confidence: { type: 'number' },
           sourceQuote: { type: 'string' },
@@ -178,15 +185,23 @@ export class FactExtractionService {
 
       const rawFacts = data.facts || [];
 
-      // Filter and normalize facts
+      // Filter, normalize and validate facts against canonical FactType enum
       const validFacts = rawFacts
         .filter(f => f.factType && f.value && typeof f.confidence === 'number' && f.confidence >= 0.6)
-        .map(f => ({
-          factType: f.factType.toLowerCase(),
-          value: String(f.value).trim(),
-          confidence: Math.min(1, Math.max(0, f.confidence)),
-          sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
-        }));
+        .map(f => {
+          const normalized = normalizeFactType(f.factType);
+          if (!normalized) {
+            this.logger.debug(`Skipping fact with unknown type "${f.factType}"`);
+            return null;
+          }
+          return {
+            factType: normalized,
+            value: String(f.value).trim(),
+            confidence: Math.min(1, Math.max(0, f.confidence)),
+            sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
+          };
+        })
+        .filter((f): f is NonNullable<typeof f> => f !== null);
 
       // Try to save extracted facts as pending (don't fail if save fails)
       for (const fact of validFacts) {
@@ -281,15 +296,23 @@ export class FactExtractionService {
 
       const rawFacts = data.facts || [];
 
-      // Filter and normalize facts
+      // Filter, normalize and validate facts against canonical FactType enum
       const validFacts = rawFacts
         .filter(f => f.factType && f.value && typeof f.confidence === 'number' && f.confidence >= 0.6)
-        .map(f => ({
-          factType: f.factType.toLowerCase(),
-          value: String(f.value).trim(),
-          confidence: Math.min(1, Math.max(0, f.confidence)),
-          sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
-        }));
+        .map(f => {
+          const normalized = normalizeFactType(f.factType);
+          if (!normalized) {
+            this.logger.debug(`[extractFactsBatch] Skipping fact with unknown type "${f.factType}"`);
+            return null;
+          }
+          return {
+            factType: normalized,
+            value: String(f.value).trim(),
+            confidence: Math.min(1, Math.max(0, f.confidence)),
+            sourceQuote: String(f.sourceQuote || '').substring(0, SOURCE_QUOTE_MAX_LENGTH),
+          };
+        })
+        .filter((f): f is NonNullable<typeof f> => f !== null);
 
       this.logger.log(`[extractFactsBatch] Raw facts: ${rawFacts.length}, valid facts: ${validFacts.length}`);
 

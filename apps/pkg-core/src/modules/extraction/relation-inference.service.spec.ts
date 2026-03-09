@@ -9,6 +9,7 @@ import {
   EntityFact,
   EntityRecord,
   EntityType,
+  FactType,
   RelationType,
   RelationSource,
   EntityRelation,
@@ -29,7 +30,7 @@ describe('RelationInferenceService', () => {
   const mockCompanyFact: Partial<EntityFact> = {
     id: 'fact-uuid-1',
     entityId: 'person-uuid-1',
-    factType: 'company',
+    factType: FactType.COMPANY,
     value: 'Сбербанк',  // Должно совпадать с mockOrgEntity.name для similarity > 0.7
     confidence: 0.85,
     validUntil: null,

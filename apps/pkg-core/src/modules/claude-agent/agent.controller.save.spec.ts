@@ -33,7 +33,7 @@ describe('AgentController - saveRecallSession', () => {
 
   const mockFact = {
     id: 'fact-uuid-123',
-    type: FactType.DAILY_SUMMARY,
+    type: FactType.STATUS,
     category: FactCategory.PERSONAL,
     value: 'Test answer for saving',
     source: FactSource.EXTRACTED,
@@ -105,7 +105,7 @@ describe('AgentController - saveRecallSession', () => {
       });
 
       expect(entityFactService.create).toHaveBeenCalledWith('owner-uuid', {
-        type: FactType.DAILY_SUMMARY,
+        type: FactType.STATUS,
         category: FactCategory.PERSONAL,
         value: expect.any(String),
         valueJson: expect.objectContaining({
