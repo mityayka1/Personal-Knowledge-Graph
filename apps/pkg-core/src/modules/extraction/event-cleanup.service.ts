@@ -7,6 +7,7 @@ import {
   ExtractedEventStatus,
   ExtractedEventType,
   CommitmentType,
+  ActivityStatus,
 } from '@pkg/entities';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { CommitmentService } from '../activity/commitment.service';
@@ -242,18 +243,23 @@ ${eventsList}
       order: { createdAt: 'ASC' },
     });
 
-    // Load all activities
-    const { items: activities } = await this.activityService.findAll({ limit: 1000 });
+    // Load only ACTIVE activities (not archived/completed) to keep prompt small
+    const { items: activities } = await this.activityService.findAll({
+      status: ActivityStatus.ACTIVE,
+      limit: 500,
+    });
 
     if (events.length === 0 || activities.length === 0) {
       return { totalEvents: events.length, matched: 0, unmatched: 0, commitmentsCreated: 0, errors: [] };
     }
 
-    // Format activities context (sent with every batch)
+    this.logger.log(`Phase B: ${events.length} events, ${activities.length} active activities`);
+
+    // Format activities context — compact format to stay within Haiku token limits
     const activitiesContext = activities.map((a) => {
-      const desc = a.description ? ` — ${a.description.slice(0, 100)}` : '';
-      const client = a.clientEntity?.name ? ` (клиент: ${a.clientEntity.name})` : '';
-      return `- id: ${a.id} | ${a.name}${client} [${a.activityType}, ${a.status}]${desc}`;
+      const desc = a.description ? ` — ${a.description.slice(0, 60)}` : '';
+      const client = a.clientEntity?.name ? ` (${a.clientEntity.name})` : '';
+      return `- ${a.id} | ${a.name}${client} [${a.activityType}]${desc}`;
     }).join('\n');
 
     const result: PhaseBResult = {
@@ -298,7 +304,7 @@ ${eventsList}
           model: 'haiku',
           schema: PHASE_B_SCHEMA,
           maxTurns: 10,
-          timeout: 120_000,
+          timeout: 180_000,
         });
 
         if (data?.matches) {
@@ -364,7 +370,11 @@ ${eventsList}
   private async deduplicateActivities(dryRun: boolean): Promise<PhaseCResult> {
     this.logger.log('Phase C: Deduplicating activities...');
 
-    const { items: activities } = await this.activityService.findAll({ limit: 1000 });
+    // Phase C only processes ACTIVE activities — no point deduplicating archived/completed
+    const { items: activities } = await this.activityService.findAll({
+      status: ActivityStatus.ACTIVE,
+      limit: 500,
+    });
 
     if (activities.length === 0) {
       return { totalActivities: 0, mergedGroups: 0, totalMerged: 0, archived: 0, errors: [] };
@@ -409,7 +419,7 @@ ${activitiesList}
           model: 'haiku',
           schema: PHASE_C_SCHEMA,
           maxTurns: 10,
-          timeout: 120_000,
+          timeout: 180_000,
         });
 
         if (data && !dryRun) {

@@ -1,5 +1,6 @@
 import { Controller, Post, Body, Param, Get, Query, NotFoundException, BadRequestException, Inject, forwardRef, Logger, Optional } from '@nestjs/common';
 import { PendingApprovalStatus } from '@pkg/entities';
+import { DataSource } from 'typeorm';
 import { FactExtractionService } from './fact-extraction.service';
 import { RelationInferenceService, InferenceResult } from './relation-inference.service';
 import { DailySynthesisExtractionService } from './daily-synthesis-extraction.service';
@@ -67,6 +68,7 @@ export class ExtractionController {
     private pendingApprovalService: PendingApprovalService,
     @Inject(forwardRef(() => JobService))
     private jobService: JobService,
+    private dataSource: DataSource,
   ) {}
 
   @Post('facts')
@@ -413,6 +415,178 @@ export class ExtractionController {
       interactionsQueued,
       skippedNoInteraction,
       errors: allErrors.length > 0 ? allErrors : undefined,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Reprocess Failed Extractions
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Re-queue extraction for interactions that had only failed extraction runs.
+   * POST /extraction/reprocess-failed?from=2026-03-03&to=2026-03-06
+   *
+   * Use case: API outage or timeout caused extraction failures for a date range.
+   * Finds interactions with failed claude_agent_runs (unified_extraction/group_extraction)
+   * that have NO successful runs, loads their messages, and re-queues via BullMQ.
+   *
+   * @param from - Start date (ISO 8601, required)
+   * @param to - End date (ISO 8601, required)
+   * @param taskType - Filter by task type: 'unified_extraction', 'group_extraction', or both (default)
+   * @param dryRun - If 'true', only report what would be re-queued
+   * @param delayMs - Delay between queued jobs in ms (default: 2000)
+   */
+  @Post('reprocess-failed')
+  async reprocessFailed(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('taskType') taskType?: string,
+    @Query('dryRun') dryRun?: string,
+    @Query('delayMs') delayMs?: string,
+  ) {
+    // Validate dates
+    if (!from || !to) {
+      throw new BadRequestException('Both "from" and "to" query params are required (ISO 8601 dates)');
+    }
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      throw new BadRequestException('"from" and "to" must be valid ISO 8601 dates');
+    }
+
+    // Set toDate to end of day
+    toDate.setHours(23, 59, 59, 999);
+
+    const isDryRun = dryRun === 'true';
+    const delay = delayMs ? parseInt(delayMs, 10) : 2000;
+    const taskTypes = taskType
+      ? [taskType]
+      : ['unified_extraction', 'group_extraction'];
+
+    this.logger.log(
+      `[reprocessFailed] Starting: from=${from}, to=${to}, taskTypes=${taskTypes.join(',')}, dryRun=${isDryRun}, delayMs=${delay}`,
+    );
+
+    // 1. Find interactions with ONLY failed extraction runs (no successes)
+    const failedInteractions: Array<{ reference_id: string; task_type: string; fail_count: number }> =
+      await this.dataSource.query(
+        `
+        SELECT
+          r.reference_id,
+          r.task_type,
+          COUNT(*) as fail_count
+        FROM claude_agent_runs r
+        WHERE r.task_type = ANY($1)
+          AND r.reference_type = 'interaction'
+          AND r.reference_id IS NOT NULL
+          AND r.created_at >= $2
+          AND r.created_at <= $3
+          AND r.success = false
+          AND NOT EXISTS (
+            SELECT 1 FROM claude_agent_runs s
+            WHERE s.reference_id = r.reference_id
+              AND s.task_type = ANY($1)
+              AND s.success = true
+          )
+        GROUP BY r.reference_id, r.task_type
+        ORDER BY r.reference_id
+        `,
+        [taskTypes, fromDate, toDate],
+      );
+
+    if (failedInteractions.length === 0) {
+      this.logger.log('[reprocessFailed] No failed-only interactions found');
+      return {
+        interactionsFound: 0,
+        interactionsQueued: 0,
+        dryRun: isDryRun,
+      };
+    }
+
+    // Deduplicate by reference_id (same interaction may have both unified + group failures)
+    const uniqueInteractionIds = [...new Set(failedInteractions.map(f => f.reference_id))];
+    const totalFailures = failedInteractions.reduce((sum, f) => sum + Number(f.fail_count), 0);
+
+    this.logger.log(
+      `[reprocessFailed] Found ${uniqueInteractionIds.length} interactions with ${totalFailures} total failures`,
+    );
+
+    if (isDryRun) {
+      return {
+        dryRun: true,
+        interactionsFound: uniqueInteractionIds.length,
+        totalFailedRuns: totalFailures,
+        interactionsQueued: 0,
+        details: failedInteractions.map(f => ({
+          interactionId: f.reference_id,
+          taskType: f.task_type,
+          failCount: Number(f.fail_count),
+        })),
+      };
+    }
+
+    // 2. For each interaction: load messages, convert, queue with staggered delay
+    let interactionsQueued = 0;
+    const queueErrors: string[] = [];
+
+    for (let idx = 0; idx < uniqueInteractionIds.length; idx++) {
+      const interactionId = uniqueInteractionIds[idx];
+
+      try {
+        const messages = await this.messageService.findByInteraction(interactionId, 1000);
+
+        if (messages.length === 0) {
+          queueErrors.push(`Interaction ${interactionId}: no messages found`);
+          continue;
+        }
+
+        const messageData: MessageData[] = messages
+          .filter(m => m.content && m.content.trim().length > 0)
+          .map(m => ({
+            id: m.id,
+            content: m.content!,
+            timestamp: m.timestamp.toISOString(),
+            isOutgoing: m.isOutgoing,
+            replyToSourceMessageId: m.replyToSourceMessageId ?? undefined,
+            topicName: m.topicName ?? undefined,
+            senderEntityId: m.senderEntityId ?? undefined,
+          }));
+
+        if (messageData.length === 0) {
+          queueErrors.push(`Interaction ${interactionId}: no messages with content`);
+          continue;
+        }
+
+        const entityId = messageData.find(m => m.senderEntityId)?.senderEntityId || '';
+
+        await this.jobService.queueExtractionDirect({
+          interactionId,
+          entityId,
+          messages: messageData,
+        });
+
+        interactionsQueued++;
+
+        // Stagger jobs to avoid overwhelming the API
+        if (idx < uniqueInteractionIds.length - 1 && delay > 0) {
+          await new Promise(r => setTimeout(r, delay));
+        }
+      } catch (error) {
+        queueErrors.push(`Interaction ${interactionId}: ${(error as Error).message}`);
+      }
+    }
+
+    this.logger.log(
+      `[reprocessFailed] Complete: queued=${interactionsQueued}/${uniqueInteractionIds.length}, errors=${queueErrors.length}`,
+    );
+
+    return {
+      dryRun: false,
+      interactionsFound: uniqueInteractionIds.length,
+      totalFailedRuns: totalFailures,
+      interactionsQueued,
+      errors: queueErrors.length > 0 ? queueErrors : undefined,
     };
   }
 }
