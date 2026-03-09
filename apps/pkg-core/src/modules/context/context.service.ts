@@ -19,6 +19,11 @@ import { RerankerService, RerankItem } from '../search/reranker.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { ClaudeAgentService } from '../claude-agent/claude-agent.service';
 import { SchemaLoaderService } from '../claude-agent/schema-loader.service';
+import {
+  GraphTraversalService,
+  EntityTraversalResult,
+  ActivityHierarchyResult,
+} from './graph-traversal.service';
 
 @Injectable()
 export class ContextService {
@@ -54,6 +59,8 @@ export class ContextService {
     @Optional()
     @Inject(forwardRef(() => EntityFactService))
     private entityFactService: EntityFactService,
+    @Optional()
+    private graphTraversalService: GraphTraversalService,
   ) {
     // Load tier boundaries from config (with defaults)
     this.HOT_TIER_DAYS = this.configService.get<number>('context.hotTierDays', 7);
@@ -140,6 +147,14 @@ export class ContextService {
       this.logger.warn(`Knowledge packs retrieval failed for entity ${entityId}: ${error}`);
     }
 
+    // 5.6. GRAPH tier: Related entities and activity hierarchy
+    let graphContext = '';
+    try {
+      graphContext = await this.buildGraphContext(entityId);
+    } catch (error) {
+      this.logger.warn(`Graph context retrieval failed for entity ${entityId}: ${error}`);
+    }
+
     // 6. RELEVANT: Vector search for task_hint
     let relevantChunks: SearchResult[] = [];
     if (taskHint) {
@@ -156,6 +171,7 @@ export class ContextService {
       profile,
       knowledgePacks,
       relevantChunks,
+      graphContext,
       taskHint,
     });
 
@@ -300,9 +316,10 @@ export class ContextService {
     profile: EntityRelationshipProfile | null;
     knowledgePacks: KnowledgePack[];
     relevantChunks: SearchResult[];
+    graphContext?: string;
     taskHint?: string;
   }): string {
-    const { entity, facts, hotMessages, hotSegments, warmSummaries, profile, knowledgePacks, relevantChunks, taskHint } = params;
+    const { entity, facts, hotMessages, hotSegments, warmSummaries, profile, knowledgePacks, relevantChunks, graphContext, taskHint } = params;
 
     const sections: string[] = [];
 
@@ -348,6 +365,11 @@ ${factsSection}`);
 ${milestonesList || '  (нет)'}
 - Key Decisions:
 ${decisionsList || '  (нет)'}`);
+    }
+
+    // GRAPH: Related entities and activity hierarchy
+    if (graphContext) {
+      sections.push(`\n${graphContext}`);
     }
 
     // KNOWLEDGE: Consolidated knowledge packs
@@ -512,6 +534,85 @@ ${chunksSection}`);
     }
 
     return sections.join('\n');
+  }
+
+  /**
+   * Build graph context: related entities (2 hops) and their key facts.
+   * Returns markdown-style text or empty string if service unavailable.
+   */
+  private async buildGraphContext(entityId: string): Promise<string> {
+    if (!this.graphTraversalService) return '';
+
+    const result: EntityTraversalResult =
+      await this.graphTraversalService.traverseEntityRelations(entityId, {
+        maxHops: 2,
+        maxRelated: 5,
+      });
+
+    if (result.entities.length === 0) return '';
+
+    const lines: string[] = ['## GRAPH: Related Entities'];
+
+    for (const entity of result.entities) {
+      const penaltyStr = entity.hopPenalty < 1 ? ` [relevance: ${(entity.hopPenalty * 100).toFixed(0)}%]` : '';
+      lines.push(`### ${entity.entityName} (${entity.relationType}/${entity.role}, hop ${entity.hop})${penaltyStr}`);
+
+      if (entity.facts.length > 0) {
+        for (const fact of entity.facts) {
+          const confStr = fact.confidence != null ? ` [${(Number(fact.confidence) * 100).toFixed(0)}%]` : '';
+          lines.push(`- ${fact.factType}: ${fact.value || 'N/A'}${confStr}`);
+        }
+      } else {
+        lines.push('- (нет известных фактов)');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Build activity hierarchy context: parent chain, children, knowledge packs.
+   * Returns markdown-style text or empty string.
+   */
+  async buildActivityHierarchyContext(activityId: string): Promise<string> {
+    if (!this.graphTraversalService) return '';
+
+    const result: ActivityHierarchyResult =
+      await this.graphTraversalService.traverseActivityHierarchy(activityId);
+
+    const lines: string[] = [];
+
+    // Parent chain (breadcrumb)
+    if (result.parents.length > 0) {
+      const breadcrumb = result.parents
+        .map(p => `${p.name} (${p.activityType})`)
+        .join(' > ');
+      lines.push(`**Иерархия:** ${breadcrumb}`);
+    }
+
+    // Children
+    if (result.children.length > 0) {
+      lines.push(`**Подзадачи (${result.children.length}):**`);
+      for (const child of result.children.slice(0, 10)) {
+        lines.push(`- ${child.name} (${child.activityType})`);
+      }
+    }
+
+    // Knowledge packs key facts
+    if (result.knowledgePacks.length > 0) {
+      lines.push(`**Знания (${result.knowledgePacks.length} пакетов):**`);
+      for (const kp of result.knowledgePacks.slice(0, 5)) {
+        lines.push(`- ${kp.title}: ${kp.summary.slice(0, 150)}`);
+        if (kp.decisions.length > 0) {
+          lines.push(`  Решения: ${kp.decisions.slice(0, 3).map(d => d.what).join('; ')}`);
+        }
+        if (kp.openQuestions.length > 0) {
+          lines.push(`  Вопросы: ${kp.openQuestions.slice(0, 2).map(q => q.question).join('; ')}`);
+        }
+      }
+    }
+
+    return lines.join('\n');
   }
 
   /**
