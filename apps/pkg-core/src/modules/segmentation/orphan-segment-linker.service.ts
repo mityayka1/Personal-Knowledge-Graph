@@ -33,6 +33,8 @@ export interface BulkLinkResult {
   linked: number;
   /** Total orphan segments processed */
   total: number;
+  /** Number of segments skipped (already linked before processing) */
+  skipped: number;
   /** Number of errors encountered */
   errors: number;
 }
@@ -209,12 +211,13 @@ export class OrphanSegmentLinkerService {
     const total = orphanRows.length;
     if (total === 0) {
       this.logger.log('[orphan-linker] No orphan segments found');
-      return { linked: 0, total: 0, errors: 0 };
+      return { linked: 0, total: 0, skipped: 0, errors: 0 };
     }
 
     this.logger.log(`[orphan-linker] Processing ${total} orphan segments`);
 
     let linked = 0;
+    let skipped = 0;
     let errors = 0;
     const remainingOrphanIds: string[] = [];
 
@@ -224,6 +227,8 @@ export class OrphanSegmentLinkerService {
         const result = await this.linkOrphanSegment(id);
         if (result.activityId && !result.skipReason) {
           linked++;
+        } else if (result.skipReason === 'already_linked') {
+          skipped++;
         } else if (!result.activityId) {
           remainingOrphanIds.push(id);
         }
@@ -282,10 +287,10 @@ export class OrphanSegmentLinkerService {
     }
 
     this.logger.log(
-      `[orphan-linker] Completed: ${linked}/${total} linked, ${errors} errors`,
+      `[orphan-linker] Completed: ${linked}/${total} linked, ${skipped} skipped, ${errors} errors`,
     );
 
-    return { linked, total, errors };
+    return { linked, total, skipped, errors };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -362,6 +367,7 @@ export class OrphanSegmentLinkerService {
     // Process in batches to respect context window limits
     for (let i = 0; i < segments.length; i += LLM_BATCH_SIZE) {
       const batch = segments.slice(i, i + LLM_BATCH_SIZE);
+      const segmentIdSet = new Set(batch.map((s) => s.id));
 
       const segmentContext = batch
         .map(
@@ -380,7 +386,7 @@ ${activityContext}
 ${segmentContext}
 
 Для каждого сегмента определи наиболее подходящую Activity.
-Если сегмент не подходит ни к одной Activity (например, личная беседа, не связанная с работой), установи activityId = null.
+Если сегмент не подходит ни к одной Activity (например, личная беседа, не связанная с работой), установи activityId = "none".
 Верни confidence от 0 до 1, где 1 = полная уверенность.`;
 
       try {
@@ -406,8 +412,8 @@ ${segmentContext}
                   properties: {
                     segmentId: { type: 'string', description: 'UUID сегмента' },
                     activityId: {
-                      type: ['string', 'null'],
-                      description: 'UUID Activity или null если не подходит',
+                      type: 'string',
+                      description: 'UUID Activity или строка "none" если сегмент не подходит ни к одной Activity',
                     },
                     confidence: {
                       type: 'number',
@@ -433,8 +439,17 @@ ${segmentContext}
         }
 
         for (const classification of result.data.classifications) {
+          // Guard: verify segmentId belongs to this batch
+          if (!segmentIdSet.has(classification.segmentId)) {
+            this.logger.warn(
+              `[orphan-linker] LLM returned unknown segmentId ${classification.segmentId}, skipping`,
+            );
+            continue;
+          }
+
           if (
             classification.activityId &&
+            classification.activityId !== 'none' &&
             classification.confidence >= LLM_CONFIDENCE_THRESHOLD &&
             activityIdSet.has(classification.activityId)
           ) {

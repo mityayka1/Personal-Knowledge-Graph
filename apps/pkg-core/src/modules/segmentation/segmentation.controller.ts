@@ -147,13 +147,6 @@ export class SegmentationController {
     return { status: 'completed', ...result };
   }
 
-  @Post('relink-all-orphans')
-  async relinkAllOrphans() {
-    this.logger.log('Full orphan relink triggered via API (deterministic + LLM)');
-    const result = await this.orphanLinker.linkAllOrphans();
-    return { status: 'completed', ...result };
-  }
-
   // ─────────────────────────────────────────────────────────────
   // KnowledgePack endpoints
   // ─────────────────────────────────────────────────────────────

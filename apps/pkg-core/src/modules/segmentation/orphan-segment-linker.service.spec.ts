@@ -416,7 +416,85 @@ describe('OrphanSegmentLinkerService', () => {
 
       const result = await service.linkAllOrphans();
 
-      expect(result).toEqual({ linked: 0, total: 0, errors: 0 });
+      expect(result).toEqual({ linked: 0, total: 0, skipped: 0, errors: 0 });
+    });
+  });
+
+  // =========================================================================
+  // segmentIdSet guard in LLM classification
+  // =========================================================================
+
+  describe('LLM segmentId validation', () => {
+    it('should skip LLM classifications with unknown segmentId', async () => {
+      const segments = [
+        createSegment({ id: 'seg-real', topic: 'обсуждение API' }),
+      ];
+
+      const activities = [
+        createActivity({ id: 'act-1', name: 'Проект' }),
+      ];
+
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          classifications: [
+            {
+              segmentId: 'seg-hallucinated', // not in batch
+              activityId: 'act-1',
+              confidence: 0.9,
+              reasoning: 'Hallucinated segment',
+            },
+            {
+              segmentId: 'seg-real', // valid
+              activityId: 'act-1',
+              confidence: 0.8,
+              reasoning: 'Real match',
+            },
+          ],
+        },
+        usage: { inputTokens: 100, outputTokens: 50, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      mockSegmentRepo.update.mockResolvedValue({ affected: 1 } as any);
+
+      const result = await (service as any).linkByLlmClassification(segments, activities);
+
+      // Only the real segment should be linked
+      expect(result).toBe(1);
+      expect(mockSegmentRepo.update).toHaveBeenCalledTimes(1);
+      expect(mockSegmentRepo.update).toHaveBeenCalledWith('seg-real', {
+        activityId: 'act-1',
+      });
+    });
+
+    it('should skip LLM classifications with activityId "none"', async () => {
+      const segments = [
+        createSegment({ id: 'seg-personal', topic: 'личная беседа' }),
+      ];
+
+      const activities = [
+        createActivity({ id: 'act-1', name: 'Проект' }),
+      ];
+
+      mockClaudeAgentService.call.mockResolvedValue({
+        data: {
+          classifications: [
+            {
+              segmentId: 'seg-personal',
+              activityId: 'none',
+              confidence: 0.9,
+              reasoning: 'Not related to any activity',
+            },
+          ],
+        },
+        usage: { inputTokens: 100, outputTokens: 50, totalCostUsd: 0.001 },
+        run: {} as any,
+      });
+
+      const result = await (service as any).linkByLlmClassification(segments, activities);
+
+      expect(result).toBe(0);
+      expect(mockSegmentRepo.update).not.toHaveBeenCalled();
     });
   });
 });
