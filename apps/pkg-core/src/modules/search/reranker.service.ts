@@ -79,13 +79,6 @@ Rate relevance 0.0-1.0 for each item. Only include items with relevance > 0.1.`;
         }
       }
 
-      // Append items not in the ranking result (preserve them)
-      for (const item of items) {
-        if (!reranked.find(r => r.id === item.id)) {
-          reranked.push(item);
-        }
-      }
-
       return reranked.slice(0, topK);
     } catch (error) {
       this.logger.warn(`Reranking failed, falling back to original order: ${error}`);

@@ -42,6 +42,7 @@ export interface SearchQuery {
   };
   searchType?: SearchType;
   limit?: number;
+  rerank?: boolean;
 }
 
 export interface SearchResult {

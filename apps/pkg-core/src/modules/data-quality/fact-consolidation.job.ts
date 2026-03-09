@@ -4,6 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { EntityFact, FactType } from '@pkg/entities';
 import { FactFusionService } from '../entity/entity-fact/fact-fusion.service';
+import { FusionAction } from '../entity/entity-fact/fact-fusion.constants';
+import { getFactCategory } from '../../common/utils/fact-validation';
 
 @Injectable()
 export class FactConsolidationJob {
@@ -49,13 +51,18 @@ export class FactConsolidationJob {
         byType.set(fact.factType, group);
       }
 
+      const deprecatedIds = new Set<string>();
+
       for (const [, typeFacts] of byType) {
         if (typeFacts.length < 2) continue;
 
         for (let i = 0; i < typeFacts.length; i++) {
+          const a = typeFacts[i];
+          if (deprecatedIds.has(a.id)) continue;
+
           for (let j = i + 1; j < typeFacts.length; j++) {
-            const a = typeFacts[i];
             const b = typeFacts[j];
+            if (deprecatedIds.has(b.id)) continue;
 
             if (a.embedding && b.embedding) {
               const similarity = this.cosineSimilarity(a.embedding, b.embedding);
@@ -67,12 +74,21 @@ export class FactConsolidationJob {
                     b.value || '',
                     b.source,
                   );
+                  const factType = b.factType as FactType;
                   await this.factFusionService.applyDecision(a, {
-                    type: b.factType as FactType,
+                    type: factType,
                     value: b.value || '',
                     source: b.source,
+                    category: getFactCategory(factType),
                   }, decision, entityId);
-                  merged++;
+
+                  if (decision.action === FusionAction.SUPERSEDE ||
+                      decision.action === FusionAction.ENRICH) {
+                    merged++;
+                  }
+                  if (decision.action === FusionAction.SUPERSEDE) {
+                    deprecatedIds.add(a.id);
+                  }
                 } catch (err) {
                   this.logger.warn(`Fusion failed for facts ${a.id} / ${b.id}: ${err}`);
                 }

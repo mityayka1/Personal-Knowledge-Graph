@@ -98,8 +98,8 @@ export class SearchService {
       .map(r => ({ ...r, score: scores.get(r.id) || 0 }))
       .sort((a, b) => b.score - a.score);
 
-    // LLM reranking for top-20 candidates when more than 3 results
-    if (sorted.length > 3) {
+    // LLM reranking for top-20 candidates (opt-in via query.rerank)
+    if (query.rerank && sorted.length > 3) {
       const candidateCount = Math.min(sorted.length, 20);
       const candidates = sorted.slice(0, candidateCount);
       const rest = sorted.slice(candidateCount);

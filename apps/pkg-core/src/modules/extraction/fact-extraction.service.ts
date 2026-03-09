@@ -797,10 +797,11 @@ ${entityMemory}
 - position: должность ("Senior Developer", "CTO")
 - company: компания ("Сбер", "Яндекс")
 - department: отдел
-- phone, email, telegram: контакты
-- birthday: день рождения
-- location: местоположение
-- education: образование
+- specialization: специализация, skill: навык, education: образование
+- role: роль, birthday: день рождения, location: местоположение
+- family: семья, hobby: хобби, language: язык, health: здоровье
+- status: статус, communication: стиль общения, preference: предпочтение
+- inn: ИНН, legal_address: юр. адрес
 ${baseContextSection}
 ${contextDesc}
 ═══════════════════════════════════════════════════════════
@@ -869,10 +870,11 @@ ${baseContext}
 - position: должность ("Senior Developer", "CTO")
 - company: компания ("Сбер", "Яндекс")
 - department: отдел
-- phone, email, telegram: контакты
-- birthday: день рождения
-- location: местоположение
-- education: образование
+- specialization: специализация, skill: навык, education: образование
+- role: роль, birthday: день рождения, location: местоположение
+- family: семья, hobby: хобби, language: язык, health: здоровье
+- status: статус, communication: стиль общения, preference: предпочтение
+- inn: ИНН, legal_address: юр. адрес
 ${baseContextSection}
 ${contextDesc}
 ═══════════════════════════════════════════════════════════
