@@ -1,7 +1,7 @@
 import { Injectable, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
-import { EntityFact, FactSource, FactCategory, EntityRecord } from '@pkg/entities';
+import { EntityFact, FactSource, FactCategory, FactType, EntityRecord } from '@pkg/entities';
 import { EntityService } from '../entity.service';
 import { CreateFactDto } from '../dto/create-entity.dto';
 import { EmbeddingService } from '../../embedding/embedding.service';
@@ -10,6 +10,7 @@ import {
   formatEmbeddingForQuery,
 } from '../../../common/utils/similarity.utils';
 import { FactFusionService } from './fact-fusion.service';
+import { normalizeFactType, getFactCategory } from '../../../common/utils/fact-validation';
 import { EntityRelationService, RelationWithContext } from '../entity-relation/entity-relation.service';
 
 export interface CreateFactResult {
@@ -66,6 +67,17 @@ export class EntityFactService {
       messageContext?: string;
     },
   ): Promise<CreateFactResult> {
+    // Validate and normalize factType before any processing
+    const validatedType = normalizeFactType(dto.type as string);
+    if (!validatedType) {
+      this.logger.warn(`Rejected invalid factType: "${dto.type}"`);
+      return {
+        fact: null as any,
+        action: 'skipped' as const,
+        reason: `Invalid factType: "${dto.type}". Allowed: ${Object.values(FactType).join(', ')}`,
+      };
+    }
+
     // If we have a text value and embedding service, check for semantic duplicates
     if (dto.value && this.embeddingService && !options?.skipSemanticCheck) {
       const dupResult = await this.checkSemanticDuplicate(entityId, dto.value, dto.type);
@@ -109,8 +121,8 @@ export class EntityFactService {
     // Create the fact first
     const fact = this.factRepo.create({
       entityId,
-      factType: dto.type,
-      category: dto.category || FactCategory.PROFESSIONAL,
+      factType: validatedType,
+      category: dto.category || getFactCategory(validatedType),
       value: dto.value,
       valueDate: dto.valueDate,
       valueJson: dto.valueJson,
