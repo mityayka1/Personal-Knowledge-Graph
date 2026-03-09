@@ -2,6 +2,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class FactTaxonomyCleanup1771200000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.startTransaction();
+    try {
     // ═══════════════════════════════════════════
     // ЭТАП 1: Delete non-fact data (financial, process, project metadata)
     // ═══════════════════════════════════════════
@@ -84,6 +86,12 @@ export class FactTaxonomyCleanup1771200000000 implements MigrationInterface {
     }
 
     // Note: 'activity' type facts (~504 rows) are left for LLM batch reclassification (Task 6)
+
+    await queryRunner.commitTransaction();
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    }
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
