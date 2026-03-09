@@ -358,6 +358,7 @@ export class PackingService {
     const segmentIds = segments.map((s) => s.id);
 
     // Batch-load all messages for all segments in one query
+    // Exclude bot messages to prevent system-generated content from entering knowledge packs
     const rows: Array<{
       segment_id: string;
       content: string | null;
@@ -369,6 +370,7 @@ export class PackingService {
        JOIN messages m ON m.id = sm.message_id
        LEFT JOIN entities e ON e.id = m.sender_entity_id
        WHERE sm.segment_id = ANY($1::uuid[])
+         AND (e.is_bot = false OR e.is_bot IS NULL)
        ORDER BY sm.segment_id, m.timestamp ASC`,
       [segmentIds],
     );

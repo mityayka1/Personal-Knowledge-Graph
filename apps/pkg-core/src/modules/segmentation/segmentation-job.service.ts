@@ -65,9 +65,11 @@ export class SegmentationJobService {
           FROM messages m
           INNER JOIN interactions i ON i.id = m.interaction_id
           LEFT JOIN segment_messages sm ON sm.message_id = m.id
+          LEFT JOIN entities e ON e.id = m.sender_entity_id
           WHERE i.source_metadata->>'telegram_chat_id' IS NOT NULL
             AND sm.message_id IS NULL
             AND m.timestamp > NOW() - INTERVAL '${LOOKBACK_HOURS} hours'
+            AND (e.is_bot = false OR e.is_bot IS NULL)
           GROUP BY i.source_metadata->>'telegram_chat_id'
           HAVING COUNT(m.id) >= ${MIN_UNSEGMENTED_MESSAGES}
           ORDER BY COUNT(m.id) DESC
@@ -145,9 +147,11 @@ export class SegmentationJobService {
        FROM messages m
        INNER JOIN interactions i ON i.id = m.interaction_id
        LEFT JOIN segment_messages sm ON sm.message_id = m.id
+       LEFT JOIN entities e ON e.id = m.sender_entity_id
        WHERE i.source_metadata->>'telegram_chat_id' = $1
          AND sm.message_id IS NULL
          AND m.timestamp > NOW() - INTERVAL '${LOOKBACK_HOURS} hours'
+         AND (e.is_bot = false OR e.is_bot IS NULL)
        ORDER BY m.timestamp ASC`,
       [chatId],
     );
