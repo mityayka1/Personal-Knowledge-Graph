@@ -28,7 +28,8 @@ export type ClaudeTaskType =
   | 'knowledge_packing'
   | 'project_name_match'
   | 'dedup_decision'
-  | 'reranking';
+  | 'reranking'
+  | 'fact_reclassification';
 
 /**
  * Model types

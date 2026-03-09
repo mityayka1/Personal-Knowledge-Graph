@@ -13,6 +13,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { DataQualityService } from './data-quality.service';
+import { ActivityFactReclassificationService } from './activity-fact-reclassification.service';
+import { FactConsolidationJob } from './fact-consolidation.job';
 import { ResolveIssueDto } from './dto/resolve-issue.dto';
 import { MergeActivitiesDto } from './dto/merge-activities.dto';
 
@@ -36,7 +38,11 @@ import { MergeActivitiesDto } from './dto/merge-activities.dto';
 export class DataQualityController {
   private readonly logger = new Logger(DataQualityController.name);
 
-  constructor(private readonly dataQualityService: DataQualityService) {}
+  constructor(
+    private readonly dataQualityService: DataQualityService,
+    private readonly reclassificationService: ActivityFactReclassificationService,
+    private readonly consolidationJob: FactConsolidationJob,
+  ) {}
 
   /**
    * Run a full data quality audit.
@@ -149,5 +155,25 @@ export class DataQualityController {
   async autoResolveClients() {
     this.logger.log('Running auto-resolve for missing client entities');
     return this.dataQualityService.autoResolveClients();
+  }
+
+  /**
+   * Reclassify "activity" type facts using LLM.
+   * Converts temporary events to proper types or soft-deletes non-facts.
+   */
+  @Post('reclassify-activity-facts')
+  async reclassifyActivityFacts() {
+    this.logger.log('Running LLM reclassification of activity-type facts');
+    return this.reclassificationService.reclassify();
+  }
+
+  /**
+   * Run fact consolidation manually (normally weekly cron).
+   * Deduplicates facts by embedding similarity + Smart Fusion.
+   */
+  @Post('consolidate-facts')
+  async consolidateFacts() {
+    this.logger.log('Running manual fact consolidation');
+    return this.consolidationJob.consolidate();
   }
 }
