@@ -88,6 +88,12 @@ export class MessageService {
 
       // Update missing identifiers (e.g., username became available)
       await this.updateMissingIdentifiers(entityId, dto);
+
+      // Fix isBot flag: if Telegram says it's a bot but entity is not marked as bot
+      if (dto.telegram_user_info?.isBot && existingEntity && !existingEntity.isBot) {
+        this.logger.log(`Fixing isBot flag for entity ${entityId} (was false, now true)`);
+        await this.entityService.markAsBot(entityId);
+      }
     } else if (chatCategory.category === ChatCategory.PERSONAL && !dto.is_outgoing) {
       // Private chat with unknown contact - auto-create Entity with all available data
       const entityName = this.buildEntityName(dto);
@@ -668,6 +674,12 @@ export class MessageService {
       // Save birthday if available
       if (recipientInfo.birthday) {
         await this.saveBirthdayFact(entityId, recipientInfo.birthday);
+      }
+
+      // Fix isBot flag for recipient
+      if (recipientInfo.isBot && !entity.isBot) {
+        this.logger.log(`Fixing isBot flag for recipient entity ${entityId}`);
+        await this.entityService.markAsBot(entityId);
       }
 
       // Add missing identifiers (username, phone)

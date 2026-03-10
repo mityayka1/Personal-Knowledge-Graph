@@ -159,6 +159,14 @@ export class EntityService {
     return this.findOne(saved.id);
   }
 
+  /**
+   * One-way latch: mark entity as bot if not already marked.
+   * A bot cannot "stop being a bot", so we only flip false → true.
+   */
+  async markAsBot(id: string): Promise<void> {
+    await this.entityRepo.update(id, { isBot: true });
+  }
+
   async update(id: string, dto: UpdateEntityDto) {
     const entity = await this.findOne(id);
 
