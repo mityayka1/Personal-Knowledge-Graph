@@ -113,6 +113,27 @@ describe('FactFusionService', () => {
       expect(result.explanation).toContain('Низкая уверенность');
     });
 
+    it('should auto-SUPERSEDE ephemeral fact types (status) without LLM call', async () => {
+      const statusFact: Partial<EntityFact> = {
+        id: 'fact-status-1',
+        factType: FactType.STATUS,
+        value: 'завершил задачи в директории dogs-gen',
+        source: FactSource.EXTRACTED,
+        confidence: 0.8,
+        createdAt: new Date('2025-03-01'),
+      };
+
+      const result = await service.decideFusion(
+        statusFact as EntityFact,
+        'Завершил задачи в dogs-gen на ветке fix/update-paths',
+        FactSource.EXTRACTED,
+      );
+
+      expect(result.action).toBe(FusionAction.SUPERSEDE);
+      expect(result.confidence).toBe(0.95);
+      expect(mockClaudeAgentService.call).not.toHaveBeenCalled();
+    });
+
     it('should return CONFLICT on LLM error', async () => {
       mockClaudeAgentService.call.mockRejectedValue(new Error('LLM unavailable'));
 

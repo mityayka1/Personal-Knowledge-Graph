@@ -1,4 +1,4 @@
-import { FactSource } from '@pkg/entities';
+import { FactSource, FactType } from '@pkg/entities';
 
 /**
  * Fusion decision types (Wikidata-inspired)
@@ -163,6 +163,14 @@ ${messageContext ? `- Контекст сообщения: "${messageContext.sli
  * Threshold for automatic fusion vs conflict
  */
 export const FUSION_CONFIDENCE_THRESHOLD = 0.7;
+
+/**
+ * Fact types that are inherently ephemeral (represent current state).
+ * These auto-SUPERSEDE without LLM call — a new status always replaces the old one.
+ */
+export const EPHEMERAL_FACT_TYPES: ReadonlySet<string> = new Set([
+  FactType.STATUS,
+]);
 
 // ============================================
 // Decision Caching (LRU)

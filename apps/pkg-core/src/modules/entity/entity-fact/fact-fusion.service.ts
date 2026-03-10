@@ -18,6 +18,7 @@ import {
   FALLBACK_CONFIDENCE,
   FUSION_CACHE_MAX_SIZE,
   FUSION_CACHE_TTL_MS,
+  EPHEMERAL_FACT_TYPES,
   buildFusionPrompt,
 } from './fact-fusion.constants';
 
@@ -148,6 +149,18 @@ export class FactFusionService {
     newFactSource: FactSource,
     context?: { messageContent?: string },
   ): Promise<FusionDecision> {
+    // Ephemeral fact types (e.g. status) auto-SUPERSEDE without LLM
+    if (EPHEMERAL_FACT_TYPES.has(existingFact.factType)) {
+      this.logger.debug(
+        `Auto-SUPERSEDE ephemeral fact type "${existingFact.factType}": "${existingFact.value?.slice(0, 50)}" → "${newFactValue.slice(0, 50)}"`,
+      );
+      return {
+        action: FusionAction.SUPERSEDE,
+        explanation: `Эфемерный тип факта "${existingFact.factType}" — новый статус заменяет старый.`,
+        confidence: 0.95,
+      };
+    }
+
     // Check cache first
     const cacheKey = this.getCacheKey(existingFact.id, newFactValue);
     const cachedDecision = this.getCachedDecision(cacheKey);
