@@ -217,9 +217,11 @@ export class PackingJobService {
    * all ordered by startedAt ASC within each group.
    */
   private async collectHierarchicalSegments(activityId: string): Promise<TopicalSegment[]> {
-    // Get own segments
+    const packableStatuses = [SegmentStatus.ACTIVE, SegmentStatus.CLOSED];
+
+    // Get own segments (ACTIVE + CLOSED — aligned with eligibility query)
     const ownSegments = await this.segmentRepo.find({
-      where: { activityId, status: SegmentStatus.ACTIVE },
+      where: packableStatuses.map((status) => ({ activityId, status })),
       order: { startedAt: 'ASC' },
     });
 
@@ -235,7 +237,7 @@ export class PackingJobService {
     const descendantIds = descendants.map((d) => d.id);
     const childSegments = await this.segmentRepo.createQueryBuilder('s')
       .where('s.activityId IN (:...ids)', { ids: descendantIds })
-      .andWhere('s.status = :status', { status: SegmentStatus.ACTIVE })
+      .andWhere('s.status IN (:...statuses)', { statuses: packableStatuses })
       .orderBy('s.startedAt', 'ASC')
       .getMany();
 

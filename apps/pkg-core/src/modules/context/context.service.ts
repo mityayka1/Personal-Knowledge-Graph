@@ -59,7 +59,6 @@ export class ContextService {
     @Optional()
     @Inject(forwardRef(() => EntityFactService))
     private entityFactService: EntityFactService,
-    @Optional()
     private graphTraversalService: GraphTraversalService,
   ) {
     // Load tier boundaries from config (with defaults)
@@ -541,8 +540,6 @@ ${chunksSection}`);
    * Returns markdown-style text or empty string if service unavailable.
    */
   private async buildGraphContext(entityId: string): Promise<string> {
-    if (!this.graphTraversalService) return '';
-
     const result: EntityTraversalResult =
       await this.graphTraversalService.traverseEntityRelations(entityId, {
         maxHops: 2,
@@ -575,7 +572,6 @@ ${chunksSection}`);
    * Returns markdown-style text or empty string.
    */
   async buildActivityHierarchyContext(activityId: string): Promise<string> {
-    if (!this.graphTraversalService) return '';
 
     const result: ActivityHierarchyResult =
       await this.graphTraversalService.traverseActivityHierarchy(activityId);

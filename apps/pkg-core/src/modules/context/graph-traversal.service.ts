@@ -115,8 +115,7 @@ export class GraphTraversalService {
              e.id AS entity_id,
              e.name AS entity_name,
              er.relation_type,
-             erm2.role,
-             er.confidence
+             erm2.role
            FROM entity_relation_members erm1
            JOIN entity_relations er ON er.id = erm1.relation_id
            JOIN entity_relation_members erm2 ON erm2.relation_id = er.id AND erm2.entity_id != $1
@@ -124,27 +123,51 @@ export class GraphTraversalService {
            WHERE erm1.entity_id = $1
              AND erm1.valid_until IS NULL
              AND erm2.valid_until IS NULL
-           ORDER BY er.confidence DESC NULLS LAST
+           ORDER BY e.name ASC
            LIMIT $2`,
           [currentEntityId, maxRelated],
         );
 
+        // Collect new entity IDs for batch fact fetch
+        const newEntityIds: string[] = [];
         for (const row of relatedEntities) {
           if (visited.has(row.entity_id)) continue;
           visited.add(row.entity_id);
+          newEntityIds.push(row.entity_id);
+          nextFrontier.push(row.entity_id);
+        }
 
-          // Fetch current facts for this entity
-          const facts = await this.dataSource.query(
-            `SELECT id, fact_type, value, confidence
+        // Batch-fetch facts for all new entities at once (eliminates N+1)
+        const factsMap = new Map<string, RelatedEntityFact[]>();
+        if (newEntityIds.length > 0) {
+          const allFacts = await this.dataSource.query(
+            `SELECT id, entity_id, fact_type, value, confidence
              FROM entity_facts
-             WHERE entity_id = $1
+             WHERE entity_id = ANY($1)
                AND valid_until IS NULL
                AND deleted_at IS NULL
                AND status = 'active'
-             ORDER BY created_at DESC
-             LIMIT 10`,
-            [row.entity_id],
+             ORDER BY created_at DESC`,
+            [newEntityIds],
           );
+
+          for (const f of allFacts) {
+            const entityId = f.entity_id as string;
+            if (!factsMap.has(entityId)) factsMap.set(entityId, []);
+            const arr = factsMap.get(entityId)!;
+            if (arr.length < 10) {
+              arr.push({
+                id: f.id as string,
+                factType: f.fact_type as string,
+                value: f.value as string | null,
+                confidence: f.confidence != null ? parseFloat(String(f.confidence)) : null,
+              });
+            }
+          }
+        }
+
+        for (const row of relatedEntities) {
+          if (!newEntityIds.includes(row.entity_id)) continue;
 
           allResults.push({
             entityId: row.entity_id,
@@ -153,15 +176,8 @@ export class GraphTraversalService {
             role: row.role,
             hop,
             hopPenalty,
-            facts: facts.map((f: Record<string, unknown>) => ({
-              id: f.id as string,
-              factType: f.fact_type as string,
-              value: f.value as string | null,
-              confidence: f.confidence != null ? parseFloat(String(f.confidence)) : null,
-            })),
+            facts: factsMap.get(row.entity_id) || [],
           });
-
-          nextFrontier.push(row.entity_id);
         }
       }
 

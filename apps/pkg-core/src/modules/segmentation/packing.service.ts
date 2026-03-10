@@ -573,11 +573,11 @@ ${segmentDescriptions}
       timeout: PackingService.SYNTHESIS_TIMEOUT_MS,
     });
 
-    const tokensUsed = result.usage.inputTokens + result.usage.outputTokens;
-
     if (!result.data) {
       throw new Error('Incremental synthesis returned empty response from Claude');
     }
+
+    const tokensUsed = (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0);
 
     return { ...result.data, tokensUsed };
   }
@@ -604,8 +604,8 @@ ${segmentDescriptions}
         context: q.context || '',
       })),
       conflicts: (pack.conflicts || []).map((c) => ({
-        fact1: c.description.split(' vs ')[0] || c.description,
-        fact2: c.description.split(' vs ')[1] || '',
+        fact1: c.description,
+        fact2: '',
         resolution: c.resolution || '',
       })),
       timeline: [],
