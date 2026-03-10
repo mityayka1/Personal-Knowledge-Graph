@@ -13,6 +13,7 @@ import { SegmentationService } from './segmentation.service';
 import { TopicBoundaryDetectorService } from './topic-boundary-detector.service';
 import { SegmentationJobService } from './segmentation-job.service';
 import { OrphanSegmentLinkerService } from './orphan-segment-linker.service';
+import { PackingJobService } from './packing-job.service';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { SegmentQueryDto } from './dto/segment-query.dto';
@@ -26,6 +27,7 @@ export class SegmentationController {
     private readonly topicBoundaryDetector: TopicBoundaryDetectorService,
     private readonly segmentationJob: SegmentationJobService,
     private readonly orphanLinker: OrphanSegmentLinkerService,
+    private readonly packingJob: PackingJobService,
   ) {}
 
   @Post()
@@ -145,6 +147,15 @@ export class SegmentationController {
     this.logger.log('Manual orphan segment linker triggered via API');
     const result = await this.orphanLinker.linkAllOrphans();
     return { status: 'completed', ...result };
+  }
+
+  @Post('run-packing')
+  async runPacking() {
+    this.logger.log('Manual packing job triggered via API');
+    this.packingJob.handleCron().catch((err) => {
+      this.logger.error(`Manual packing job failed: ${err.message}`, err.stack);
+    });
+    return { status: 'started', message: 'Packing job triggered. Check logs for progress.' };
   }
 
   // ─────────────────────────────────────────────────────────────
