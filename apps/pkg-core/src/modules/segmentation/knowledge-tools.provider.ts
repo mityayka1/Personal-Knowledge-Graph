@@ -144,11 +144,19 @@ Use to find past discussions about a specific theme or involving a specific pers
           const segments = await qb.getMany();
 
           if (segments.length === 0) {
+            this.logger.debug(`[search_discussions] query="${args.query}" → 0 results`);
             return toolEmptyResult(
               'discussion segments matching your query',
               'Try broader keywords, remove filters, or check spelling.',
             );
           }
+
+          const withActivity = segments.filter(s => s.activityId).length;
+          const orphans = segments.length - withActivity;
+          this.logger.log(
+            `[search_discussions] query="${args.query}" → ${segments.length} results ` +
+            `(${withActivity} with activityId, ${orphans} orphans)`,
+          );
 
           const results = segments.map((s) => ({
             id: s.id,
@@ -325,6 +333,11 @@ Requires activityId or entityId (get from search_discussions results).`,
             .take(args.limit);
 
           const packs = await qb.getMany();
+
+          this.logger.log(
+            `[get_knowledge_summary] activityId=${args.activityId || 'none'}, ` +
+            `entityId=${args.entityId || 'none'} → ${packs.length} packs`,
+          );
 
           if (packs.length === 0) {
             return toolEmptyResult(
