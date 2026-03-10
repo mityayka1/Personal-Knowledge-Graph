@@ -138,8 +138,12 @@ Use to find past discussions about a specific theme or involving a specific pers
           // Exclude merged segments
           qb.andWhere('s.status != :mergedStatus', { mergedStatus: SegmentStatus.MERGED });
 
-          // Prioritize segments linked to activities (packed > active with activity > orphans)
-          qb.orderBy('CASE WHEN s.activityId IS NOT NULL THEN 0 ELSE 1 END', 'ASC')
+          // Prioritize segments linked to activities over orphans
+          qb.addSelect(
+            'CASE WHEN s.activity_id IS NOT NULL THEN 0 ELSE 1 END',
+            'activity_priority',
+          );
+          qb.orderBy('activity_priority', 'ASC')
             .addOrderBy('s.startedAt', 'DESC')
             .take(args.limit);
 
