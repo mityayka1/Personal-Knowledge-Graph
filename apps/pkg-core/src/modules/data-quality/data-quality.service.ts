@@ -618,6 +618,25 @@ export class DataQualityService {
       await queryRunner.release();
     }
 
+    // Rebuild closure table for moved children
+    // (children were re-parented to keepId via QueryBuilder, bypassing closure auto-sync)
+    const movedChildren = await this.activityRepo.find({
+      where: { parentId: keepId, deletedAt: IsNull() },
+      select: ['id', 'parentId'],
+    });
+    for (const child of movedChildren) {
+      await this.rebuildClosureForNode(child.id, child.parentId);
+    }
+
+    // Remove closure entries for merged (soft-deleted) activities
+    if (mergeIds.length > 0) {
+      await this.activityRepo.query(
+        `DELETE FROM activities_closure
+         WHERE id_ancestor = ANY($1) OR id_descendant = ANY($1)`,
+        [mergeIds],
+      );
+    }
+
     this.logger.log(
       `Merge complete: ${mergeIds.length} activities merged into ${keepId}`,
     );
@@ -626,6 +645,42 @@ export class DataQualityService {
     return this.activityRepo.findOneOrFail({
       where: { id: keepId },
     });
+  }
+
+  /**
+   * Rebuild closure table entries for a single node.
+   * Inserts self-ref + copies parent's ancestor chain.
+   */
+  private async rebuildClosureForNode(
+    activityId: string,
+    parentId: string | null,
+  ): Promise<void> {
+    await this.activityRepo.query(
+      `DELETE FROM activities_closure WHERE id_descendant = $1`,
+      [activityId],
+    );
+    await this.activityRepo.query(
+      `INSERT INTO activities_closure (id_ancestor, id_descendant)
+       VALUES ($1, $1) ON CONFLICT DO NOTHING`,
+      [activityId],
+    );
+    if (parentId) {
+      await this.activityRepo.query(
+        `INSERT INTO activities_closure (id_ancestor, id_descendant)
+         SELECT id_ancestor, $1 FROM activities_closure WHERE id_descendant = $2
+         ON CONFLICT DO NOTHING`,
+        [activityId, parentId],
+      );
+    }
+
+    // Recursively rebuild for children
+    const children: Array<{ id: string }> = await this.activityRepo.query(
+      `SELECT id FROM activities WHERE parent_id = $1 AND deleted_at IS NULL`,
+      [activityId],
+    );
+    for (const child of children) {
+      await this.rebuildClosureForNode(child.id, activityId);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

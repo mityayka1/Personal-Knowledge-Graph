@@ -257,6 +257,9 @@ export class ActivityService {
       .values(values)
       .execute();
 
+    // Sync closure table (TypeORM QueryBuilder bypasses auto-management)
+    await this.syncClosureTable(activityId, dto.parentId ?? null);
+
     this.logger.log(`Created activity: ${activityId} (${dto.name})`);
 
     return this.findOne(activityId);
@@ -332,6 +335,9 @@ export class ActivityService {
         newFullPath,
         depthDelta,
       );
+
+      // Sync closure table for this activity and all its descendants
+      await this.syncClosureTable(activity.id, activity.parentId, true);
     }
 
     // Обновить lastActivityAt
@@ -817,5 +823,63 @@ export class ActivityService {
     this.logger.log(
       `Cascade updated ${descendants.length} descendants: path "${oldFullPath}" → "${newFullPath}"`,
     );
+  }
+
+  /**
+   * Sync closure table for a single activity.
+   *
+   * TypeORM @Tree('closure-table') auto-manages activities_closure via save(),
+   * but we use QueryBuilder (bypassing closure-table logic due to TypeORM 0.3.x bug).
+   * This method manually maintains closure entries:
+   *   - Self-referential row (ancestor=self, descendant=self)
+   *   - All ancestor rows derived from parent chain
+   *
+   * When parentId changes, also rebuilds closure entries for all descendants.
+   */
+  private async syncClosureTable(
+    activityId: string,
+    parentId: string | null,
+    parentChanged = false,
+  ): Promise<void> {
+    // Delete existing entries for this activity (as descendant)
+    await this.activityRepo.query(
+      `DELETE FROM activities_closure WHERE id_descendant = $1`,
+      [activityId],
+    );
+
+    // Insert self-referential row
+    await this.activityRepo.query(
+      `INSERT INTO activities_closure (id_ancestor, id_descendant)
+       VALUES ($1, $1)
+       ON CONFLICT DO NOTHING`,
+      [activityId],
+    );
+
+    // Insert ancestor chain: copy parent's ancestors + add parent itself
+    if (parentId) {
+      await this.activityRepo.query(
+        `INSERT INTO activities_closure (id_ancestor, id_descendant)
+         SELECT id_ancestor, $1
+         FROM activities_closure
+         WHERE id_descendant = $2
+         ON CONFLICT DO NOTHING`,
+        [activityId, parentId],
+      );
+    }
+
+    // When parent changed, rebuild closure for all descendants too
+    if (parentChanged) {
+      const descendants: Array<{ id: string; parent_id: string | null }> =
+        await this.activityRepo.query(
+          `SELECT id, parent_id FROM activities
+           WHERE materialized_path LIKE $1 AND deleted_at IS NULL`,
+          [`%${activityId}%`],
+        );
+
+      for (const desc of descendants) {
+        if (desc.id === activityId) continue;
+        await this.syncClosureTable(desc.id, desc.parent_id, false);
+      }
+    }
   }
 }
