@@ -282,9 +282,10 @@ Use to understand what was discussed in a specific conversation segment.`,
   private getKnowledgeSummaryTool() {
     return tool(
       'get_knowledge_summary',
-      `Get consolidated knowledge summaries (KnowledgePacks) for an activity or entity.
-Shows synthesized conclusions from multiple discussion segments including decisions, open questions, and key facts.
-Provide either activityId or entityId (at least one is required).`,
+      `CRITICAL: Call this after search_discussions when activityId is present in results.
+Returns consolidated knowledge: decisions made, key facts, open questions, conflicts — synthesized from all discussion segments.
+Much more valuable than raw messages for questions about status, progress, decisions, or agreements.
+Requires activityId or entityId (get from search_discussions results).`,
       {
         activityId: z.string().uuid().optional().describe('Activity UUID to get knowledge packs for'),
         entityId: z.string().uuid().optional().describe('Entity UUID to get knowledge packs for (packs where entity is participant)'),
