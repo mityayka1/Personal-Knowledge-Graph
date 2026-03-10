@@ -138,16 +138,23 @@ Use to find past discussions about a specific theme or involving a specific pers
           // Exclude merged segments
           qb.andWhere('s.status != :mergedStatus', { mergedStatus: SegmentStatus.MERGED });
 
-          // Prioritize segments linked to activities over orphans
-          qb.addSelect(
-            'CASE WHEN s.activity_id IS NOT NULL THEN 0 ELSE 1 END',
-            'activity_priority',
-          );
-          qb.orderBy('activity_priority', 'ASC')
-            .addOrderBy('s.startedAt', 'DESC')
-            .take(args.limit);
+          qb.orderBy('s.startedAt', 'DESC');
 
-          const segments = await qb.getMany();
+          // Fetch extra results so we can prioritize segments with activityId
+          const fetchLimit = Math.min(args.limit * 3, 50);
+          qb.take(fetchLimit);
+
+          const rawSegments = await qb.getMany();
+
+          // Prioritize segments with activityId, then sort by date, then trim to limit
+          const segments = rawSegments
+            .sort((a, b) => {
+              const aPriority = a.activityId ? 0 : 1;
+              const bPriority = b.activityId ? 0 : 1;
+              if (aPriority !== bPriority) return aPriority - bPriority;
+              return (b.startedAt?.getTime() ?? 0) - (a.startedAt?.getTime() ?? 0);
+            })
+            .slice(0, args.limit);
 
           if (segments.length === 0) {
             this.logger.log(`[search_discussions] query="${args.query}" → 0 results`);
