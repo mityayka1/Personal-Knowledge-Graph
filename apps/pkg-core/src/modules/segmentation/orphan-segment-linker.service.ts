@@ -91,6 +91,7 @@ const LLM_BATCH_SIZE = 15;
 @Injectable()
 export class OrphanSegmentLinkerService {
   private readonly logger = new Logger(OrphanSegmentLinkerService.name);
+  private isRunning = false;
 
   constructor(
     @InjectRepository(TopicalSegment)
@@ -200,6 +201,20 @@ export class OrphanSegmentLinkerService {
    * Phase 2 (LLM): Classify remaining orphans via Claude Haiku batches.
    */
   async linkAllOrphans(): Promise<BulkLinkResult> {
+    if (this.isRunning) {
+      this.logger.warn('[orphan-linker] Already running, skipping concurrent call');
+      return { linked: 0, total: 0, skipped: 0, errors: 0 };
+    }
+
+    this.isRunning = true;
+    try {
+      return await this._linkAllOrphansInternal();
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  private async _linkAllOrphansInternal(): Promise<BulkLinkResult> {
     // Load all orphan segments in bulk (not just IDs — need topic/summary/participantIds)
     const CHUNK_SIZE = 500;
     const orphanSegments: TopicalSegment[] = [];
