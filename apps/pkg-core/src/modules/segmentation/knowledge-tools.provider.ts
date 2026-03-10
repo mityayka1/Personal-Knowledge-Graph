@@ -138,13 +138,15 @@ Use to find past discussions about a specific theme or involving a specific pers
           // Exclude merged segments
           qb.andWhere('s.status != :mergedStatus', { mergedStatus: SegmentStatus.MERGED });
 
-          qb.orderBy('s.startedAt', 'DESC')
+          // Prioritize segments linked to activities (packed > active with activity > orphans)
+          qb.orderBy('CASE WHEN s.activityId IS NOT NULL THEN 0 ELSE 1 END', 'ASC')
+            .addOrderBy('s.startedAt', 'DESC')
             .take(args.limit);
 
           const segments = await qb.getMany();
 
           if (segments.length === 0) {
-            this.logger.debug(`[search_discussions] query="${args.query}" → 0 results`);
+            this.logger.log(`[search_discussions] query="${args.query}" → 0 results`);
             return toolEmptyResult(
               'discussion segments matching your query',
               'Try broader keywords, remove filters, or check spelling.',
@@ -176,9 +178,18 @@ Use to find past discussions about a specific theme or involving a specific pers
             relatedSegmentCount: s.relatedSegmentIds?.length || 0,
           }));
 
+          const activitiesWithKnowledge = [...new Set(
+            results.filter(r => r.activityId).map(r => r.activityId),
+          )];
+
           return toolSuccess({
             total: results.length,
             segments: results,
+            ...(activitiesWithKnowledge.length > 0 && {
+              hint: `Found ${activitiesWithKnowledge.length} activity IDs with linked segments. ` +
+                `IMPORTANT: Call get_knowledge_summary for each activityId to get consolidated decisions, facts and open questions.`,
+              activityIdsForKnowledgeSummary: activitiesWithKnowledge,
+            }),
           });
         } catch (error) {
           return handleToolError(error, this.logger, 'search_discussions');
