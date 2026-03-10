@@ -399,33 +399,92 @@ export class ActivityService {
   /**
    * Получить всё дерево активностей.
    * Если указан rootId — возвращает поддерево от этого корня.
+   *
+   * Uses manual parentId-based tree building instead of TypeORM's
+   * findDescendantsTree/findTrees which crash with closure-table bug
+   * (TypeError: Cannot read properties of undefined 'joinColumns').
    */
   async getActivityTree(rootId?: string): Promise<Activity[]> {
-    const treeRepo = this.activityRepo.manager.getTreeRepository(Activity);
-
     if (rootId) {
-      const root = await treeRepo.findOne({ where: { id: rootId } });
+      const root = await this.activityRepo.findOne({ where: { id: rootId } });
       if (!root) {
         throw new NotFoundException(`Activity with id '${rootId}' not found`);
       }
-      return [await treeRepo.findDescendantsTree(root)];
+
+      // Load all descendants via recursive CTE
+      const descendants: Activity[] = await this.activityRepo.query(
+        `WITH RECURSIVE tree AS (
+          SELECT id FROM activities WHERE id = $1
+          UNION ALL
+          SELECT a.id FROM activities a JOIN tree t ON a.parent_id = t.id
+            WHERE a.deleted_at IS NULL
+        )
+        SELECT a.* FROM activities a
+        JOIN tree t ON a.id = t.id
+        WHERE a.deleted_at IS NULL`,
+        [rootId],
+      );
+
+      return this.buildTreeFromFlatList(descendants, rootId);
     }
 
-    return treeRepo.findTrees();
+    // All root activities with their subtrees
+    const allActivities: Activity[] = await this.activityRepo.find({
+      where: { deletedAt: null as any },
+      withDeleted: false,
+    });
+
+    return this.buildTreeFromFlatList(allActivities, null);
+  }
+
+  /**
+   * Build nested tree structure from flat list using parentId references.
+   */
+  private buildTreeFromFlatList(items: Activity[], rootParentId: string | null): Activity[] {
+    const map = new Map<string, Activity & { children: Activity[] }>();
+
+    for (const item of items) {
+      map.set(item.id, Object.assign(item, { children: [] }));
+    }
+
+    const roots: Activity[] = [];
+
+    for (const item of map.values()) {
+      if (item.parentId && item.parentId !== rootParentId && map.has(item.parentId)) {
+        map.get(item.parentId)!.children.push(item);
+      } else if (
+        item.parentId === rootParentId ||
+        (rootParentId && item.id === rootParentId) ||
+        (!rootParentId && !item.parentId)
+      ) {
+        roots.push(item);
+      }
+    }
+
+    return roots;
   }
 
   /**
    * Получить предков активности (путь от корня).
+   * Uses manual parentId traversal instead of buggy TypeORM findAncestors.
    */
   async getAncestors(id: string): Promise<Activity[]> {
-    const treeRepo = this.activityRepo.manager.getTreeRepository(Activity);
-    const activity = await treeRepo.findOne({ where: { id } });
+    const ancestors: Activity[] = await this.activityRepo.query(
+      `WITH RECURSIVE ancestors AS (
+        SELECT * FROM activities WHERE id = $1
+        UNION ALL
+        SELECT a.* FROM activities a JOIN ancestors anc ON a.id = anc.parent_id
+          WHERE a.deleted_at IS NULL
+      )
+      SELECT * FROM ancestors ORDER BY created_at ASC`,
+      [id],
+    );
 
-    if (!activity) {
+    if (ancestors.length === 0) {
       throw new NotFoundException(`Activity with id '${id}' not found`);
     }
 
-    return treeRepo.findAncestors(activity);
+    return ancestors;
   }
 
   /**
