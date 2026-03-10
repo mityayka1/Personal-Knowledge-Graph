@@ -112,14 +112,22 @@ Use to find past discussions about a specific theme or involving a specific pers
             .leftJoinAndSelect('s.activity', 'activity')
             .leftJoinAndSelect('s.primaryParticipant', 'participant');
 
-          // Topic search: ILIKE on topic and summary, or keyword array overlap
-          qb.andWhere(
-            '(s.topic ILIKE :search OR s.summary ILIKE :search OR :queryText = ANY(s.keywords))',
-            {
-              search: `%${args.query}%`,
-              queryText: args.query.toLowerCase(),
-            },
-          );
+          // Topic search: split query into words, each must match topic OR summary
+          const words = args.query.trim().split(/\s+/).filter(w => w.length >= 2);
+          if (words.length === 1) {
+            qb.andWhere(
+              '(s.topic ILIKE :search OR s.summary ILIKE :search OR :queryText = ANY(s.keywords))',
+              { search: `%${words[0]}%`, queryText: args.query.toLowerCase() },
+            );
+          } else {
+            // Multi-word: each word must appear in topic+summary combined
+            words.forEach((word, i) => {
+              qb.andWhere(
+                `(s.topic ILIKE :word${i} OR s.summary ILIKE :word${i})`,
+                { [`word${i}`]: `%${word}%` },
+              );
+            });
+          }
 
           if (args.chatId) {
             qb.andWhere('s.chatId = :chatId', { chatId: args.chatId });
