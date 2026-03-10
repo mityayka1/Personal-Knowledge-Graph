@@ -354,7 +354,7 @@ export class PackingService {
         factType: f.factType,
         value: f.value,
         confidence: f.confidence,
-        sourceSegmentIds,
+        sourceSegmentIds: this.mapIndicesToSegmentIds(f.sourceSegmentIndices, segments),
         lastUpdated: new Date().toISOString(),
       })),
       conflicts: structured.conflicts.map((c) => ({
@@ -370,7 +370,7 @@ export class PackingService {
       totalMessageCount,
       status: PackStatus.ACTIVE,
       metadata: {
-        packingVersion: '2.0.0',
+        packingVersion: '2.1.0',
       },
     });
 
@@ -439,7 +439,7 @@ export class PackingService {
       factType: f.factType,
       value: f.value,
       confidence: f.confidence,
-      sourceSegmentIds: allSourceSegmentIds,
+      sourceSegmentIds: this.mapIndicesToSegmentIds(f.sourceSegmentIndices, newSegments, existingPack.sourceSegmentIds),
       lastUpdated: new Date().toISOString(),
     }));
     existingPack.conflicts = structured.conflicts.map((c) => ({
@@ -457,7 +457,7 @@ export class PackingService {
     existingPack.participantIds = allParticipantIds;
     existingPack.metadata = {
       ...existingPack.metadata,
-      packingVersion: '2.0.0',
+      packingVersion: '2.1.0',
     };
 
     await this.packRepo.save(existingPack);
@@ -869,6 +869,7 @@ ${segmentDescriptions}
    - Требования и ограничения
    - Статусы и договорённости
    - Укажи уверенность (confidence): 0.9+ для явно упомянутого, 0.7-0.9 для контекстного
+   - **sourceSegmentIndices**: укажи номера сегментов (1-based), из которых извлечён этот факт. Каждый факт должен ссылаться ТОЛЬКО на конкретные сегменты, содержащие эту информацию — НЕ на все сегменты
 
 5. **conflicts** — Противоречия между сегментами:
    - Разные утверждения об одном и том же
@@ -942,7 +943,7 @@ ${segmentBlocks}
         factType: f.factType,
         value: f.value,
         confidence: f.confidence,
-        sourceSegmentIds,
+        sourceSegmentIds: this.mapIndicesToSegmentIds(f.sourceSegmentIndices, segments),
         lastUpdated: new Date().toISOString(),
       })),
       conflicts: synthesis.conflicts.map((c) => ({
@@ -1016,6 +1017,40 @@ ${segmentBlocks}
     const allIds = segments.flatMap((s) => s.participantIds);
     return [...new Set(allIds)];
   }
+
+  /**
+   * Map 1-based segment indices from Claude output to actual segment UUIDs.
+   * Falls back to all segment IDs if indices are missing or invalid.
+   * For incremental updates, existingSegmentIds provides IDs from the prior pack.
+   */
+  private mapIndicesToSegmentIds(
+    indices: number[] | undefined,
+    segments: TopicalSegment[],
+    existingSegmentIds?: string[],
+  ): string[] {
+    if (!indices || indices.length === 0) {
+      // Fallback: if Claude didn't provide indices, use all segment IDs
+      const allIds = segments.map((s) => s.id);
+      return existingSegmentIds ? [...existingSegmentIds, ...allIds] : allIds;
+    }
+
+    const mapped: string[] = [];
+    for (const idx of indices) {
+      // Claude returns 1-based indices
+      const zeroIdx = idx - 1;
+      if (zeroIdx >= 0 && zeroIdx < segments.length) {
+        mapped.push(segments[zeroIdx].id);
+      }
+    }
+
+    // If mapping produced nothing (all invalid indices), fallback
+    if (mapped.length === 0) {
+      const allIds = segments.map((s) => s.id);
+      return existingSegmentIds ? [...existingSegmentIds, ...allIds] : allIds;
+    }
+
+    return mapped;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1058,6 +1093,7 @@ export interface StructuredKpContent {
     factType: string;
     value: string;
     confidence: number;
+    sourceSegmentIndices?: number[];
   }>;
   decisions: Array<{
     what: string;

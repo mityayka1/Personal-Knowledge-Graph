@@ -94,6 +94,8 @@ export interface SynthesizedKeyFact {
   value: string;
   /** Confidence level 0-1 */
   confidence: number;
+  /** 1-based indices of source segments this fact was derived from */
+  sourceSegmentIndices: number[];
 }
 
 /**
@@ -220,8 +222,15 @@ export const PACKING_SYNTHESIS_SCHEMA = {
             type: 'number',
             description: 'Confidence level 0-1 (how certain is this fact)',
           },
+          sourceSegmentIndices: {
+            type: 'array',
+            items: { type: 'integer' },
+            description:
+              'Which segments (1-based index from the input list) this fact was derived from. ' +
+              'Each fact must reference ONLY the specific segments that contain this information.',
+          },
         },
-        required: ['factType', 'value', 'confidence'],
+        required: ['factType', 'value', 'confidence', 'sourceSegmentIndices'],
       },
     },
     conflicts: {
