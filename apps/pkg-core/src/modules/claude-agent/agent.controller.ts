@@ -282,7 +282,7 @@ export class AgentController {
         mode: 'agent',
         taskType: 'recall',
         prompt: this.buildRecallPrompt(dto.query, dto.entityId),
-        toolCategories: ['search', 'context', 'entities', 'events', 'knowledge'],
+        toolCategories: ['search', 'context', 'entities', 'events', 'knowledge', 'activities'],
         model: dto.model || 'sonnet',
         maxTurns: dto.maxTurns || 15,
         outputFormat: {
@@ -751,7 +751,7 @@ export class AgentController {
           mode: 'agent',
           taskType: 'meeting_prep',
           prompt: this.buildPreparePrompt(entity.name || entity.id, entityId),
-          toolCategories: ['search', 'context', 'entities', 'events', 'knowledge'],
+          toolCategories: ['search', 'context', 'entities', 'events', 'knowledge', 'activities'],
           model: 'sonnet',
           maxTurns: 15,
           referenceType: 'entity',
@@ -799,12 +799,27 @@ export class AgentController {
 3. get_entity_details — базовая информация о контакте (факты, идентификаторы)
 4. get_entity_context — полный контекст о человеке (история взаимодействий, синтезированная сводка)
 5. search_discussions — поиск по тематическим сегментам обсуждений (topic, keywords, summary)
-6. get_knowledge_summary — консолидированные знания по проекту/человеку (решения, факты, открытые вопросы). ТРЕБУЕТ activityId или entityId — получи их из search_discussions.
+6. get_knowledge_summary — консолидированные знания по проекту/человеку (решения, факты, открытые вопросы). ТРЕБУЕТ activityId или entityId — получи их из search_discussions или find_activity_by_name.
+7. find_activity_by_name — поиск проекта/задачи по имени (fuzzy match). Возвращает ID, иерархию, статус.
+8. list_activities — список проектов/задач с фильтрами (type, status, context, parentId)
+9. get_activity_tree — полное дерево иерархии проекта со всеми вложенными задачами
+10. get_activity_details — детальная информация о проекте (описание, участники, дедлайны, прогресс)
 
 ОБЯЗАТЕЛЬНЫЙ ПОРЯДОК ДЕЙСТВИЙ:
-1. Вызови search_messages И search_discussions параллельно
-2. Если в результатах search_discussions есть поле activityId (не null) — ОБЯЗАТЕЛЬНО вызови get_knowledge_summary(activityId) для КАЖДОГО уникального activityId. Это критический шаг, пропускать НЕЛЬЗЯ.
-3. Для вопросов о конкретном человеке: дополнительно list_entities → get_entity_context
+1. Определи тип запроса:
+   a) Запрос о проекте/задаче (содержит имя проекта или слова "проект", "задач", "что по") → начни с find_activity_by_name
+   b) Запрос о человеке → начни с list_entities + search_messages
+   c) Общий поиск → search_messages + search_discussions параллельно
+
+2. Для запросов о проектах:
+   - find_activity_by_name → получи activityId
+   - get_activity_details(activityId) — описание, статус, участники, дедлайны
+   - get_activity_tree(activityId) — вложенные задачи и подпроекты
+   - get_knowledge_summary(activityId) — решения, факты, открытые вопросы
+   - search_messages с названием проекта — недавние обсуждения
+
+3. Если в результатах search_discussions есть activityId — ОБЯЗАТЕЛЬНО вызови get_knowledge_summary(activityId) для КАЖДОГО уникального activityId.
+4. Для вопросов о конкретном человеке: дополнительно list_entities → get_entity_context
 
 ПОЧЕМУ get_knowledge_summary ОБЯЗАТЕЛЕН:
 - Содержит структурированные решения, факты и открытые вопросы
