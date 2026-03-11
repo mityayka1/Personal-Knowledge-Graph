@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Activity, ActivityType, ActivityStatus, EntityRecord, EntityType } from '@pkg/entities';
+import { Activity, ActivityType, ActivityStatus, EntityRecord, EntityType, Commitment, CommitmentStatus } from '@pkg/entities';
 import {
   DeduplicationGatewayService,
   DedupAction,
@@ -53,18 +53,29 @@ const makeEntity = (overrides: Partial<EntityRecord> = {}): EntityRecord =>
     ...overrides,
   }) as EntityRecord;
 
+const makeCommitment = (overrides: Partial<Commitment> = {}): Commitment =>
+  ({
+    id: 'commitment-aaa-111',
+    title: 'Отправить договор',
+    status: CommitmentStatus.PENDING,
+    fromEntityId: 'owner-111',
+    toEntityId: 'entity-222',
+    ...overrides,
+  }) as Commitment;
+
 // --- Tests ---
 
 describe('DeduplicationGatewayService', () => {
   let service: DeduplicationGatewayService;
 
   // Mocks
-  let mockActivityQb: any;
-  let mockEntityQb: any;
   const mockActivityRepo = {
     createQueryBuilder: jest.fn(),
   };
   const mockEntityRepo = {
+    createQueryBuilder: jest.fn(),
+  };
+  const mockCommitmentRepo = {
     createQueryBuilder: jest.fn(),
   };
   const mockProjectMatchingService = {};
@@ -88,6 +99,10 @@ describe('DeduplicationGatewayService', () => {
       {
         provide: getRepositoryToken(EntityRecord),
         useValue: mockEntityRepo,
+      },
+      {
+        provide: getRepositoryToken(Commitment),
+        useValue: mockCommitmentRepo,
       },
       {
         provide: ProjectMatchingService,
@@ -121,14 +136,12 @@ describe('DeduplicationGatewayService', () => {
 
   describe('checkTask', () => {
     it('should return CREATE when no similar tasks exist (pgvector returns empty)', async () => {
-      // Exact match returns null
       const exactQb = createMockQueryBuilder(null);
-      // Semantic search returns empty
       const semanticQb = createMockQueryBuilder(null, []);
 
       mockActivityRepo.createQueryBuilder
-        .mockReturnValueOnce(exactQb) // findExactTaskMatch
-        .mockReturnValueOnce(semanticQb); // findSemanticTaskCandidates
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -163,16 +176,20 @@ describe('DeduplicationGatewayService', () => {
       expect(decision.reason).toContain('Exact name match');
     });
 
-    it('should call LLM for semantic candidates and return PENDING_APPROVAL for 0.7-0.9 confidence', async () => {
-      // No exact match
+    it('should call LLM batch for all semantic candidates and pick best match', async () => {
       const exactQb = createMockQueryBuilder(null);
-      // Semantic search returns one candidate
       const semanticQb = createMockQueryBuilder(null, [
         {
-          id: 'semantic-match-id',
+          id: 'candidate-1',
           name: 'Настройка CI/CD пайплайна',
           description: 'Настроить CI/CD для проекта',
           similarity: 0.85,
+        },
+        {
+          id: 'candidate-2',
+          name: 'Настроить автодеплой',
+          description: null,
+          similarity: 0.72,
         },
       ]);
 
@@ -182,12 +199,20 @@ describe('DeduplicationGatewayService', () => {
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
-      mockLlmDedupService.decideDuplicate.mockResolvedValue({
-        isDuplicate: true,
-        confidence: 0.82,
-        mergeIntoId: 'semantic-match-id',
-        reason: 'Похожие задачи: настройка CI/CD',
-      });
+      // LLM batch: candidate-1 is duplicate, candidate-2 is not
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.82,
+          mergeIntoId: 'candidate-1',
+          reason: 'Похожие задачи: настройка CI/CD',
+        },
+        {
+          isDuplicate: false,
+          confidence: 0.3,
+          reason: 'Разные задачи',
+        },
+      ]);
 
       const candidate: TaskCandidate = {
         name: 'Настроить CI/CD',
@@ -198,26 +223,24 @@ describe('DeduplicationGatewayService', () => {
       const decision = await service.checkTask(candidate);
 
       expect(decision.action).toBe(DedupAction.PENDING_APPROVAL);
-      expect(decision.existingId).toBe('semantic-match-id');
+      expect(decision.existingId).toBe('candidate-1');
       expect(decision.confidence).toBe(0.82);
 
-      // Verify LLM was called with correct pair
-      expect(mockLlmDedupService.decideDuplicate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          newItem: expect.objectContaining({ type: 'task', name: 'Настроить CI/CD' }),
-          existingItem: expect.objectContaining({
-            id: 'semantic-match-id',
-            name: 'Настройка CI/CD пайплайна',
+      // Verify LLM was called with ALL candidates in batch
+      expect(mockLlmDedupService.decideBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'candidate-1' }),
           }),
-          activityContext: 'Проект ИИ-Сервисы',
-        }),
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'candidate-2' }),
+          }),
+        ]),
       );
     });
 
     it('should return MERGE for high confidence LLM decision (>=0.9)', async () => {
-      // No exact match
       const exactQb = createMockQueryBuilder(null);
-      // Semantic candidate
       const semanticQb = createMockQueryBuilder(null, [
         {
           id: 'high-conf-id',
@@ -233,12 +256,14 @@ describe('DeduplicationGatewayService', () => {
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
-      mockLlmDedupService.decideDuplicate.mockResolvedValue({
-        isDuplicate: true,
-        confidence: 0.95,
-        mergeIntoId: 'high-conf-id',
-        reason: 'Одна и та же задача: CI/CD setup',
-      });
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.95,
+          mergeIntoId: 'high-conf-id',
+          reason: 'Одна и та же задача: CI/CD setup',
+        },
+      ]);
 
       const candidate: TaskCandidate = {
         name: 'Настроить CI CD',
@@ -252,10 +277,8 @@ describe('DeduplicationGatewayService', () => {
       expect(decision.confidence).toBe(0.95);
     });
 
-    it('should return CREATE when LLM says not duplicate', async () => {
-      // No exact match
+    it('should return CREATE when LLM says not duplicate for any candidate', async () => {
       const exactQb = createMockQueryBuilder(null);
-      // Semantic candidate found
       const semanticQb = createMockQueryBuilder(null, [
         {
           id: 'different-task-id',
@@ -271,11 +294,13 @@ describe('DeduplicationGatewayService', () => {
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
-      mockLlmDedupService.decideDuplicate.mockResolvedValue({
-        isDuplicate: false,
-        confidence: 0.9,
-        reason: 'Разные задачи: CI/CD vs тестирование',
-      });
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: false,
+          confidence: 0.9,
+          reason: 'Разные задачи: CI/CD vs тестирование',
+        },
+      ]);
 
       const candidate: TaskCandidate = {
         name: 'Настроить CI/CD',
@@ -287,6 +312,38 @@ describe('DeduplicationGatewayService', () => {
       expect(decision.action).toBe(DedupAction.CREATE);
       expect(decision.existingId).toBeUndefined();
       expect(decision.reason).toContain('not duplicate');
+    });
+
+    it('should pick the highest-confidence match when multiple candidates are duplicates', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      const semanticQb = createMockQueryBuilder(null, [
+        { id: 'c1', name: 'CI/CD настройка', description: null, similarity: 0.88 },
+        { id: 'c2', name: 'Настроить деплой CI/CD', description: null, similarity: 0.82 },
+        { id: 'c3', name: 'Написать тесты', description: null, similarity: 0.55 },
+      ]);
+
+      mockActivityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      // LLM: c1 is weak duplicate, c2 is strong duplicate, c3 is not
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        { isDuplicate: true, confidence: 0.75, mergeIntoId: 'c1', reason: 'Похожие' },
+        { isDuplicate: true, confidence: 0.95, mergeIntoId: 'c2', reason: 'Точный дубликат' },
+        { isDuplicate: false, confidence: 0.1, reason: 'Не дубликат' },
+      ]);
+
+      const decision = await service.checkTask({
+        name: 'Настроить CI/CD',
+        ownerEntityId: 'owner-111',
+      });
+
+      // Should pick c2 (confidence 0.95) over c1 (confidence 0.75)
+      expect(decision.action).toBe(DedupAction.MERGE);
+      expect(decision.existingId).toBe('c2');
+      expect(decision.confidence).toBe(0.95);
     });
   });
 
@@ -319,7 +376,6 @@ describe('DeduplicationGatewayService', () => {
     it('should return CREATE when no matches', async () => {
       const exactQb = createMockQueryBuilder(null);
       const partialQb = createMockQueryBuilder(null, []);
-      // getMany for partial
       partialQb.getMany = jest.fn().mockResolvedValue([]);
 
       mockEntityRepo.createQueryBuilder
@@ -338,28 +394,34 @@ describe('DeduplicationGatewayService', () => {
       expect(decision.reason).toContain('No similar entities');
     });
 
-    it('should use ILIKE for partial entity name match and call LLM', async () => {
-      // No exact match
+    it('should call LLM batch for all partial entity matches', async () => {
       const exactQb = createMockQueryBuilder(null);
 
-      // ILIKE partial match returns a candidate
-      const partialCandidate = makeEntity({
-        id: 'partial-entity-id',
-        name: 'Иванов И.И.',
-      });
+      const partialCandidates = [
+        makeEntity({ id: 'partial-1', name: 'Иванов И.И.' }),
+        makeEntity({ id: 'partial-2', name: 'Иванов Игорь' }),
+      ];
       const partialQb = createMockQueryBuilder(null, []);
-      partialQb.getMany = jest.fn().mockResolvedValue([partialCandidate]);
+      partialQb.getMany = jest.fn().mockResolvedValue(partialCandidates);
 
       mockEntityRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
         .mockReturnValueOnce(partialQb);
 
-      mockLlmDedupService.decideDuplicate.mockResolvedValue({
-        isDuplicate: true,
-        confidence: 0.85,
-        mergeIntoId: 'partial-entity-id',
-        reason: 'Тот же человек: Иванов И.И. = Иванов',
-      });
+      // LLM batch: partial-1 is duplicate (same person), partial-2 is not
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.85,
+          mergeIntoId: 'partial-1',
+          reason: 'Тот же человек: Иванов И.И. = Иванов',
+        },
+        {
+          isDuplicate: false,
+          confidence: 0.3,
+          reason: 'Другой человек: Иванов Игорь',
+        },
+      ]);
 
       const candidate: EntityCandidate = {
         name: 'Иванов',
@@ -370,25 +432,19 @@ describe('DeduplicationGatewayService', () => {
       const decision = await service.checkEntity(candidate);
 
       expect(decision.action).toBe(DedupAction.PENDING_APPROVAL);
-      expect(decision.existingId).toBe('partial-entity-id');
+      expect(decision.existingId).toBe('partial-1');
       expect(decision.confidence).toBe(0.85);
 
-      // Verify ILIKE query was built
-      expect(partialQb.andWhere).toHaveBeenCalledWith(
-        'e.name ILIKE :pattern',
-        expect.objectContaining({ pattern: expect.stringContaining('%') }),
-      );
-
-      // Verify LLM was called with entity type
-      expect(mockLlmDedupService.decideDuplicate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          newItem: expect.objectContaining({ type: 'entity', name: 'Иванов' }),
-          existingItem: expect.objectContaining({
-            id: 'partial-entity-id',
-            type: 'entity',
-            name: 'Иванов И.И.',
+      // Verify LLM batch was called with ALL candidates
+      expect(mockLlmDedupService.decideBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'partial-1' }),
           }),
-        }),
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'partial-2' }),
+          }),
+        ]),
       );
     });
   });
@@ -398,15 +454,14 @@ describe('DeduplicationGatewayService', () => {
   // ─────────────────────────────────────────────────────────────
 
   describe('checkCommitment', () => {
-    it('should delegate to checkTask', async () => {
-      // Set up exact match for the task dedup
-      const existingActivity = makeActivity({
-        id: 'commitment-task-id',
-        name: 'отправить договор',
+    it('should return MERGE for exact commitment title match', async () => {
+      const existingCommitment = makeCommitment({
+        id: 'commit-exact-id',
+        title: 'отправить договор',
       });
-      const exactQb = createMockQueryBuilder(existingActivity);
+      const exactQb = createMockQueryBuilder(existingCommitment);
 
-      mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
 
       const candidate: CommitmentCandidate = {
         what: 'Отправить договор',
@@ -417,21 +472,115 @@ describe('DeduplicationGatewayService', () => {
       const decision = await service.checkCommitment(candidate);
 
       expect(decision.action).toBe(DedupAction.MERGE);
-      expect(decision.existingId).toBe('commitment-task-id');
-
-      // Verify activity repo was queried (not entity repo)
-      expect(mockActivityRepo.createQueryBuilder).toHaveBeenCalled();
+      expect(decision.existingId).toBe('commit-exact-id');
+      expect(decision.confidence).toBe(1.0);
     });
 
-    it('should return CREATE when commitment has no entityId', async () => {
+    it('should call LLM batch for all semantic commitment candidates', async () => {
+      // No exact match
+      const exactQb = createMockQueryBuilder(null);
+      // Semantic candidates
+      const semanticQb = createMockQueryBuilder(null, [
+        { id: 'sc-1', title: 'Отправить контракт клиенту', similarity: 0.82 },
+        { id: 'sc-2', title: 'Подготовить договор', similarity: 0.65 },
+      ]);
+
+      mockCommitmentRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      // LLM: sc-1 is duplicate, sc-2 is not
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.92,
+          mergeIntoId: 'sc-1',
+          reason: 'Одно обязательство: отправить договор = отправить контракт',
+        },
+        {
+          isDuplicate: false,
+          confidence: 0.2,
+          reason: 'Разные действия: подготовить vs отправить',
+        },
+      ]);
+
       const candidate: CommitmentCandidate = {
-        what: 'Отправить отчёт',
+        what: 'Отправить договор',
+        entityId: 'owner-111',
+        activityContext: 'Проект Панавто',
+      };
+
+      const decision = await service.checkCommitment(candidate);
+
+      expect(decision.action).toBe(DedupAction.MERGE);
+      expect(decision.existingId).toBe('sc-1');
+      expect(decision.confidence).toBe(0.92);
+
+      // Verify LLM was called with ALL candidates
+      expect(mockLlmDedupService.decideBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'sc-1' }),
+          }),
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'sc-2' }),
+          }),
+        ]),
+      );
+    });
+
+    it('should return CREATE when no semantic candidates found', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      const semanticQb = createMockQueryBuilder(null, []);
+
+      mockCommitmentRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      const candidate: CommitmentCandidate = {
+        what: 'Совершенно уникальное обязательство',
+        entityId: 'owner-111',
       };
 
       const decision = await service.checkCommitment(candidate);
 
       expect(decision.action).toBe(DedupAction.CREATE);
-      expect(decision.reason).toContain('No entityId');
+      expect(decision.reason).toContain('No similar commitments');
+    });
+
+    it('should return CREATE when LLM says not duplicate for any candidate', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      const semanticQb = createMockQueryBuilder(null, [
+        { id: 'sc-1', title: 'Другое дело', similarity: 0.55 },
+      ]);
+
+      mockCommitmentRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: false,
+          confidence: 0.1,
+          reason: 'Разные обязательства',
+        },
+      ]);
+
+      const candidate: CommitmentCandidate = {
+        what: 'Отправить договор',
+        entityId: 'owner-111',
+      };
+
+      const decision = await service.checkCommitment(candidate);
+
+      expect(decision.action).toBe(DedupAction.CREATE);
+      expect(decision.reason).toContain('not duplicate');
     });
   });
 
@@ -441,11 +590,9 @@ describe('DeduplicationGatewayService', () => {
 
   describe('graceful degradation', () => {
     it('should return CREATE when embedding service is unavailable', async () => {
-      // Build module WITHOUT EmbeddingService
       const module = await buildModule(false);
       const serviceNoEmb = module.get(DeduplicationGatewayService);
 
-      // No exact match
       const exactQb = createMockQueryBuilder(null);
       mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
 
@@ -456,29 +603,18 @@ describe('DeduplicationGatewayService', () => {
 
       const decision = await serviceNoEmb.checkTask(candidate);
 
-      // Should still work -- just no semantic candidates, so CREATE
       expect(decision.action).toBe(DedupAction.CREATE);
       expect(decision.reason).toContain('No similar tasks');
-
-      // Embedding should NOT have been called
       expect(mockEmbeddingService.generate).not.toHaveBeenCalled();
     });
 
     it('should include deletedAt IS NULL filter in task queries', async () => {
-      // No exact match
       const exactQb = createMockQueryBuilder(null);
       mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
 
-      // Verify the exact match query includes deletedAt filter
-      const candidate: TaskCandidate = {
-        name: 'Some task',
-        ownerEntityId: 'owner-111',
-      };
-
-      // Need semantic step too — no embedding service
       const module = await buildModule(false);
       const svc = module.get(DeduplicationGatewayService);
-      await svc.checkTask(candidate);
+      await svc.checkTask({ name: 'Some task', ownerEntityId: 'owner-111' });
 
       expect(exactQb.andWhere).toHaveBeenCalledWith('a.deletedAt IS NULL');
     });
@@ -492,20 +628,16 @@ describe('DeduplicationGatewayService', () => {
         .mockReturnValueOnce(exactQb)
         .mockReturnValueOnce(partialQb);
 
-      const candidate: EntityCandidate = {
+      await service.checkEntity({
         name: 'Тестовый человек',
         type: EntityType.PERSON,
-      };
+      });
 
-      await service.checkEntity(candidate);
-
-      // Both exact and partial queries should filter deleted
       expect(exactQb.andWhere).toHaveBeenCalledWith('e.deletedAt IS NULL');
       expect(partialQb.andWhere).toHaveBeenCalledWith('e.deletedAt IS NULL');
     });
 
     it('should return CREATE when embedding generation throws', async () => {
-      // No exact match
       const exactQb = createMockQueryBuilder(null);
       mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
 

@@ -92,8 +92,8 @@ export class DeduplicationGatewayService {
    * 1. Normalize name
    * 2. Exact match (LOWER(name)) -> MERGE
    * 3. Generate embedding -> pgvector cosine >= 0.5, top-5
-   * 4. LLM decision for top candidate
-   * 5. Route by confidence: >=0.9 MERGE, 0.7-0.9 PENDING_APPROVAL, <0.7 CREATE
+   * 4. LLM batch decision for ALL candidates (cosine is noisy, true dup may be #2-#3)
+   * 5. Route best match by confidence: >=0.9 MERGE, 0.7-0.9 PENDING_APPROVAL, <0.7 CREATE
    */
   async checkTask(candidate: TaskCandidate): Promise<DedupDecision> {
     const normalized = ProjectMatchingService.normalizeName(candidate.name);
@@ -134,28 +134,37 @@ export class DeduplicationGatewayService {
       return this.createDecision('No similar tasks found');
     }
 
-    // Step 3: LLM decision for the top candidate
-    const topCandidate = semanticCandidates[0];
-
-    const pair: DedupPair = {
+    // Step 3: LLM decision for ALL candidates (not just top-1)
+    // Cosine similarity is noisy — the true duplicate may rank #2 or #3.
+    // Sending all candidates lets LLM pick correctly.
+    const pairs: DedupPair[] = semanticCandidates.map(c => ({
       newItem: {
-        type: 'task',
+        type: 'task' as const,
         name: candidate.name,
         description: candidate.description,
       },
       existingItem: {
-        id: topCandidate.id,
-        type: 'task',
-        name: topCandidate.name,
-        description: topCandidate.description ?? undefined,
+        id: c.id,
+        type: 'task' as const,
+        name: c.name,
+        description: c.description ?? undefined,
       },
       activityContext: candidate.projectName,
-    };
+    }));
 
-    const llmDecision = await this.llmDedupService.decideDuplicate(pair);
+    const llmDecisions = await this.llmDedupService.decideBatch(pairs);
 
-    // Step 4: Route by confidence
-    return this.routeByConfidence(llmDecision, topCandidate.id, topCandidate.name);
+    // Step 4: Pick the highest-confidence duplicate match
+    const bestMatch = llmDecisions
+      .filter(d => d.isDuplicate && d.mergeIntoId)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+
+    if (!bestMatch) {
+      return this.createDecision('LLM says not duplicate for any candidate');
+    }
+
+    const matchedCandidate = semanticCandidates.find(c => c.id === bestMatch.mergeIntoId);
+    return this.routeByConfidence(bestMatch, bestMatch.mergeIntoId!, matchedCandidate?.name ?? '');
   }
 
   /**
@@ -206,26 +215,33 @@ export class DeduplicationGatewayService {
       return this.createDecision('No similar entities found');
     }
 
-    // Step 3: LLM decision for the top candidate
-    const topCandidate = partialCandidates[0];
-
-    const pair: DedupPair = {
+    // Step 3: LLM decision for ALL partial candidates (not just top-1)
+    const pairs: DedupPair[] = partialCandidates.map(c => ({
       newItem: {
-        type: 'entity',
+        type: 'entity' as const,
         name: candidate.name,
         context: candidate.context,
       },
       existingItem: {
-        id: topCandidate.id,
-        type: 'entity',
-        name: topCandidate.name,
+        id: c.id,
+        type: 'entity' as const,
+        name: c.name,
       },
-    };
+    }));
 
-    const llmDecision = await this.llmDedupService.decideDuplicate(pair);
+    const llmDecisions = await this.llmDedupService.decideBatch(pairs);
 
-    // Step 4: Route by confidence
-    return this.routeByConfidence(llmDecision, topCandidate.id, topCandidate.name);
+    // Step 4: Pick the highest-confidence duplicate match
+    const bestMatch = llmDecisions
+      .filter(d => d.isDuplicate && d.mergeIntoId)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+
+    if (!bestMatch) {
+      return this.createDecision('LLM says not duplicate for any candidate');
+    }
+
+    const matchedCandidate = partialCandidates.find(c => c.id === bestMatch.mergeIntoId);
+    return this.routeByConfidence(bestMatch, bestMatch.mergeIntoId!, matchedCandidate?.name ?? '');
   }
 
   /**
@@ -276,27 +292,36 @@ export class DeduplicationGatewayService {
       return this.createDecision('No similar commitments found');
     }
 
-    // Step 3: LLM decision for the top candidate
-    const topCandidate = semanticCandidates[0];
-
-    const pair: DedupPair = {
+    // Step 3: LLM decision for ALL candidates (not just top-1)
+    // Cosine similarity is noisy in the 0.75-0.85 range — the true duplicate
+    // may rank #2 or #3 by cosine. Sending all candidates lets LLM pick correctly.
+    const pairs: DedupPair[] = semanticCandidates.map(c => ({
       newItem: {
-        type: 'commitment',
+        type: 'commitment' as const,
         name: candidate.what,
         context: candidate.activityContext,
       },
       existingItem: {
-        id: topCandidate.id,
-        type: 'commitment',
-        name: topCandidate.title,
+        id: c.id,
+        type: 'commitment' as const,
+        name: c.title,
       },
       activityContext: candidate.activityContext,
-    };
+    }));
 
-    const llmDecision = await this.llmDedupService.decideDuplicate(pair);
+    const llmDecisions = await this.llmDedupService.decideBatch(pairs);
 
-    // Step 4: Route by confidence
-    return this.routeByConfidence(llmDecision, topCandidate.id, topCandidate.title);
+    // Step 4: Pick the highest-confidence duplicate match
+    const bestMatch = llmDecisions
+      .filter(d => d.isDuplicate && d.mergeIntoId)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+
+    if (!bestMatch) {
+      return this.createDecision('LLM says not duplicate for any candidate');
+    }
+
+    const matchedCandidate = semanticCandidates.find(c => c.id === bestMatch.mergeIntoId);
+    return this.routeByConfidence(bestMatch, bestMatch.mergeIntoId!, matchedCandidate?.title ?? '');
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -402,9 +427,18 @@ export class DeduplicationGatewayService {
       .createQueryBuilder('c')
       .where('LOWER(c.title) = :title', { title: normalizedTitle })
       .andWhere('c.status NOT IN (:...excludedStatuses)', {
-        excludedStatuses: [CommitmentStatus.CANCELLED],
+        excludedStatuses: [CommitmentStatus.CANCELLED, CommitmentStatus.COMPLETED],
       })
-      .andWhere('c.deletedAt IS NULL');
+      .andWhere('c.deletedAt IS NULL')
+      // Prefer actionable statuses: pending > in_progress > draft
+      .orderBy(
+        `CASE c.status
+          WHEN '${CommitmentStatus.PENDING}' THEN 1
+          WHEN '${CommitmentStatus.IN_PROGRESS}' THEN 2
+          ELSE 3
+        END`,
+        'ASC',
+      );
 
     if (entityId) {
       qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
@@ -445,7 +479,7 @@ export class DeduplicationGatewayService {
         .addSelect('c.title', 'title')
         .addSelect('1 - (c.embedding <=> :embedding)', 'similarity')
         .where('c.status NOT IN (:...excludedStatuses)', {
-          excludedStatuses: [CommitmentStatus.CANCELLED],
+          excludedStatuses: [CommitmentStatus.CANCELLED, CommitmentStatus.COMPLETED],
         })
         .andWhere('c.deletedAt IS NULL')
         .andWhere('c.embedding IS NOT NULL')
