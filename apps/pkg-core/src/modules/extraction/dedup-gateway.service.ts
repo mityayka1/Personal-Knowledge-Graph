@@ -1,7 +1,15 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Activity, ActivityType, ActivityStatus, EntityRecord, EntityType } from '@pkg/entities';
+import {
+  Activity,
+  ActivityType,
+  ActivityStatus,
+  EntityRecord,
+  EntityType,
+  Commitment,
+  CommitmentStatus,
+} from '@pkg/entities';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { ProjectMatchingService } from './project-matching.service';
 import { LlmDedupService, DedupPair } from './llm-dedup.service';
@@ -65,6 +73,8 @@ export class DeduplicationGatewayService {
     private readonly activityRepo: Repository<Activity>,
     @InjectRepository(EntityRecord)
     private readonly entityRepo: Repository<EntityRecord>,
+    @InjectRepository(Commitment)
+    private readonly commitmentRepo: Repository<Commitment>,
     private readonly projectMatchingService: ProjectMatchingService,
     private readonly llmDedupService: LlmDedupService,
     @Optional()
@@ -220,24 +230,73 @@ export class DeduplicationGatewayService {
 
   /**
    * Check whether a commitment is a duplicate.
-   * Delegates to checkTask since commitments map to Activity records.
+   *
+   * Algorithm:
+   * 1. Normalize title
+   * 2. Exact match (LOWER(title)) -> MERGE
+   * 3. Generate embedding -> pgvector cosine >= 0.5, top-5
+   * 4. LLM decision for top candidate
+   * 5. Route by confidence: >=0.9 MERGE, 0.7-0.9 PENDING_APPROVAL, <0.7 CREATE
    */
   async checkCommitment(candidate: CommitmentCandidate): Promise<DedupDecision> {
-    // Commitments need an ownerEntityId for task dedup; use entityId if available
-    const ownerEntityId = candidate.entityId ?? '';
+    const normalized = ProjectMatchingService.normalizeName(candidate.what);
 
-    if (!ownerEntityId) {
-      this.logger.debug(
-        'Commitment has no entityId, cannot check for duplicates, creating new',
-      );
-      return this.createDecision('No entityId for commitment dedup');
+    if (!normalized) {
+      return this.createDecision('Empty commitment title after normalization');
     }
 
-    return this.checkTask({
-      name: candidate.what,
-      ownerEntityId,
-      projectName: candidate.activityContext,
-    });
+    // Step 1: Exact match by normalized title
+    const exactMatch = await this.findExactCommitmentMatch(
+      normalized,
+      candidate.entityId,
+    );
+
+    if (exactMatch) {
+      this.logger.log(
+        `Exact commitment match: "${candidate.what}" -> "${exactMatch.title}" [${exactMatch.id}]`,
+      );
+      return {
+        action: DedupAction.MERGE,
+        existingId: exactMatch.id,
+        confidence: 1.0,
+        reason: `Exact title match: "${exactMatch.title}"`,
+      };
+    }
+
+    // Step 2: Semantic search via pgvector embeddings
+    const semanticCandidates = await this.findSemanticCommitmentCandidates(
+      normalized,
+      candidate.entityId,
+    );
+
+    if (semanticCandidates.length === 0) {
+      this.logger.debug(
+        `No semantic candidates for commitment "${candidate.what}", creating new`,
+      );
+      return this.createDecision('No similar commitments found');
+    }
+
+    // Step 3: LLM decision for the top candidate
+    const topCandidate = semanticCandidates[0];
+
+    const pair: DedupPair = {
+      newItem: {
+        type: 'commitment',
+        name: candidate.what,
+        context: candidate.activityContext,
+      },
+      existingItem: {
+        id: topCandidate.id,
+        type: 'commitment',
+        name: topCandidate.title,
+      },
+      activityContext: candidate.activityContext,
+    };
+
+    const llmDecision = await this.llmDedupService.decideDuplicate(pair);
+
+    // Step 4: Route by confidence
+    return this.routeByConfidence(llmDecision, topCandidate.id, topCandidate.title);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -321,6 +380,89 @@ export class DeduplicationGatewayService {
     } catch (error: any) {
       this.logger.error(
         `Semantic task search failed: ${error.message}`,
+        error.stack,
+      );
+      return [];
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private: Commitment helpers
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Find an exact match for a commitment by normalized title (case-insensitive).
+   * Optionally scoped by entityId (from or to party).
+   */
+  private async findExactCommitmentMatch(
+    normalizedTitle: string,
+    entityId?: string,
+  ): Promise<Commitment | null> {
+    const qb = this.commitmentRepo
+      .createQueryBuilder('c')
+      .where('LOWER(c.title) = :title', { title: normalizedTitle })
+      .andWhere('c.status NOT IN (:...excludedStatuses)', {
+        excludedStatuses: [CommitmentStatus.CANCELLED],
+      })
+      .andWhere('c.deletedAt IS NULL');
+
+    if (entityId) {
+      qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
+    }
+
+    return qb.getOne();
+  }
+
+  /**
+   * Find semantic candidates for commitment via pgvector cosine similarity.
+   * Returns up to TOP_K commitments with similarity >= COSINE_THRESHOLD.
+   */
+  private async findSemanticCommitmentCandidates(
+    normalizedTitle: string,
+    entityId?: string,
+  ): Promise<Array<{ id: string; title: string; similarity: number }>> {
+    if (!this.embeddingService) {
+      this.logger.warn(
+        'EmbeddingService unavailable, skipping semantic commitment search',
+      );
+      return [];
+    }
+
+    let embedding: number[];
+    try {
+      embedding = await this.embeddingService.generate(normalizedTitle);
+    } catch (error: any) {
+      this.logger.warn(
+        `Failed to generate embedding for commitment "${normalizedTitle}": ${error.message}`,
+      );
+      return [];
+    }
+
+    try {
+      const qb = this.commitmentRepo
+        .createQueryBuilder('c')
+        .select('c.id', 'id')
+        .addSelect('c.title', 'title')
+        .addSelect('1 - (c.embedding <=> :embedding)', 'similarity')
+        .where('c.status NOT IN (:...excludedStatuses)', {
+          excludedStatuses: [CommitmentStatus.CANCELLED],
+        })
+        .andWhere('c.deletedAt IS NULL')
+        .andWhere('c.embedding IS NOT NULL')
+        .andWhere('1 - (c.embedding <=> :embedding) >= :threshold')
+        .orderBy('similarity', 'DESC')
+        .limit(TOP_K)
+        .setParameter('embedding', `[${embedding.join(',')}]`)
+        .setParameter('threshold', COSINE_THRESHOLD);
+
+      if (entityId) {
+        qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
+      }
+
+      return qb.getRawMany();
+    } catch (error: any) {
+      this.logger.error(
+        `Semantic commitment search failed: ${error.message}`,
         error.stack,
       );
       return [];
