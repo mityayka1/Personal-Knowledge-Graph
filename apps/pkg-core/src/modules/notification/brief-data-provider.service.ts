@@ -191,32 +191,43 @@ export class BriefDataProvider {
 
   /**
    * Get pending/overdue commitments from Commitment table.
+   * Uses DISTINCT ON (title) to avoid showing duplicate commitment titles.
    */
   private async getPendingCommitments(): Promise<Commitment[]> {
     const now = new Date();
 
+    // Use QueryBuilder with DISTINCT ON to deduplicate by title.
+    // Without this, 21 copies of "указывать код марки авто" would consume all 10 slots.
+    const subQuery = this.commitmentRepo
+      .createQueryBuilder('c')
+      .select('DISTINCT ON (LOWER(c.title)) c.id')
+      .addSelect('c.title')
+      .addSelect('c.due_date')
+      .where(
+        '(c.status = :pending AND c.due_date < :now)' +
+        ' OR (c.status = :inProgress AND c.due_date < :now)' +
+        ' OR (c.status = :pending AND c.type IN (:...requestTypes) AND c.due_date IS NULL)',
+        {
+          pending: CommitmentStatus.PENDING,
+          inProgress: CommitmentStatus.IN_PROGRESS,
+          now,
+          requestTypes: [CommitmentType.REQUEST, CommitmentType.PROMISE],
+        },
+      )
+      .orderBy('LOWER(c.title)')
+      .addOrderBy('c.created_at', 'ASC')
+      .limit(10);
+
+    const uniqueRows = await subQuery.getRawMany();
+    if (uniqueRows.length === 0) return [];
+
+    const uniqueIds = uniqueRows.map((r) => r.c_id);
+
+    // Fetch full entities with relations for the deduplicated IDs
     return this.commitmentRepo.find({
-      where: [
-        // Overdue: pending with past due date
-        {
-          status: CommitmentStatus.PENDING,
-          dueDate: LessThan(now),
-        },
-        // In progress with past due date
-        {
-          status: CommitmentStatus.IN_PROGRESS,
-          dueDate: LessThan(now),
-        },
-        // Pending without due date (waiting for response)
-        {
-          status: CommitmentStatus.PENDING,
-          type: In([CommitmentType.REQUEST, CommitmentType.PROMISE]),
-          dueDate: IsNull(),
-        },
-      ],
+      where: { id: In(uniqueIds) },
       relations: ['fromEntity', 'toEntity'],
       order: { dueDate: 'ASC' },
-      take: 10,
     });
   }
 }

@@ -1265,6 +1265,43 @@ export class DraftExtractionService {
     let fromEntityId = input.ownerEntityId;
     let toEntityId = input.ownerEntityId;
 
+    // --- Dedup check: skip if identical commitment already exists ---
+    const existingCommitment = await this.commitmentRepo
+      .createQueryBuilder('c')
+      .where('LOWER(c.title) = LOWER(:title)', { title: commitment.what })
+      .andWhere('c.deleted_at IS NULL')
+      .getOne();
+
+    if (existingCommitment) {
+      this.logger.debug(
+        `Skipping duplicate commitment "${commitment.what}" — already exists as ${existingCommitment.id}`,
+      );
+      // Return existing + find or create approval pointing to it
+      let existingApproval = await this.approvalRepo.findOne({
+        where: {
+          targetId: existingCommitment.id,
+          itemType: PendingApprovalItemType.COMMITMENT,
+        },
+      });
+      if (!existingApproval) {
+        existingApproval = await this.approvalRepo.save(
+          this.approvalRepo.create({
+            itemType: PendingApprovalItemType.COMMITMENT,
+            targetId: existingCommitment.id,
+            batchId,
+            confidence: commitment.confidence ?? 0.8,
+            sourceQuote: commitment.sourceQuote,
+            sourceInteractionId: input.sourceInteractionId ?? null,
+            messageRef: input.messageRef ?? null,
+            sourceEntityId: input.ownerEntityId ?? null,
+            context: `Обещание: ${commitment.what}`,
+            status: PendingApprovalStatus.PENDING,
+          }),
+        );
+      }
+      return { entity: existingCommitment, approval: existingApproval };
+    }
+
     if (commitment.from !== 'self') {
       if (DraftExtractionService.UUID_PATTERN.test(commitment.from)) {
         const fromEntity = await this.entityRepo.findOne({ where: { id: commitment.from } });

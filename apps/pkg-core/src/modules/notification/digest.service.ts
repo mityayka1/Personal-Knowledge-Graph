@@ -216,12 +216,24 @@ export class DigestService {
       }
     }
 
+    // Track seen titles to prevent duplicates across all sources
+    const seenTitles = new Set<string>(
+      items.map((item) => item.title.toLowerCase().replace(/\s*\(просрочено.*\)$/, '').trim()),
+    );
+
     // Pending commitments (from Commitment table)
     for (const commitment of data.pendingCommitments) {
       // Skip if already shown from EntityEvent
       if (commitment.sourceMessageId && seenSourceMessageIds.has(commitment.sourceMessageId)) {
         continue;
       }
+
+      // Skip if title already shown (cross-source dedup)
+      const normalizedTitle = (commitment.title || '').toLowerCase().trim();
+      if (seenTitles.has(normalizedTitle)) {
+        continue;
+      }
+      seenTitles.add(normalizedTitle);
       const isOverdue = commitment.dueDate && commitment.dueDate < new Date();
       const daysInfo = commitment.dueDate
         ? isOverdue
