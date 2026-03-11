@@ -196,32 +196,32 @@ export class BriefDataProvider {
   private async getPendingCommitments(): Promise<Commitment[]> {
     const now = new Date();
 
-    // Use QueryBuilder with DISTINCT ON to deduplicate by title.
-    // Without this, 21 copies of "указывать код марки авто" would consume all 10 slots.
-    const subQuery = this.commitmentRepo
-      .createQueryBuilder('c')
-      .select('DISTINCT ON (LOWER(c.title)) c.id')
-      .addSelect('c.title')
-      .addSelect('c.due_date')
-      .where(
-        '(c.status = :pending AND c.due_date < :now)' +
-        ' OR (c.status = :inProgress AND c.due_date < :now)' +
-        ' OR (c.status = :pending AND c.type IN (:...requestTypes) AND c.due_date IS NULL)',
-        {
-          pending: CommitmentStatus.PENDING,
-          inProgress: CommitmentStatus.IN_PROGRESS,
-          now,
-          requestTypes: [CommitmentType.REQUEST, CommitmentType.PROMISE],
-        },
-      )
-      .orderBy('LOWER(c.title)')
-      .addOrderBy('c.created_at', 'ASC')
-      .limit(10);
+    // Raw SQL because TypeORM QueryBuilder doesn't support DISTINCT ON correctly
+    // (it reorders columns, moving DISTINCT ON away from SELECT start).
+    // Without dedup, 21 copies of "указывать код марки авто" would consume all 10 slots.
+    const uniqueRows: { id: string }[] = await this.commitmentRepo.query(
+      `SELECT DISTINCT ON (LOWER(title)) id
+       FROM commitments
+       WHERE deleted_at IS NULL
+         AND (
+           (status = $1 AND due_date < $2)
+           OR (status = $3 AND due_date < $2)
+           OR (status = $1 AND type IN ($4, $5) AND due_date IS NULL)
+         )
+       ORDER BY LOWER(title), created_at ASC
+       LIMIT 10`,
+      [
+        CommitmentStatus.PENDING,
+        now,
+        CommitmentStatus.IN_PROGRESS,
+        CommitmentType.REQUEST,
+        CommitmentType.PROMISE,
+      ],
+    );
 
-    const uniqueRows = await subQuery.getRawMany();
     if (uniqueRows.length === 0) return [];
 
-    const uniqueIds = uniqueRows.map((r) => r.c_id);
+    const uniqueIds = uniqueRows.map((r) => r.id);
 
     // Fetch full entities with relations for the deduplicated IDs
     return this.commitmentRepo.find({
