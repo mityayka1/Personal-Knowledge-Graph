@@ -135,13 +135,15 @@ describe('DeduplicationGatewayService', () => {
   // ─────────────────────────────────────────────────────────────
 
   describe('checkTask', () => {
-    it('should return CREATE when no similar tasks exist (pgvector returns empty)', async () => {
+    it('should return CREATE when no similar tasks exist (both channels empty)', async () => {
       const exactQb = createMockQueryBuilder(null);
       const semanticQb = createMockQueryBuilder(null, []);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockActivityRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -192,10 +194,12 @@ describe('DeduplicationGatewayService', () => {
           similarity: 0.72,
         },
       ]);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockActivityRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -249,10 +253,12 @@ describe('DeduplicationGatewayService', () => {
           similarity: 0.92,
         },
       ]);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockActivityRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -287,10 +293,12 @@ describe('DeduplicationGatewayService', () => {
           similarity: 0.55,
         },
       ]);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockActivityRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -321,10 +329,12 @@ describe('DeduplicationGatewayService', () => {
         { id: 'c2', name: 'Настроить деплой CI/CD', description: null, similarity: 0.82 },
         { id: 'c3', name: 'Написать тесты', description: null, similarity: 0.55 },
       ]);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockActivityRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -344,6 +354,89 @@ describe('DeduplicationGatewayService', () => {
       expect(decision.action).toBe(DedupAction.MERGE);
       expect(decision.existingId).toBe('c2');
       expect(decision.confidence).toBe(0.95);
+    });
+
+    it('should discover duplicate via trigram when cosine returns nothing', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      const semanticQb = createMockQueryBuilder(null, []); // cosine: no hits
+      const trigramQb = createMockQueryBuilder(null, [
+        {
+          id: 'trigram-hit-1',
+          name: 'Настроить CICD пайплайн',
+          description: null,
+          similarity: 0.55,
+        },
+      ]);
+
+      mockActivityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.88,
+          mergeIntoId: 'trigram-hit-1',
+          reason: 'Одна задача: CICD pipeline',
+        },
+      ]);
+
+      const decision = await service.checkTask({
+        name: 'Настроить CI/CD',
+        ownerEntityId: 'owner-111',
+      });
+
+      expect(decision.action).toBe(DedupAction.PENDING_APPROVAL);
+      expect(decision.existingId).toBe('trigram-hit-1');
+      expect(decision.confidence).toBe(0.88);
+    });
+
+    it('should deduplicate candidates when both channels find the same task', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      // Both channels return same ID with different scores
+      const semanticQb = createMockQueryBuilder(null, [
+        { id: 'same-task', name: 'CI/CD настройка', description: null, similarity: 0.78 },
+      ]);
+      const trigramQb = createMockQueryBuilder(null, [
+        { id: 'same-task', name: 'CI/CD настройка', description: null, similarity: 0.62 },
+      ]);
+
+      mockActivityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.91,
+          mergeIntoId: 'same-task',
+          reason: 'Та же задача',
+        },
+      ]);
+
+      const decision = await service.checkTask({
+        name: 'Настроить CI/CD',
+        ownerEntityId: 'owner-111',
+      });
+
+      expect(decision.action).toBe(DedupAction.MERGE);
+      expect(decision.existingId).toBe('same-task');
+      // LLM should be called with exactly 1 candidate (deduplicated)
+      expect(mockLlmDedupService.decideBatch).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            existingItem: expect.objectContaining({ id: 'same-task' }),
+          }),
+        ]),
+      );
+      // Only 1 pair, not 2
+      expect(mockLlmDedupService.decideBatch.mock.calls[0][0]).toHaveLength(1);
     });
   });
 
@@ -484,10 +577,12 @@ describe('DeduplicationGatewayService', () => {
         { id: 'sc-1', title: 'Отправить контракт клиенту', similarity: 0.82 },
         { id: 'sc-2', title: 'Подготовить договор', similarity: 0.65 },
       ]);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockCommitmentRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -531,13 +626,15 @@ describe('DeduplicationGatewayService', () => {
       );
     });
 
-    it('should return CREATE when no semantic candidates found', async () => {
+    it('should return CREATE when no semantic candidates found (both channels empty)', async () => {
       const exactQb = createMockQueryBuilder(null);
       const semanticQb = createMockQueryBuilder(null, []);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockCommitmentRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -557,10 +654,12 @@ describe('DeduplicationGatewayService', () => {
       const semanticQb = createMockQueryBuilder(null, [
         { id: 'sc-1', title: 'Другое дело', similarity: 0.55 },
       ]);
+      const trigramQb = createMockQueryBuilder(null, []);
 
       mockCommitmentRepo.createQueryBuilder
         .mockReturnValueOnce(exactQb)
-        .mockReturnValueOnce(semanticQb);
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
 
@@ -594,7 +693,10 @@ describe('DeduplicationGatewayService', () => {
       const serviceNoEmb = module.get(DeduplicationGatewayService);
 
       const exactQb = createMockQueryBuilder(null);
-      mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+      const trigramQb = createMockQueryBuilder(null, []);
+      mockActivityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(trigramQb);
 
       const candidate: TaskCandidate = {
         name: 'Some task',
@@ -610,7 +712,10 @@ describe('DeduplicationGatewayService', () => {
 
     it('should include deletedAt IS NULL filter in task queries', async () => {
       const exactQb = createMockQueryBuilder(null);
-      mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+      const trigramQb = createMockQueryBuilder(null, []);
+      mockActivityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(trigramQb);
 
       const module = await buildModule(false);
       const svc = module.get(DeduplicationGatewayService);
@@ -639,7 +744,10 @@ describe('DeduplicationGatewayService', () => {
 
     it('should return CREATE when embedding generation throws', async () => {
       const exactQb = createMockQueryBuilder(null);
-      mockActivityRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+      const trigramQb = createMockQueryBuilder(null, []);
+      mockActivityRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(trigramQb);
 
       mockEmbeddingService.generate.mockRejectedValue(
         new Error('OpenAI API rate limit'),

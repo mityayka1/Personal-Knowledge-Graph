@@ -19,7 +19,10 @@ import { LlmDedupService, DedupPair } from './llm-dedup.service';
 /** Minimum cosine similarity for pgvector candidate retrieval */
 const COSINE_THRESHOLD = 0.5;
 
-/** Maximum number of candidates to consider */
+/** Minimum pg_trgm similarity for trigram candidate retrieval */
+const TRIGRAM_THRESHOLD = 0.35;
+
+/** Maximum number of candidates to consider per channel */
 const TOP_K = 5;
 
 /** Confidence threshold for automatic merge (no user confirmation needed) */
@@ -91,8 +94,11 @@ export class DeduplicationGatewayService {
    * Algorithm:
    * 1. Normalize name
    * 2. Exact match (LOWER(name)) -> MERGE
-   * 3. Generate embedding -> pgvector cosine >= 0.5, top-5
-   * 4. LLM batch decision for ALL candidates (cosine is noisy, true dup may be #2-#3)
+   * 3. Hybrid retrieval: cosine (pgvector) + trigram (pg_trgm) in parallel
+   *    - Cosine catches semantic similarity (paraphrases)
+   *    - Trigram catches lexical similarity (word reordering, missing embeddings)
+   *    - Candidates merged by ID, best score wins
+   * 4. LLM batch decision for ALL merged candidates
    * 5. Route best match by confidence: >=0.9 MERGE, 0.7-0.9 PENDING_APPROVAL, <0.7 CREATE
    */
   async checkTask(candidate: TaskCandidate): Promise<DedupDecision> {
@@ -120,24 +126,30 @@ export class DeduplicationGatewayService {
       };
     }
 
-    // Step 2: Semantic search via pgvector embeddings
-    const semanticCandidates = await this.findSemanticTaskCandidates(
-      normalized,
-      candidate.ownerEntityId,
-      candidate.description,
-    );
+    // Step 2: Hybrid candidate retrieval — two parallel channels
+    const [semanticCandidates, trigramCandidates] = await Promise.all([
+      this.findSemanticTaskCandidates(normalized, candidate.ownerEntityId, candidate.description),
+      this.findTrigramTaskCandidates(normalized, candidate.ownerEntityId),
+    ]);
 
-    if (semanticCandidates.length === 0) {
+    // Merge candidates by ID, keeping best score from either channel
+    const merged = this.mergeTaskCandidates(semanticCandidates, trigramCandidates);
+
+    if (merged.length === 0) {
       this.logger.debug(
-        `No semantic candidates for task "${candidate.name}", creating new`,
+        `No candidates for task "${candidate.name}" (cosine: ${semanticCandidates.length}, trigram: ${trigramCandidates.length}), creating new`,
       );
       return this.createDecision('No similar tasks found');
     }
 
+    this.logger.debug(
+      `Hybrid task candidates for "${candidate.name}": cosine=${semanticCandidates.length}, trigram=${trigramCandidates.length}, merged=${merged.length}`,
+    );
+
     // Step 3: LLM decision for ALL candidates (not just top-1)
     // Cosine similarity is noisy — the true duplicate may rank #2 or #3.
     // Sending all candidates lets LLM pick correctly.
-    const pairs: DedupPair[] = semanticCandidates.map(c => ({
+    const pairs: DedupPair[] = merged.map(c => ({
       newItem: {
         type: 'task' as const,
         name: candidate.name,
@@ -163,7 +175,7 @@ export class DeduplicationGatewayService {
       return this.createDecision('LLM says not duplicate for any candidate');
     }
 
-    const matchedCandidate = semanticCandidates.find(c => c.id === bestMatch.mergeIntoId);
+    const matchedCandidate = merged.find(c => c.id === bestMatch.mergeIntoId);
     return this.routeByConfidence(bestMatch, bestMatch.mergeIntoId!, matchedCandidate?.name ?? '');
   }
 
@@ -250,8 +262,8 @@ export class DeduplicationGatewayService {
    * Algorithm:
    * 1. Normalize title
    * 2. Exact match (LOWER(title)) -> MERGE
-   * 3. Generate embedding -> pgvector cosine >= 0.5, top-5
-   * 4. LLM decision for top candidate
+   * 3. Hybrid retrieval: cosine (pgvector) + trigram (pg_trgm) in parallel
+   * 4. LLM batch decision for ALL merged candidates
    * 5. Route by confidence: >=0.9 MERGE, 0.7-0.9 PENDING_APPROVAL, <0.7 CREATE
    */
   async checkCommitment(candidate: CommitmentCandidate): Promise<DedupDecision> {
@@ -279,23 +291,30 @@ export class DeduplicationGatewayService {
       };
     }
 
-    // Step 2: Semantic search via pgvector embeddings
-    const semanticCandidates = await this.findSemanticCommitmentCandidates(
-      normalized,
-      candidate.entityId,
-    );
+    // Step 2: Hybrid candidate retrieval — two parallel channels
+    const [semanticCandidates, trigramCandidates] = await Promise.all([
+      this.findSemanticCommitmentCandidates(normalized, candidate.entityId),
+      this.findTrigramCommitmentCandidates(normalized, candidate.entityId),
+    ]);
 
-    if (semanticCandidates.length === 0) {
+    // Merge candidates by ID, keeping best score from either channel
+    const merged = this.mergeCommitmentCandidates(semanticCandidates, trigramCandidates);
+
+    if (merged.length === 0) {
       this.logger.debug(
-        `No semantic candidates for commitment "${candidate.what}", creating new`,
+        `No candidates for commitment "${candidate.what}" (cosine: ${semanticCandidates.length}, trigram: ${trigramCandidates.length}), creating new`,
       );
       return this.createDecision('No similar commitments found');
     }
 
+    this.logger.debug(
+      `Hybrid commitment candidates for "${candidate.what}": cosine=${semanticCandidates.length}, trigram=${trigramCandidates.length}, merged=${merged.length}`,
+    );
+
     // Step 3: LLM decision for ALL candidates (not just top-1)
     // Cosine similarity is noisy in the 0.75-0.85 range — the true duplicate
     // may rank #2 or #3 by cosine. Sending all candidates lets LLM pick correctly.
-    const pairs: DedupPair[] = semanticCandidates.map(c => ({
+    const pairs: DedupPair[] = merged.map(c => ({
       newItem: {
         type: 'commitment' as const,
         name: candidate.what,
@@ -320,7 +339,7 @@ export class DeduplicationGatewayService {
       return this.createDecision('LLM says not duplicate for any candidate');
     }
 
-    const matchedCandidate = semanticCandidates.find(c => c.id === bestMatch.mergeIntoId);
+    const matchedCandidate = merged.find(c => c.id === bestMatch.mergeIntoId);
     return this.routeByConfidence(bestMatch, bestMatch.mergeIntoId!, matchedCandidate?.title ?? '');
   }
 
@@ -409,6 +428,69 @@ export class DeduplicationGatewayService {
       );
       return [];
     }
+  }
+
+  /**
+   * Find trigram candidates for tasks using pg_trgm similarity().
+   * Catches duplicates invisible to cosine: tasks without embeddings,
+   * word reorderings ("модуль A и B" vs "модуль B и A").
+   */
+  private async findTrigramTaskCandidates(
+    normalizedName: string,
+    ownerEntityId: string,
+  ): Promise<Array<{ id: string; name: string; description: string | null; similarity: number }>> {
+    try {
+      return await this.activityRepo
+        .createQueryBuilder('a')
+        .select('a.id', 'id')
+        .addSelect('a.name', 'name')
+        .addSelect('a.description', 'description')
+        .addSelect('similarity(LOWER(a.name), :name)', 'similarity')
+        .where('a.ownerEntityId = :ownerId', { ownerId: ownerEntityId })
+        .andWhere('a.activityType = :type', { type: ActivityType.TASK })
+        .andWhere('a.status NOT IN (:...excludedStatuses)', {
+          excludedStatuses: [ActivityStatus.CANCELLED, ActivityStatus.ARCHIVED],
+        })
+        .andWhere('a.deletedAt IS NULL')
+        .andWhere('similarity(LOWER(a.name), :name) >= :threshold')
+        .orderBy('similarity', 'DESC')
+        .limit(TOP_K)
+        .setParameter('name', normalizedName)
+        .setParameter('threshold', TRIGRAM_THRESHOLD)
+        .getRawMany();
+    } catch (error: any) {
+      this.logger.error(
+        `Trigram task search failed: ${error.message}`,
+        error.stack,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Merge cosine and trigram task candidates by ID.
+   * Deduplicates by ID, keeps the higher similarity score.
+   * Returns at most TOP_K merged candidates sorted by best score.
+   */
+  private mergeTaskCandidates(
+    cosine: Array<{ id: string; name: string; description: string | null; similarity: number }>,
+    trigram: Array<{ id: string; name: string; description: string | null; similarity: number }>,
+  ): Array<{ id: string; name: string; description: string | null; similarity: number }> {
+    const map = new Map<string, { id: string; name: string; description: string | null; similarity: number }>();
+
+    for (const c of cosine) {
+      map.set(c.id, c);
+    }
+    for (const t of trigram) {
+      const existing = map.get(t.id);
+      if (!existing || Number(t.similarity) > Number(existing.similarity)) {
+        map.set(t.id, t);
+      }
+    }
+
+    return Array.from(map.values())
+      .sort((a, b) => Number(b.similarity) - Number(a.similarity))
+      .slice(0, TOP_K);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -501,6 +583,71 @@ export class DeduplicationGatewayService {
       );
       return [];
     }
+  }
+
+  /**
+   * Find trigram candidates for commitments using pg_trgm similarity().
+   * Catches duplicates invisible to cosine: commitments without embeddings,
+   * word reorderings, abbreviations.
+   */
+  private async findTrigramCommitmentCandidates(
+    normalizedTitle: string,
+    entityId?: string,
+  ): Promise<Array<{ id: string; title: string; similarity: number }>> {
+    try {
+      const qb = this.commitmentRepo
+        .createQueryBuilder('c')
+        .select('c.id', 'id')
+        .addSelect('c.title', 'title')
+        .addSelect('similarity(LOWER(c.title), :title)', 'similarity')
+        .where('c.status NOT IN (:...excludedStatuses)', {
+          excludedStatuses: [CommitmentStatus.CANCELLED, CommitmentStatus.COMPLETED],
+        })
+        .andWhere('c.deletedAt IS NULL')
+        .andWhere('similarity(LOWER(c.title), :title) >= :threshold')
+        .orderBy('similarity', 'DESC')
+        .limit(TOP_K)
+        .setParameter('title', normalizedTitle)
+        .setParameter('threshold', TRIGRAM_THRESHOLD);
+
+      if (entityId) {
+        qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
+      }
+
+      return qb.getRawMany();
+    } catch (error: any) {
+      this.logger.error(
+        `Trigram commitment search failed: ${error.message}`,
+        error.stack,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Merge cosine and trigram commitment candidates by ID.
+   * Deduplicates by ID, keeps the higher similarity score.
+   * Returns at most TOP_K merged candidates sorted by best score.
+   */
+  private mergeCommitmentCandidates(
+    cosine: Array<{ id: string; title: string; similarity: number }>,
+    trigram: Array<{ id: string; title: string; similarity: number }>,
+  ): Array<{ id: string; title: string; similarity: number }> {
+    const map = new Map<string, { id: string; title: string; similarity: number }>();
+
+    for (const c of cosine) {
+      map.set(c.id, c);
+    }
+    for (const t of trigram) {
+      const existing = map.get(t.id);
+      if (!existing || Number(t.similarity) > Number(existing.similarity)) {
+        map.set(t.id, t);
+      }
+    }
+
+    return Array.from(map.values())
+      .sort((a, b) => Number(b.similarity) - Number(a.similarity))
+      .slice(0, TOP_K);
   }
 
   // ─────────────────────────────────────────────────────────────
