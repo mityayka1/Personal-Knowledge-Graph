@@ -44,3 +44,24 @@ export function isNoiseContent(text: string): boolean {
   if (text.length < MIN_MEANINGFUL_LENGTH) return true;
   return NOISE_PATTERNS.some((p) => p.test(text));
 }
+
+/**
+ * Per-type minimum confidence thresholds.
+ * Confidence = actionability: how likely this item can be acted upon.
+ *
+ * Tasks/commitments require higher confidence because false positives
+ * create noise in morning briefs and TODO lists.
+ * Facts are cheaper — wrong fact can be superseded later.
+ */
+export const MIN_CONFIDENCE: Record<string, number> = {
+  task: 0.75,
+  promise_by_me: 0.8,
+  promise_by_them: 0.75,
+  meeting: 0.7,
+  fact: 0.65,
+};
+
+/** Get minimum confidence for an event type. Returns 0.7 for unknown types. */
+export function getMinConfidence(eventType: string): number {
+  return MIN_CONFIDENCE[eventType] ?? 0.7;
+}
