@@ -5,6 +5,7 @@ import {
   isInformationalCommitment,
   isEphemeralFactValue,
   isProjectDataFact,
+  isPastTenseTask,
   MIN_CONFIDENCE,
   MIN_MEANINGFUL_LENGTH,
 } from './extraction-quality.constants';
@@ -216,6 +217,38 @@ describe('extraction-quality.constants', () => {
     it('preserves personal position/specialization', () => {
       expect(isProjectDataFact('position', 'CTO в Сбербанке')).toBe(false);
       expect(isProjectDataFact('specialization', 'frontend разработчик')).toBe(false);
+    });
+  });
+
+  describe('isPastTenseTask', () => {
+    it('rejects past-tense tasks', () => {
+      expect(isPastTenseTask('Обсудили план проекта')).toBe(true);
+      expect(isPastTenseTask('Отправил документы клиенту')).toBe(true);
+      expect(isPastTenseTask('Настроил CI/CD pipeline')).toBe(true);
+      expect(isPastTenseTask('Завершил интеграцию с API')).toBe(true);
+      expect(isPastTenseTask('Проверил код и отправил на ревью')).toBe(true);
+    });
+
+    it('rejects "был + participle" form', () => {
+      expect(isPastTenseTask('Был завершен деплой')).toBe(true);
+      expect(isPastTenseTask('Была выполнена миграция')).toBe(true);
+    });
+
+    it('allows future tasks (infinitive form)', () => {
+      expect(isPastTenseTask('Настроить CI/CD pipeline')).toBe(false);
+      expect(isPastTenseTask('Подготовить отчёт к пятнице')).toBe(false);
+      expect(isPastTenseTask('Нужно обновить зависимости')).toBe(false);
+    });
+
+    it('allows past-tense with future continuation', () => {
+      expect(isPastTenseTask('Обсудили, нужно ещё доработать')).toBe(false);
+      expect(isPastTenseTask('Проверил, осталось исправить тесты')).toBe(false);
+      expect(isPastTenseTask('Настроил, но далее необходимо протестировать')).toBe(false);
+    });
+
+    it('allows text not starting with past-tense verb', () => {
+      expect(isPastTenseTask('Встреча с клиентом в 15:00')).toBe(false);
+      expect(isPastTenseTask('CI/CD настроен некорректно')).toBe(false);
     });
   });
 });

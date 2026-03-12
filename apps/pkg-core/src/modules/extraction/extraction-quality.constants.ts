@@ -166,3 +166,32 @@ export function isProjectDataFact(factType: string, value: string): boolean {
 
   return PROJECT_DATA_PATTERNS.some((p) => p.test(value));
 }
+
+/**
+ * Past-tense verb patterns indicating completed actions, not future tasks.
+ *
+ * Russian past tense: verb stem + л/ла/ли/ло (обсудили, отправил, настроила)
+ * These at START of task title indicate a report, not a TODO.
+ */
+const PAST_TENSE_TASK_PATTERNS: RegExp[] = [
+  // Starts with past-tense verb — stem + л/ла/ли/ло/лся/лась/лись/лось
+  // Two groups: stems ending before "л" (need explicit л) and stems already ending in "л"
+  /^\s*(обсуди|отправи|настрои|подготови|написа|обнови|проанализирова|согласова|переда|оптимизирова)(л[аоие]?с[ья]|л[аоие]?)(?!\p{L})/iu,
+  /^\s*(завершил|проверил|создал|удалил|исправил|подключил|загрузил|протестировал|сделал|разобрал|выполнил|закрыл|перенёс|установил|доработал|переработал|реализовал)(а|и|ся|ась|ись|ось)?(?!\p{L})/iu,
+  // Also catch "был + participle" constructions
+  /^\s*был[аоие]?\s+(завершен|выполнен|отправлен|настроен|создан|удалён|обновлён)/iu,
+];
+
+/**
+ * Returns true if task title describes a past (completed) action.
+ * Does NOT filter if future markers are present ("обсудили и решили что нужно...").
+ */
+export function isPastTenseTask(title: string): boolean {
+  const isPast = PAST_TENSE_TASK_PATTERNS.some((p) => p.test(title));
+  if (!isPast) return false;
+
+  // Exception: future continuation markers
+  const futureContinuation =
+    /(?<!\p{L})(нужно|надо|необходимо|требуется|осталось|ещё|еще\s+нужно|далее|потом|затем|следующ)/iu;
+  return !futureContinuation.test(title);
+}
