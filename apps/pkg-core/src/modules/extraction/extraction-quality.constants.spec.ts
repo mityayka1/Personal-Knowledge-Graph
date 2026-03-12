@@ -3,6 +3,8 @@ import {
   isNoiseContent,
   getMinConfidence,
   isInformationalCommitment,
+  isEphemeralFactValue,
+  isProjectDataFact,
   MIN_CONFIDENCE,
   MIN_MEANINGFUL_LENGTH,
 } from './extraction-quality.constants';
@@ -158,6 +160,62 @@ describe('extraction-quality.constants', () => {
     it('allows text without informational markers', () => {
       expect(isInformationalCommitment('Встреча с клиентом в 15:00')).toBe(false);
       expect(isInformationalCommitment('Дедлайн по проекту — пятница')).toBe(false);
+    });
+  });
+
+  describe('isEphemeralFactValue', () => {
+    it('detects health/status as always ephemeral', () => {
+      expect(isEphemeralFactValue('status', 'работает над отчётом')).toBe(true);
+      expect(isEphemeralFactValue('health', 'болеет')).toBe(true);
+    });
+
+    it('detects temporary location', () => {
+      expect(isEphemeralFactValue('location', 'сейчас в Москве')).toBe(true);
+      expect(isEphemeralFactValue('location', 'сегодня работает из дома')).toBe(true);
+    });
+
+    it('preserves permanent location', () => {
+      expect(isEphemeralFactValue('location', 'живёт в Краснодаре')).toBe(false);
+      expect(isEphemeralFactValue('location', 'офис в Москве')).toBe(false);
+    });
+
+    it('detects temporary preference', () => {
+      expect(isEphemeralFactValue('preference', 'сегодня предпочитает онлайн')).toBe(true);
+    });
+
+    it('preserves non-ephemeral fact types', () => {
+      expect(isEphemeralFactValue('position', 'CTO в Сбербанке')).toBe(false);
+      expect(isEphemeralFactValue('birthday', '15 марта')).toBe(false);
+    });
+  });
+
+  describe('isProjectDataFact', () => {
+    it('detects financial data', () => {
+      expect(isProjectDataFact('specialization', 'стоимость работ 424 000₽')).toBe(true);
+      expect(isProjectDataFact('communication', 'бюджет проекта 2M руб')).toBe(true);
+    });
+
+    it('detects technical config', () => {
+      expect(isProjectDataFact('specialization', 'настроил API endpoint')).toBe(true);
+      expect(isProjectDataFact('status', 'сервер на порту 3000')).toBe(true);
+      expect(isProjectDataFact('communication', 'деплой на docker')).toBe(true);
+    });
+
+    it('detects currency amounts', () => {
+      expect(isProjectDataFact('communication', 'цена 50 000₽')).toBe(true);
+      expect(isProjectDataFact('preference', 'оплата $5000')).toBe(true);
+    });
+
+    it('preserves personal facts', () => {
+      expect(isProjectDataFact('birthday', '15 марта')).toBe(false);
+      expect(isProjectDataFact('hobby', 'занимается бегом')).toBe(false);
+      expect(isProjectDataFact('education', 'МГУ, физфак')).toBe(false);
+      expect(isProjectDataFact('family', 'женат, двое детей')).toBe(false);
+    });
+
+    it('preserves personal position/specialization', () => {
+      expect(isProjectDataFact('position', 'CTO в Сбербанке')).toBe(false);
+      expect(isProjectDataFact('specialization', 'frontend разработчик')).toBe(false);
     });
   });
 });
