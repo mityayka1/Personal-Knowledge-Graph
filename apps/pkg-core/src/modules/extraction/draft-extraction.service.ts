@@ -39,7 +39,15 @@ import { EntityRelationService } from '../entity/entity-relation/entity-relation
 import { ActivityService } from '../activity/activity.service';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { SettingsService } from '../settings/settings.service';
-import { isVagueContent, isNoiseContent } from './extraction-quality.constants';
+import {
+  isVagueContent,
+  isNoiseContent,
+  getMinConfidence,
+  isInformationalCommitment,
+  isEphemeralFactValue,
+  isProjectDataFact,
+  isPastTenseTask,
+} from './extraction-quality.constants';
 import { FactFusionService } from '../entity/entity-fact/fact-fusion.service';
 import { FusionAction } from '../entity/entity-fact/fact-fusion.constants';
 import { ExtractionFusionAction } from './fusion-action.enum';
@@ -240,6 +248,26 @@ export class DraftExtractionService {
 
     for (let i = 0; i < (input.facts || []).length; i++) {
       const fact = input.facts[i];
+
+      // QUALITY FILTER: Skip ephemeral facts (temporary states)
+      if (isEphemeralFactValue(fact.factType, fact.value)) {
+        this.logger.debug(`Skipping ephemeral fact: [${fact.factType}] "${fact.value}"`);
+        result.skipped.facts++;
+        continue;
+      }
+      // QUALITY FILTER: Skip project data masquerading as personal facts
+      if (isProjectDataFact(fact.factType, fact.value)) {
+        this.logger.debug(`Skipping project-data fact: [${fact.factType}] "${fact.value}"`);
+        result.skipped.facts++;
+        continue;
+      }
+      // QUALITY FILTER: Skip low-confidence facts
+      if (fact.confidence !== undefined && fact.confidence < getMinConfidence('fact')) {
+        this.logger.debug(`Skipping low-confidence fact (${fact.confidence}): [${fact.factType}] "${fact.value}"`);
+        result.skipped.facts++;
+        continue;
+      }
+
       try {
         const dedupResult = await this.factDeduplicationService.checkDuplicateHybrid(
           fact.entityId,
@@ -485,6 +513,18 @@ export class DraftExtractionService {
           result.skipped.tasks++;
           continue;
         }
+        // QUALITY FILTER: Skip past-tense tasks (completed actions, not future TODOs)
+        if (isPastTenseTask(task.title)) {
+          this.logger.debug(`Skipping past-tense task: "${task.title}"`);
+          result.skipped.tasks++;
+          continue;
+        }
+        // QUALITY FILTER: Skip low-confidence tasks
+        if (task.confidence !== undefined && task.confidence < getMinConfidence('task')) {
+          this.logger.debug(`Skipping low-confidence task (${task.confidence}): "${task.title}"`);
+          result.skipped.tasks++;
+          continue;
+        }
 
         // DEDUPLICATION: Use DeduplicationGateway if available, fallback to legacy
         let taskDuplicate = false;
@@ -685,6 +725,18 @@ export class DraftExtractionService {
         }
         if (isNoiseContent(commitment.what)) {
           this.logger.debug(`Skipping noise commitment: "${commitment.what}"`);
+          result.skipped.commitments++;
+          continue;
+        }
+        // QUALITY FILTER: Skip informational commitments (past-tense, not actionable)
+        if (isInformationalCommitment(commitment.what)) {
+          this.logger.debug(`Skipping informational commitment: "${commitment.what}"`);
+          result.skipped.commitments++;
+          continue;
+        }
+        // QUALITY FILTER: Skip low-confidence commitments
+        if (commitment.confidence !== undefined && commitment.confidence < getMinConfidence(commitment.type)) {
+          this.logger.debug(`Skipping low-confidence commitment (${commitment.confidence}): "${commitment.what}"`);
           result.skipped.commitments++;
           continue;
         }
