@@ -65,3 +65,39 @@ export const MIN_CONFIDENCE: Record<string, number> = {
 export function getMinConfidence(eventType: string): number {
   return MIN_CONFIDENCE[eventType] ?? 0.7;
 }
+
+/**
+ * Patterns indicating informational statements, NOT actionable commitments.
+ * These describe past completed actions or status updates that should NOT
+ * be extracted as promise_by_me/promise_by_them.
+ *
+ * Examples rejected in PA audit:
+ * - "Обсудили детали проекта" (past discussion, not a promise)
+ * - "Согласовал стоимость" (completed action, not a commitment)
+ * - "Подтвердил получение" (acknowledgment, not a promise)
+ */
+export const INFORMATIONAL_COMMITMENT_PATTERNS: RegExp[] = [
+  // Past-tense completions: обсудили, согласовали, подтвердил, отправил, передал, уточнил
+  // Note: \w doesn't match Cyrillic in JS — using \p{L} instead.
+  /(?<!\p{L})(обсуди|согласова|подтверди|отправи|переда|уточни|рассмотре|проанализирова|обнови|настрои|подготови|завершил|закрыл|решил|исправил|доделал|переделал|сделал|проверил|загрузил|выполнил|установил|подключил|разобрал|разобрался)\p{L}*(?!\p{L})/iu,
+  // Information sharing: сообщил, рассказал, написал, показал, пояснил
+  /(?<!\p{L})(сообщи|рассказа|написа|показа|поясни|объясни|указа|описа|продемонстрирова)\p{L}*(?!\p{L})/iu,
+  // Acknowledgments: понял, принял, учёл, заметил, увидел
+  /(?<!\p{L})(понял|принял|учёл|учел|заметил|увидел|узнал|получил)\p{L}*(?!\p{L})/iu,
+];
+
+/**
+ * Returns true if commitment text is informational (not actionable).
+ * Checks that the text doesn't also contain future-oriented markers.
+ */
+export function isInformationalCommitment(text: string): boolean {
+  const hasInformational = INFORMATIONAL_COMMITMENT_PATTERNS.some((p) =>
+    p.test(text),
+  );
+  if (!hasInformational) return false;
+
+  // Exception: if text also has future markers, it might be actionable
+  const futureMarkers =
+    /(?<!\p{L})(нужно|надо|необходимо|планиру|собираюсь|буд[ую]|обещаю|должен|готов\s|завтра|на следующей|до конца|к пятниц|к понедельник)/iu;
+  return !futureMarkers.test(text);
+}

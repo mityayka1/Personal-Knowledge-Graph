@@ -2,6 +2,7 @@ import {
   isVagueContent,
   isNoiseContent,
   getMinConfidence,
+  isInformationalCommitment,
   MIN_CONFIDENCE,
   MIN_MEANINGFUL_LENGTH,
 } from './extraction-quality.constants';
@@ -119,6 +120,44 @@ describe('extraction-quality.constants', () => {
 
     it('should return 0.7 for empty string', () => {
       expect(getMinConfidence('')).toBe(0.7);
+    });
+  });
+
+  describe('isInformationalCommitment', () => {
+    it('rejects past-tense completions', () => {
+      expect(isInformationalCommitment('Обсудили детали проекта')).toBe(true);
+      expect(isInformationalCommitment('Согласовал стоимость работ')).toBe(true);
+      expect(isInformationalCommitment('Отправил документы клиенту')).toBe(true);
+      expect(isInformationalCommitment('Настроил CI/CD pipeline')).toBe(true);
+      expect(isInformationalCommitment('Проверил код и исправил баги')).toBe(true);
+    });
+
+    it('rejects information sharing', () => {
+      expect(isInformationalCommitment('Сообщил результаты анализа')).toBe(true);
+      expect(isInformationalCommitment('Рассказал о планах')).toBe(true);
+      expect(isInformationalCommitment('Показал презентацию клиенту')).toBe(true);
+    });
+
+    it('rejects acknowledgments', () => {
+      expect(isInformationalCommitment('Понял задачу')).toBe(true);
+      expect(isInformationalCommitment('Принял решение')).toBe(true);
+      expect(isInformationalCommitment('Получил документы')).toBe(true);
+    });
+
+    it('allows future-oriented promises with past marker', () => {
+      expect(isInformationalCommitment('Обсудили, нужно доработать')).toBe(false);
+      expect(isInformationalCommitment('Отправил, но завтра пришлю обновлённый')).toBe(false);
+    });
+
+    it('allows genuine future commitments', () => {
+      expect(isInformationalCommitment('Нужно подготовить предложение')).toBe(false);
+      expect(isInformationalCommitment('Буду готов к среде')).toBe(false);
+      expect(isInformationalCommitment('Подготовлю отчёт к пятнице')).toBe(false);
+    });
+
+    it('allows text without informational markers', () => {
+      expect(isInformationalCommitment('Встреча с клиентом в 15:00')).toBe(false);
+      expect(isInformationalCommitment('Дедлайн по проекту — пятница')).toBe(false);
     });
   });
 });
