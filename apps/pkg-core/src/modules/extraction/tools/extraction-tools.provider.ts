@@ -21,7 +21,15 @@ import { FactDeduplicationService } from '../fact-deduplication.service';
 import { FactFusionService } from '../../entity/entity-fact/fact-fusion.service';
 import { FusionAction } from '../../entity/entity-fact/fact-fusion.constants';
 import { CreateFactDto } from '../../entity/dto/create-entity.dto';
-import { isVagueContent, isNoiseContent } from '../extraction-quality.constants';
+import {
+  isVagueContent,
+  isNoiseContent,
+  getMinConfidence,
+  isInformationalCommitment,
+  isEphemeralFactValue,
+  isProjectDataFact,
+  isPastTenseTask,
+} from '../extraction-quality.constants';
 import { normalizeFactType, getFactCategory } from '../../../common/utils/fact-validation';
 import { isValidFactType, VALID_FACT_TYPES } from '../../entity/entity-fact/fact-type-config';
 import {
@@ -504,6 +512,28 @@ export class ExtractionToolsProvider {
         try {
           const factType = args.factType.toLowerCase();
           const factValue = args.value.trim();
+
+          // QUALITY FILTER: Skip ephemeral facts (temporary states)
+          if (isEphemeralFactValue(factType, factValue)) {
+            return toolError(
+              'This is an ephemeral/temporary fact (current state, mood, temporary location). ' +
+              'Only extract stable, long-term attributes like position, company, education, birthday.',
+            );
+          }
+          // QUALITY FILTER: Skip project data masquerading as personal facts
+          if (isProjectDataFact(factType, factValue)) {
+            return toolError(
+              'This looks like project/business data (cost, budget, API config, server info), not a personal attribute. ' +
+              'Facts should describe the PERSON: position, skills, education, birthday, etc.',
+            );
+          }
+          // QUALITY FILTER: Skip low-confidence facts
+          if (args.confidence < getMinConfidence('fact')) {
+            return toolError(
+              `Confidence ${args.confidence} is below threshold ${getMinConfidence('fact')} for facts. ` +
+              'Only extract high-confidence facts that are explicitly stated in conversation.',
+            );
+          }
 
           // ── Pre-check: Hybrid deduplication (Levenshtein + embedding similarity) ──
           const dedupResult = await this.factDeduplicationService.checkDuplicateHybrid(
@@ -1093,6 +1123,33 @@ export class ExtractionToolsProvider {
             'Title contains placeholder words (что-то, как-нибудь, кое-что). ' +
             'Use specific details from conversation: project name, action object, person. ' +
             'Example: instead of "переделать что-то" use "перенести транскрибацию на внутренний сервис для invapp-panavto".',
+          );
+        }
+        // QUALITY FILTER: Skip past-tense tasks
+        if (args.eventType === 'task' && isPastTenseTask(args.title)) {
+          this.logger.debug(`[create_event] Filtered past-tense task: "${args.title}"`);
+          return toolError(
+            'Task title describes a completed action, not a future TODO. ' +
+            'Past-tense verbs (обсудили, настроил, отправил) indicate a report, not a task. ' +
+            'Only extract future tasks: "настроить CI/CD", "подготовить отчёт к пятнице".',
+          );
+        }
+        // QUALITY FILTER: Skip informational commitments
+        if (['promise_by_me', 'promise_by_them'].includes(args.eventType) &&
+            isInformationalCommitment(args.title)) {
+          this.logger.debug(`[create_event] Filtered informational commitment: "${args.title}"`);
+          return toolError(
+            'This is an informational statement, not an actionable commitment. ' +
+            'Past-tense verbs (обсудили, отправил, согласовал) describe what happened, not future promises. ' +
+            'Only extract future commitments: "отправлю завтра", "подготовлю к пятнице".',
+          );
+        }
+        // QUALITY FILTER: Skip low-confidence events
+        if (args.confidence < getMinConfidence(args.eventType)) {
+          this.logger.debug(`[create_event] Filtered low-confidence ${args.eventType}: "${args.title}" (${args.confidence})`);
+          return toolError(
+            `Confidence ${args.confidence} is below threshold ${getMinConfidence(args.eventType)} for ${args.eventType}. ` +
+            'Only extract high-confidence items that are explicitly stated in conversation.',
           );
         }
 

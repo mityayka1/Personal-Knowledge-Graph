@@ -170,6 +170,7 @@ export const FUSION_CONFIDENCE_THRESHOLD = 0.7;
  */
 export const EPHEMERAL_FACT_TYPES: ReadonlySet<string> = new Set([
   FactType.STATUS,
+  FactType.HEALTH,
 ]);
 
 // ============================================
