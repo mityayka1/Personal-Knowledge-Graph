@@ -54,8 +54,8 @@ export function isNoiseContent(text: string): boolean {
  * Facts are cheaper — wrong fact can be superseded later.
  */
 export const MIN_CONFIDENCE: Record<string, number> = {
-  task: 0.75,
-  promise_by_me: 0.8,
+  task: 0.7,
+  promise_by_me: 0.75,
   promise_by_them: 0.75,
   meeting: 0.7,
   fact: 0.65,
@@ -77,13 +77,15 @@ export function getMinConfidence(eventType: string): number {
  * - "Подтвердил получение" (acknowledgment, not a promise)
  */
 export const INFORMATIONAL_COMMITMENT_PATTERNS: RegExp[] = [
-  // Past-tense completions: обсудили, согласовали, подтвердил, отправил, передал, уточнил
-  // Note: \w doesn't match Cyrillic in JS — using \p{L} instead.
-  /(?<!\p{L})(обсуди|согласова|подтверди|отправи|переда|уточни|рассмотре|проанализирова|обнови|настрои|подготови|завершил|закрыл|решил|исправил|доделал|переделал|сделал|проверил|загрузил|выполнил|установил|подключил|разобрал|разобрался)\p{L}*(?!\p{L})/iu,
-  // Information sharing: сообщил, рассказал, написал, показал, пояснил
-  /(?<!\p{L})(сообщи|рассказа|написа|показа|поясни|объясни|указа|описа|продемонстрирова)\p{L}*(?!\p{L})/iu,
-  // Acknowledgments: понял, принял, учёл, заметил, увидел
-  /(?<!\p{L})(понял|принял|учёл|учел|заметил|увидел|узнал|получил)\p{L}*(?!\p{L})/iu,
+  // Past-tense completions: stems that need -л/-ла/-ли/-ло suffix to be past tense.
+  // Without the suffix these stems match infinitives (обсудить, отправить) — must NOT match those.
+  /(?<!\p{L})(обсуди|согласова|подтверди|отправи|переда|уточни|рассмотре|проанализирова|обнови|настрои|подготови)(л[аоие]?с[ья]|л[аоие]?)(?!\p{L})/iu,
+  // Already past-tense forms (stem already ends in -л): завершил, проверил, сделал, etc.
+  /(?<!\p{L})(завершил|закрыл|решил|исправил|доделал|переделал|сделал|проверил|загрузил|выполнил|установил|подключил|разобрал)(а|и|ся|ась|ись|ось)?(?!\p{L})/iu,
+  // Information sharing: stems + past-tense suffix
+  /(?<!\p{L})(сообщи|рассказа|написа|показа|поясни|объясни|указа|описа|продемонстрирова)(л[аоие]?с[ья]|л[аоие]?)(?!\p{L})/iu,
+  // Acknowledgments (already past-tense forms)
+  /(?<!\p{L})(понял|принял|учёл|учел|заметил|увидел|узнал|получил)(а|и)?(?!\p{L})/iu,
 ];
 
 /**
@@ -161,6 +163,8 @@ export function isProjectDataFact(factType: string, value: string): boolean {
     'education',
     'language',
     'health',
+    'position',
+    'specialization',
   ]);
   if (personalTypes.has(factType)) return false;
 

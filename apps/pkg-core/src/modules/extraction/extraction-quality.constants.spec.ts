@@ -97,12 +97,12 @@ describe('extraction-quality.constants', () => {
   });
 
   describe('getMinConfidence', () => {
-    it('should return 0.75 for task', () => {
-      expect(getMinConfidence('task')).toBe(0.75);
+    it('should return 0.7 for task', () => {
+      expect(getMinConfidence('task')).toBe(0.7);
     });
 
-    it('should return 0.8 for promise_by_me', () => {
-      expect(getMinConfidence('promise_by_me')).toBe(0.8);
+    it('should return 0.75 for promise_by_me', () => {
+      expect(getMinConfidence('promise_by_me')).toBe(0.75);
     });
 
     it('should return 0.75 for promise_by_them', () => {
@@ -145,6 +145,14 @@ describe('extraction-quality.constants', () => {
       expect(isInformationalCommitment('Понял задачу')).toBe(true);
       expect(isInformationalCommitment('Принял решение')).toBe(true);
       expect(isInformationalCommitment('Получил документы')).toBe(true);
+    });
+
+    it('does NOT flag infinitive forms (critical: shared stems)', () => {
+      expect(isInformationalCommitment('Обсудить создание нового модуля')).toBe(false);
+      expect(isInformationalCommitment('Отправить документацию клиенту')).toBe(false);
+      expect(isInformationalCommitment('Настроить CI/CD pipeline')).toBe(false);
+      expect(isInformationalCommitment('Подготовить отчёт к пятнице')).toBe(false);
+      expect(isInformationalCommitment('Уточнить детали по проекту')).toBe(false);
     });
 
     it('allows future-oriented promises with past marker', () => {
@@ -191,13 +199,12 @@ describe('extraction-quality.constants', () => {
   });
 
   describe('isProjectDataFact', () => {
-    it('detects financial data', () => {
-      expect(isProjectDataFact('specialization', 'стоимость работ 424 000₽')).toBe(true);
+    it('detects financial data in non-personal fact types', () => {
       expect(isProjectDataFact('communication', 'бюджет проекта 2M руб')).toBe(true);
+      expect(isProjectDataFact('status', 'стоимость работ 424 000₽')).toBe(true);
     });
 
-    it('detects technical config', () => {
-      expect(isProjectDataFact('specialization', 'настроил API endpoint')).toBe(true);
+    it('detects technical config in non-personal fact types', () => {
       expect(isProjectDataFact('status', 'сервер на порту 3000')).toBe(true);
       expect(isProjectDataFact('communication', 'деплой на docker')).toBe(true);
     });
@@ -214,9 +221,12 @@ describe('extraction-quality.constants', () => {
       expect(isProjectDataFact('family', 'женат, двое детей')).toBe(false);
     });
 
-    it('preserves personal position/specialization', () => {
+    it('preserves position/specialization (always personal)', () => {
       expect(isProjectDataFact('position', 'CTO в Сбербанке')).toBe(false);
       expect(isProjectDataFact('specialization', 'frontend разработчик')).toBe(false);
+      // Even with tech terms — these fact types are inherently personal
+      expect(isProjectDataFact('specialization', 'настроил API endpoint')).toBe(false);
+      expect(isProjectDataFact('position', 'DevOps engineer, docker specialist')).toBe(false);
     });
   });
 
