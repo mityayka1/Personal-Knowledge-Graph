@@ -136,6 +136,14 @@ describe('extraction-quality.constants', () => {
       expect(isInformationalCommitment('Создал инструкцию по подключению')).toBe(true);
       expect(isInformationalCommitment('Удалил старые записи')).toBe(true);
       expect(isInformationalCommitment('Реализовал новую фичу')).toBe(true);
+      // Added verbs (production audit gap)
+      expect(isInformationalCommitment('Добавил артикулы в отчёт')).toBe(true);
+      expect(isInformationalCommitment('Поменял колонки местами')).toBe(true);
+      expect(isInformationalCommitment('Изменил структуру таблицы')).toBe(true);
+      expect(isInformationalCommitment('Заменил старый компонент')).toBe(true);
+      expect(isInformationalCommitment('Переместил файлы в архив')).toBe(true);
+      expect(isInformationalCommitment('Опубликовал статью')).toBe(true);
+      expect(isInformationalCommitment('Обработал заявки клиентов')).toBe(true);
     });
 
     it('rejects passive past participles', () => {
@@ -146,6 +154,16 @@ describe('extraction-quality.constants', () => {
       expect(isInformationalCommitment('Отправлен отчёт клиенту')).toBe(true);
       expect(isInformationalCommitment('Обновлена документация')).toBe(true);
       expect(isInformationalCommitment('Настроена интеграция с API')).toBe(true);
+      // Added participles (production audit gap)
+      expect(isInformationalCommitment('Добавлены артикулы в демо-отчет')).toBe(true);
+      expect(isInformationalCommitment('Изменена структура отчёта')).toBe(true);
+      expect(isInformationalCommitment('Заменён старый модуль')).toBe(true);
+      expect(isInformationalCommitment('Перемещены файлы в архив')).toBe(true);
+      expect(isInformationalCommitment('Опубликован релиз')).toBe(true);
+      expect(isInformationalCommitment('Подготовлен план проекта')).toBe(true);
+      expect(isInformationalCommitment('Согласована стоимость работ')).toBe(true);
+      expect(isInformationalCommitment('Передан отчёт заказчику')).toBe(true);
+      expect(isInformationalCommitment('Проверено качество данных')).toBe(true);
     });
 
     it('rejects information sharing', () => {
@@ -250,11 +268,31 @@ describe('extraction-quality.constants', () => {
       expect(isPastTenseTask('Настроил CI/CD pipeline')).toBe(true);
       expect(isPastTenseTask('Завершил интеграцию с API')).toBe(true);
       expect(isPastTenseTask('Проверил код и отправил на ревью')).toBe(true);
+      // Added verbs (production audit gap)
+      expect(isPastTenseTask('Добавил артикулы в отчёт')).toBe(true);
+      expect(isPastTenseTask('Поменял порядок колонок')).toBe(true);
+      expect(isPastTenseTask('Изменил конфигурацию сервера')).toBe(true);
+      expect(isPastTenseTask('Заменила старый модуль')).toBe(true);
+      expect(isPastTenseTask('Опубликовал новую версию')).toBe(true);
+      expect(isPastTenseTask('Обработал входящие заявки')).toBe(true);
     });
 
     it('rejects "был + participle" form', () => {
       expect(isPastTenseTask('Был завершен деплой')).toBe(true);
       expect(isPastTenseTask('Была выполнена миграция')).toBe(true);
+      // Added participles
+      expect(isPastTenseTask('Был добавлен новый модуль')).toBe(true);
+      expect(isPastTenseTask('Был подготовлен отчёт')).toBe(true);
+    });
+
+    it('rejects standalone passive participles at start', () => {
+      expect(isPastTenseTask('Добавлены артикулы в демо-отчет')).toBe(true);
+      expect(isPastTenseTask('Создан отчёт по проекту')).toBe(true);
+      expect(isPastTenseTask('Изменена структура таблицы')).toBe(true);
+      expect(isPastTenseTask('Опубликован релиз v2.0')).toBe(true);
+      expect(isPastTenseTask('Подготовлено ТЗ для разработки')).toBe(true);
+      expect(isPastTenseTask('Согласованы условия контракта')).toBe(true);
+      expect(isPastTenseTask('Проверены данные за март')).toBe(true);
     });
 
     it('allows future tasks (infinitive form)', () => {
