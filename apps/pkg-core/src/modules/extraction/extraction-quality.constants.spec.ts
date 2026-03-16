@@ -133,6 +133,19 @@ describe('extraction-quality.constants', () => {
       expect(isInformationalCommitment('Отправил документы клиенту')).toBe(true);
       expect(isInformationalCommitment('Настроил CI/CD pipeline')).toBe(true);
       expect(isInformationalCommitment('Проверил код и исправил баги')).toBe(true);
+      expect(isInformationalCommitment('Создал инструкцию по подключению')).toBe(true);
+      expect(isInformationalCommitment('Удалил старые записи')).toBe(true);
+      expect(isInformationalCommitment('Реализовал новую фичу')).toBe(true);
+    });
+
+    it('rejects passive past participles', () => {
+      expect(isInformationalCommitment('Создан ЗЦТО по новому проекту')).toBe(true);
+      expect(isInformationalCommitment('Внесены изменения в конфигурацию')).toBe(true);
+      expect(isInformationalCommitment('Внесён правки в документ')).toBe(true);
+      expect(isInformationalCommitment('Выполнен деплой на продакшн')).toBe(true);
+      expect(isInformationalCommitment('Отправлен отчёт клиенту')).toBe(true);
+      expect(isInformationalCommitment('Обновлена документация')).toBe(true);
+      expect(isInformationalCommitment('Настроена интеграция с API')).toBe(true);
     });
 
     it('rejects information sharing', () => {
