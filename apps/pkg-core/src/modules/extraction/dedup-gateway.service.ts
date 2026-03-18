@@ -63,6 +63,8 @@ export interface CommitmentCandidate {
   what: string;
   entityId?: string;
   activityContext?: string;
+  /** Resolved activity UUID — when present, dedup searches ALL commitments in this activity (cross-entity). */
+  activityId?: string;
 }
 
 // --- Service ---
@@ -277,6 +279,7 @@ export class DeduplicationGatewayService {
     const exactMatch = await this.findExactCommitmentMatch(
       normalized,
       candidate.entityId,
+      candidate.activityId,
     );
 
     if (exactMatch) {
@@ -293,8 +296,8 @@ export class DeduplicationGatewayService {
 
     // Step 2: Hybrid candidate retrieval — two parallel channels
     const [semanticCandidates, trigramCandidates] = await Promise.all([
-      this.findSemanticCommitmentCandidates(normalized, candidate.entityId),
-      this.findTrigramCommitmentCandidates(normalized, candidate.entityId),
+      this.findSemanticCommitmentCandidates(normalized, candidate.entityId, candidate.activityId),
+      this.findTrigramCommitmentCandidates(normalized, candidate.entityId, candidate.activityId),
     ]);
 
     // Merge candidates by ID, keeping best score from either channel
@@ -499,11 +502,12 @@ export class DeduplicationGatewayService {
 
   /**
    * Find an exact match for a commitment by normalized title (case-insensitive).
-   * Optionally scoped by entityId (from or to party).
+   * Scoping priority: activityId (cross-entity) > entityId (from/to party).
    */
   private async findExactCommitmentMatch(
     normalizedTitle: string,
     entityId?: string,
+    activityId?: string,
   ): Promise<Commitment | null> {
     const qb = this.commitmentRepo
       .createQueryBuilder('c')
@@ -522,7 +526,9 @@ export class DeduplicationGatewayService {
         'ASC',
       );
 
-    if (entityId) {
+    if (activityId) {
+      qb.andWhere('c.activityId = :activityId', { activityId });
+    } else if (entityId) {
       qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
     }
 
@@ -532,10 +538,12 @@ export class DeduplicationGatewayService {
   /**
    * Find semantic candidates for commitment via pgvector cosine similarity.
    * Returns up to TOP_K commitments with similarity >= COSINE_THRESHOLD.
+   * Scoping priority: activityId (cross-entity) > entityId (from/to party).
    */
   private async findSemanticCommitmentCandidates(
     normalizedTitle: string,
     entityId?: string,
+    activityId?: string,
   ): Promise<Array<{ id: string; title: string; similarity: number }>> {
     if (!this.embeddingService) {
       this.logger.warn(
@@ -571,7 +579,9 @@ export class DeduplicationGatewayService {
         .setParameter('embedding', `[${embedding.join(',')}]`)
         .setParameter('threshold', COSINE_THRESHOLD);
 
-      if (entityId) {
+      if (activityId) {
+        qb.andWhere('c.activityId = :activityId', { activityId });
+      } else if (entityId) {
         qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
       }
 
@@ -589,10 +599,12 @@ export class DeduplicationGatewayService {
    * Find trigram candidates for commitments using pg_trgm similarity().
    * Catches duplicates invisible to cosine: commitments without embeddings,
    * word reorderings, abbreviations.
+   * Scoping priority: activityId (cross-entity) > entityId (from/to party).
    */
   private async findTrigramCommitmentCandidates(
     normalizedTitle: string,
     entityId?: string,
+    activityId?: string,
   ): Promise<Array<{ id: string; title: string; similarity: number }>> {
     try {
       const qb = this.commitmentRepo
@@ -610,7 +622,9 @@ export class DeduplicationGatewayService {
         .setParameter('title', normalizedTitle)
         .setParameter('threshold', TRIGRAM_THRESHOLD);
 
-      if (entityId) {
+      if (activityId) {
+        qb.andWhere('c.activityId = :activityId', { activityId });
+      } else if (entityId) {
         qb.andWhere('(c.fromEntityId = :eid OR c.toEntityId = :eid)', { eid: entityId });
       }
 

@@ -741,6 +741,44 @@ export class DraftExtractionService {
           continue;
         }
 
+        // ACTIVITY RESOLUTION: Resolve activityId BEFORE dedup (enables cross-entity dedup within same project)
+        let commitmentActivityId: string | undefined;
+        if (commitment.projectName) {
+          // 1st: exact match in current batch's projectMap
+          commitmentActivityId = projectMap.get(
+            ProjectMatchingService.normalizeName(commitment.projectName),
+          );
+          // 2nd: fuzzy match against existing activities (two-tier Levenshtein)
+          if (!commitmentActivityId) {
+            const fuzzyMatch = await this.findExistingProjectEnhanced(
+              commitment.projectName,
+              input.ownerEntityId,
+            );
+            if (fuzzyMatch.found && fuzzyMatch.activityId) {
+              commitmentActivityId = fuzzyMatch.activityId;
+            }
+          }
+          // 3rd: substring match via ActivityService.findByMention()
+          if (!commitmentActivityId && this.activityService) {
+            const mentionMatch = await this.activityService.findByMention(
+              commitment.projectName,
+            );
+            if (mentionMatch) {
+              commitmentActivityId = mentionMatch.id;
+              this.logger.debug(
+                `Linked commitment "${commitment.what}" to activity "${mentionMatch.name}" via mention match`,
+              );
+            }
+          }
+          // Log unlinked commitments for debugging
+          if (!commitmentActivityId) {
+            this.logger.warn(
+              `Commitment "${commitment.what}" references project "${commitment.projectName}" ` +
+                `but no matching activity found (batch/fuzzy/mention all failed)`,
+            );
+          }
+        }
+
         // DEDUPLICATION: Use DeduplicationGateway if available, fallback to legacy
         let commitmentDuplicate = false;
 
@@ -752,6 +790,7 @@ export class DraftExtractionService {
               what: commitment.what,
               entityId: input.ownerEntityId,
               activityContext: commitment.projectName,
+              activityId: commitmentActivityId,
             });
             commitmentGatewayHandled = true;
 
@@ -831,44 +870,6 @@ export class DraftExtractionService {
             `[SemanticDedup] Embedding generation failed for commitment "${commitment.what}", ` +
               `proceeding without semantic dedup: ${embError instanceof Error ? embError.message : 'Unknown'}`,
           );
-        }
-
-        // Resolve activityId from projectMap or fuzzy match for commitment
-        let commitmentActivityId: string | undefined;
-        if (commitment.projectName) {
-          // 1st: exact match in current batch's projectMap
-          commitmentActivityId = projectMap.get(
-            ProjectMatchingService.normalizeName(commitment.projectName),
-          );
-          // 2nd: fuzzy match against existing activities (two-tier Levenshtein)
-          if (!commitmentActivityId) {
-            const fuzzyMatch = await this.findExistingProjectEnhanced(
-              commitment.projectName,
-              input.ownerEntityId,
-            );
-            if (fuzzyMatch.found && fuzzyMatch.activityId) {
-              commitmentActivityId = fuzzyMatch.activityId;
-            }
-          }
-          // 3rd: substring match via ActivityService.findByMention()
-          if (!commitmentActivityId && this.activityService) {
-            const mentionMatch = await this.activityService.findByMention(
-              commitment.projectName,
-            );
-            if (mentionMatch) {
-              commitmentActivityId = mentionMatch.id;
-              this.logger.debug(
-                `Linked commitment "${commitment.what}" to activity "${mentionMatch.name}" via mention match`,
-              );
-            }
-          }
-          // Log unlinked commitments for debugging
-          if (!commitmentActivityId) {
-            this.logger.warn(
-              `Commitment "${commitment.what}" references project "${commitment.projectName}" ` +
-                `but no matching activity found (batch/fuzzy/mention all failed)`,
-            );
-          }
         }
 
         const { entity, approval } = await this.createDraftCommitment(

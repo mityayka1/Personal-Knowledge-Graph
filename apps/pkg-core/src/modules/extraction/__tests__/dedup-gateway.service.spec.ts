@@ -681,6 +681,143 @@ describe('DeduplicationGatewayService', () => {
       expect(decision.action).toBe(DedupAction.CREATE);
       expect(decision.reason).toContain('not duplicate');
     });
+
+    // ─── Activity-scoped dedup (P2) ───
+
+    it('should find exact match within same activityId (cross-entity dedup)', async () => {
+      // Commitment exists for activityId=act-123, but from a different entity pair
+      const existingCommitment = makeCommitment({
+        id: 'commit-activity-match',
+        title: 'отправить договор',
+        fromEntityId: 'entity-333', // Different entity!
+        toEntityId: 'entity-444',
+      });
+      const exactQb = createMockQueryBuilder(existingCommitment);
+
+      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+
+      const candidate: CommitmentCandidate = {
+        what: 'Отправить договор',
+        entityId: 'entity-111', // Different from existing commitment entities
+        activityId: 'act-123',  // Same activity → should still find it
+        activityContext: 'Проект Панавто',
+      };
+
+      const decision = await service.checkCommitment(candidate);
+
+      expect(decision.action).toBe(DedupAction.MERGE);
+      expect(decision.existingId).toBe('commit-activity-match');
+      expect(decision.confidence).toBe(1.0);
+
+      // Verify the query used activityId, NOT entityId
+      expect(exactQb.andWhere).toHaveBeenCalledWith(
+        'c.activityId = :activityId',
+        { activityId: 'act-123' },
+      );
+    });
+
+    it('should fall back to entityId scope when no activityId provided', async () => {
+      const existingCommitment = makeCommitment({
+        id: 'commit-entity-match',
+        title: 'отправить договор',
+      });
+      const exactQb = createMockQueryBuilder(existingCommitment);
+
+      mockCommitmentRepo.createQueryBuilder.mockReturnValueOnce(exactQb);
+
+      const candidate: CommitmentCandidate = {
+        what: 'Отправить договор',
+        entityId: 'owner-111',
+        // No activityId → fallback to entityId scope
+      };
+
+      const decision = await service.checkCommitment(candidate);
+
+      expect(decision.action).toBe(DedupAction.MERGE);
+      expect(decision.existingId).toBe('commit-entity-match');
+
+      // Verify the query used entityId fallback
+      expect(exactQb.andWhere).toHaveBeenCalledWith(
+        '(c.fromEntityId = :eid OR c.toEntityId = :eid)',
+        { eid: 'owner-111' },
+      );
+    });
+
+    it('should NOT match across different activities', async () => {
+      // No exact match for activity B
+      const exactQb = createMockQueryBuilder(null);
+      const semanticQb = createMockQueryBuilder(null, []);
+      const trigramQb = createMockQueryBuilder(null, []);
+
+      mockCommitmentRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      const candidate: CommitmentCandidate = {
+        what: 'Отправить договор',
+        entityId: 'owner-111',
+        activityId: 'act-B', // Different activity from where the commitment exists
+        activityContext: 'Другой проект',
+      };
+
+      const decision = await service.checkCommitment(candidate);
+
+      expect(decision.action).toBe(DedupAction.CREATE);
+      expect(decision.reason).toContain('No similar commitments');
+
+      // All 3 channels should have scoped by activityId
+      expect(exactQb.andWhere).toHaveBeenCalledWith(
+        'c.activityId = :activityId',
+        { activityId: 'act-B' },
+      );
+    });
+
+    it('should find semantic match within same activityId', async () => {
+      const exactQb = createMockQueryBuilder(null);
+      // Semantic candidate found via activity scope
+      const semanticQb = createMockQueryBuilder(null, [
+        { id: 'sc-act-1', title: 'Отправить контракт заказчику', similarity: 0.80 },
+      ]);
+      const trigramQb = createMockQueryBuilder(null, []);
+
+      mockCommitmentRepo.createQueryBuilder
+        .mockReturnValueOnce(exactQb)
+        .mockReturnValueOnce(semanticQb)
+        .mockReturnValueOnce(trigramQb);
+
+      mockEmbeddingService.generate.mockResolvedValue(new Array(1536).fill(0.1));
+
+      mockLlmDedupService.decideBatch.mockResolvedValue([
+        {
+          isDuplicate: true,
+          confidence: 0.88,
+          mergeIntoId: 'sc-act-1',
+          reason: 'Одно обязательство: отправить договор ≈ отправить контракт',
+        },
+      ]);
+
+      const candidate: CommitmentCandidate = {
+        what: 'Отправить договор',
+        entityId: 'entity-999',  // Different entity from existing commitment
+        activityId: 'act-shared', // Same activity → semantic search finds cross-entity match
+        activityContext: 'Проект Битрикс',
+      };
+
+      const decision = await service.checkCommitment(candidate);
+
+      expect(decision.action).toBe(DedupAction.PENDING_APPROVAL);
+      expect(decision.existingId).toBe('sc-act-1');
+      expect(decision.confidence).toBe(0.88);
+
+      // Verify semantic channel used activityId scoping
+      expect(semanticQb.andWhere).toHaveBeenCalledWith(
+        'c.activityId = :activityId',
+        { activityId: 'act-shared' },
+      );
+    });
   });
 
   // ─────────────────────────────────────────────────────────────
