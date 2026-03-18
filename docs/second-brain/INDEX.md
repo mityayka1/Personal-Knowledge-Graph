@@ -157,14 +157,27 @@
 
 #### Extraction Quality Sprint — Completed
 
-LLM-powered дедупликация для всех путей extraction. Устраняет дубли активностей, сущностей и фактов на этапе создания.
+LLM-powered дедупликация и quality filters для всех путей extraction. Два батча: Batch 1 — quality filters (P1/P3/P4/P5/P6), Batch 2 — activity-scoped commitment dedup (P2).
+
+**Batch 1 — Quality Filters (PR #155)**
+
+| Компонент | Описание |
+|-----------|----------|
+| **Per-type MIN_CONFIDENCE (P5)** | Раздельные пороги confidence по типам: task 0.7, promise 0.75, fact 0.65 |
+| **isInformationalCommitment (P1)** | Фильтр информационных commitment'ов (56% rejection rate): "обсудили", "согласовали", "отправил" |
+| **isEphemeralFactValue (P3)** | Фильтр эфемерных фактов: status/health всегда, location/preference по паттернам |
+| **isProjectDataFact (P4)** | Фильтр проектных данных, ошибочно извлечённых как личные факты (стоимость, API, бюджет) |
+| **isPastTenseTask (P6)** | Фильтр задач в прошедшем времени (39% rejection rate): "настроил CI/CD" → не задача |
+
+**Batch 2 — Activity-Scoped Commitment Dedup (PR #160)**
 
 | Компонент | Описание |
 |-----------|----------|
 | **LlmDedupService** | Wrapper над Claude Haiku для семантических решений по дедупликации |
-| **DeduplicationGatewayService** | Единая точка входа: normalize → exact match → embedding → LLM → решение (CREATE/MERGE/PENDING_APPROVAL) |
+| **DeduplicationGatewayService** | Единая точка входа: normalize → exact match → embedding → LLM → решение. Activity-scoped: все 3 канала (exact, semantic/cosine, trigram) поддерживают `activityId` для cross-entity dedup в рамках проекта |
 | **DedupBatchCleanupJob** | Daily cron (3:00 AM): cosine similarity по Activity embeddings → LLM confirm → auto-merge |
-| **Gateway интеграция** | DraftExtractionService, ExtractionToolsProvider, DailySynthesisExtractionService |
+| **Activity resolution before dedup** | DraftExtractionService: 3-tier matching (projectMap → fuzzy Levenshtein → findByMention) перенесён ДО вызова dedup gateway |
+| **Scoping priority** | `activityId > entityId > no scope` — ловит дубли между разными entity pairs внутри одного проекта |
 | **create_fact activityId** | Факты привязываются к конкретным проектам через activityId |
 
 Детали: [`docs/plans/2026-02-21-extraction-quality-sprint.md`](../plans/2026-02-21-extraction-quality-sprint.md)
